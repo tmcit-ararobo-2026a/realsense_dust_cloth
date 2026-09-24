@@ -29,6 +29,7 @@ class DepthTrajectoryTFNode(Node):
         self.declare_parameter('max_depth_m', 6.0)
         self.declare_parameter('min_cluster_pixels', 20)
         self.declare_parameter('max_cluster_pixels', 8000)
+        self.declare_parameter('max_cloth_size_m', 0.65)  # Super cloth is ~0.4x0.6m; reject opponent robot (>0.7m)
         self.declare_parameter('camera_pitch_deg', 45.0)
         self.declare_parameter('camera_height_offset_m', 0.35)
         self.declare_parameter('camera_x_offset_m', 0.25)
@@ -115,9 +116,23 @@ class DepthTrajectoryTFNode(Node):
 
         best_cnt = None
         best_area = 0
+        max_cloth_size = self.get_parameter('max_cloth_size_m').value
+
         for cnt in contours:
             area = cv2.contourArea(cnt)
             if min_pix < area < max_pix:
+                # Lightweight 3D bounding size check (reject opponent robot)
+                bx, by, bw, bh = cv2.boundingRect(cnt)
+                mid_u = min(depth_m.shape[1] - 1, max(0, bx + bw // 2))
+                mid_v = min(depth_m.shape[0] - 1, max(0, by + bh // 2))
+                z_est = float(depth_m[mid_v, mid_u])
+
+                if z_est > min_depth and z_est < max_depth:
+                    w_3d = (bw * z_est) / self.fx
+                    h_3d = (bh * z_est) / self.fy
+                    if w_3d > max_cloth_size or h_3d > max_cloth_size:
+                        continue  # Too large -> opponent robot! Skip immediately.
+
                 if area > best_area:
                     best_area = area
                     best_cnt = cnt

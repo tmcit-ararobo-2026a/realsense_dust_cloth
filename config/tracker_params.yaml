@@ -17,6 +17,7 @@
     diff_threshold_m: 0.12   # 背景より手前何mを動体とみなすか
     min_cluster_points: 30   # 布として認識する最小点群数
     max_cluster_points: 3000 # 最大点群数
+    max_cloth_size_m: 0.65   # 最大3Dサイズ(m): スーパー雑巾(約0.6m)を許容し相手ロボット(>0.7m)を除外
     
     # 射出自動記録トリガー
     auto_record: true
