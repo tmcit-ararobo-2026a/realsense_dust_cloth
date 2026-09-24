@@ -14,10 +14,15 @@ def generate_launch_description():
         default_value='false',
         description='Use simulation (rosbag) clock if true'
     )
-    output_level_arg = DeclareLaunchArgument(
-        'output_level',
-        default_value='1',
-        description='Belt launcher output level (1-10) for data labeling'
+    depth_topic_arg = DeclareLaunchArgument(
+        'depth_topic',
+        default_value='/camera/camera/depth/image_rect_raw',
+        description='Depth image topic from RealSense D435'
+    )
+    camera_info_topic_arg = DeclareLaunchArgument(
+        'camera_info_topic',
+        default_value='/camera/camera/depth/camera_info',
+        description='CameraInfo topic from RealSense D435'
     )
 
     # ベルト先端・縦置きRealSenseの静的TF (base_link -> camera_link)
@@ -42,14 +47,16 @@ def generate_launch_description():
             config_file,
             {
                 'use_sim_time': LaunchConfiguration('use_sim_time'),
-                'current_output_level': LaunchConfiguration('output_level'),
+                'depth_topic': LaunchConfiguration('depth_topic'),
+                'camera_info_topic': LaunchConfiguration('camera_info_topic'),
             }
         ]
     )
 
     return LaunchDescription([
         use_sim_time_arg,
-        output_level_arg,
+        depth_topic_arg,
+        camera_info_topic_arg,
         static_tf_node,
         recorder_node,
     ])

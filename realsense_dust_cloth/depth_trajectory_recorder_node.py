@@ -24,6 +24,8 @@ class DepthTrajectoryTFNode(Node):
         super().__init__('depth_trajectory_recorder_node')
 
         # Parameters
+        self.declare_parameter('depth_topic', '/camera/camera/depth/image_rect_raw')
+        self.declare_parameter('camera_info_topic', '/camera/camera/depth/camera_info')
         self.declare_parameter('depth_diff_threshold_m', 0.12)
         self.declare_parameter('min_depth_m', 0.25)   # Ignore robot belt body
         self.declare_parameter('max_depth_m', 6.0)
@@ -55,14 +57,19 @@ class DepthTrajectoryTFNode(Node):
             depth=5
         )
 
+        depth_topic = self.get_parameter('depth_topic').value
+        info_topic = self.get_parameter('camera_info_topic').value
+
         self.sub_depth = self.create_subscription(
-            Image, '/camera/camera/depth/image_rect_raw', self.depth_callback, qos
+            Image, depth_topic, self.depth_callback, qos
         )
         self.sub_info = self.create_subscription(
-            CameraInfo, '/camera/camera/depth/camera_info', self.info_callback, 10
+            CameraInfo, info_topic, self.info_callback, 10
         )
 
-        self.get_logger().info('Lightweight Cloth TF Broadcaster started. Waiting for depth stream...')
+        self.get_logger().info(f'Lightweight Cloth TF Broadcaster started.')
+        self.get_logger().info(f'Listening to depth topic: {depth_topic}')
+        self.get_logger().info(f'Listening to camera info: {info_topic}')
 
     def info_callback(self, msg: CameraInfo):
         if self.fx is None:
