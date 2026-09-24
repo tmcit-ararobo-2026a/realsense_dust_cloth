@@ -66,6 +66,17 @@ Visualization Manager:
       Line Style: Lines
       Line Width: 0.03
 
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Segmented Cloth PointCloud
+      Enabled: true
+      Topic:
+        Value: /cloth/cluster_points
+        Depth: 5
+      Color: 0; 255; 200
+      Color Transformer: FlatColor
+      Size (Pixels): 4
+      Style: Points
+
     - Class: rviz_default_plugins/MarkerArray
       Name: Theoretical Trajectory (shooter_calculator)
       Enabled: true

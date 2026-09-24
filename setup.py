@@ -25,6 +25,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'pointcloud_cloth_tracker_node = realsense_dust_cloth.pointcloud_cloth_tracker_node:main',
             'depth_trajectory_recorder_node = realsense_dust_cloth.depth_trajectory_recorder_node:main',
             'trajectory_analyzer = realsense_dust_cloth.trajectory_analyzer:main',
         ],

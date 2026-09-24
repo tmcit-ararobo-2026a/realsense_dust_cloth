@@ -2,9 +2,8 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
-
 from launch.conditions import IfCondition
 
 def generate_launch_description():
@@ -22,15 +21,20 @@ def generate_launch_description():
         default_value='true',
         description='Launch RViz2 for 3D visualization'
     )
+    use_pointcloud_arg = DeclareLaunchArgument(
+        'use_pointcloud',
+        default_value='true',
+        description='If true, use PointCloud2 clustering tracker; if false, use Depth image差分'
+    )
+    points_topic_arg = DeclareLaunchArgument(
+        'points_topic',
+        default_value='/camera/camera/depth/color/points',
+        description='PointCloud2 topic from RealSense D435'
+    )
     depth_topic_arg = DeclareLaunchArgument(
         'depth_topic',
         default_value='/camera/camera/depth/image_rect_raw',
         description='Depth image topic from RealSense D435'
-    )
-    camera_info_topic_arg = DeclareLaunchArgument(
-        'camera_info_topic',
-        default_value='/camera/camera/depth/camera_info',
-        description='CameraInfo topic from RealSense D435'
     )
 
     # ベルト先端・縦置きRealSenseの静的TF (base_link -> camera_link)
@@ -46,17 +50,34 @@ def generate_launch_description():
         ]
     )
 
-    recorder_node = Node(
+    # 1. PointCloud2 ベースのトラッカー (デフォルト)
+    pointcloud_tracker_node = Node(
+        package='realsense_dust_cloth',
+        executable='pointcloud_cloth_tracker_node',
+        name='pointcloud_cloth_tracker_node',
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('use_pointcloud')),
+        parameters=[
+            config_file,
+            {
+                'use_sim_time': LaunchConfiguration('use_sim_time'),
+                'points_topic': LaunchConfiguration('points_topic'),
+            }
+        ]
+    )
+
+    # 2. Depth 画像ベースのトラッカー (フォールバック用)
+    depth_recorder_node = Node(
         package='realsense_dust_cloth',
         executable='depth_trajectory_recorder_node',
         name='depth_trajectory_recorder_node',
         output='screen',
+        condition=IfCondition(PythonExpression(["'", LaunchConfiguration('use_pointcloud'), "' == 'false'"])),
         parameters=[
             config_file,
             {
                 'use_sim_time': LaunchConfiguration('use_sim_time'),
                 'depth_topic': LaunchConfiguration('depth_topic'),
-                'camera_info_topic': LaunchConfiguration('camera_info_topic'),
             }
         ]
     )
@@ -73,10 +94,11 @@ def generate_launch_description():
     return LaunchDescription([
         use_sim_time_arg,
         rviz_arg,
+        use_pointcloud_arg,
+        points_topic_arg,
         depth_topic_arg,
-        camera_info_topic_arg,
         static_tf_node,
-        recorder_node,
+        pointcloud_tracker_node,
+        depth_recorder_node,
         rviz_node,
     ])
-
