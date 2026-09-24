@@ -71,8 +71,17 @@ ros2 launch realsense_dust_cloth trajectory_recorder.launch.py rviz:=false
 > [!NOTE]
 > 起動直後の約 1 秒間はカメラの前に手や雑巾をかざさず静止させてください。背景を自動学習し、`Background calibrated! Ready to broadcast flying_cloth TF.` と出たら準備完了です。
 
-### ステップ 3: [手元 PC 側] RViz2 で 3D 弾道のリアルタイム監視
-同一 Wi-Fi LAN に接続した手元のノート PC 等で RViz2 を起動します：
+### ステップ 3: [Jetson 側] rosbag で放物線を丸ごと記録
+有線直結のローカル環境（Jetson）で直接保存するため、Wi-Fi のパケットロスがなく確実に記録できます：
+```bash
+source /opt/ros/humble/setup.bash
+ros2 bag record /tf /tf_static /cloth/trajectory_marker -o cloth_experiment_bag
+```
+* 布を射出すると、布の飛翔に合わせて **`flying_cloth` TF が空間内を放物線を描いて移動** し、Jetson のストレージに記録されます。
+* 射出実験が終わったら `Ctrl + C` で記録を停止します。
+
+### ステップ 4: [手元 PC 側] RViz2 で 3D 弾道のリアルタイム監視（任意）
+同一 Wi-Fi LAN に接続した手元のノート PC 等で RViz2 を起動し、目視確認します：
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
@@ -82,12 +91,6 @@ rviz2 -d ~/ros2_ws/src/realsense_dust_cloth/rviz/cloth_tracker.rviz
 * **赤色ポイント**: 雑巾の瞬時 3D 位置
 * **緑色ライン**: `shooter_calculator` の計算による目標弾道（同時起動時）
 * **視点操作**: 左ドラッグで 3D 自由回転、中ドラッグでパン、ホイールで拡大縮小が可能。
-
-### ステップ 4: [手元 PC または Jetson] rosbag で放物線を丸ごと記録
-```bash
-ros2 bag record /tf /tf_static /cloth/trajectory_marker -o cloth_experiment_bag
-```
-* 射出実験が終わったら `Ctrl + C` で停止します。
 
 ---
 
