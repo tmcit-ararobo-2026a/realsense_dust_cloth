@@ -1,0 +1,46 @@
+Panels:
+  - Class: rviz_common/Displays
+    Help Height: 78
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Global Options1
+        - /TF1
+        - /Cloth Position1
+      Splitter Ratio: 0.5
+    Tree Height: 557
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 0.5
+      Plane Cell Count: 20
+      Color: 160; 160; 164
+      Alpha: 0.5
+      Reference Frame: base_link
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Show Axes: true
+      Show Names: true
+      Show Arrows: true
+      Marker Scale: 0.3
+      Update Interval: 0
+    - Class: rviz_default_plugins/PointStamped
+      Name: Cloth Position
+      Enabled: true
+      Topic:
+        Value: /cloth/position
+        Depth: 10
+      Color: 255; 40; 40
+      Radius: 0.12
+      History Length: 50
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: base_link
+    Frame Rate: 30
+Window Geometry:
+  Height: 800
+  Width: 1000
