@@ -12,6 +12,11 @@ Panels:
         - /Theoretical Trajectory (shooter_calculator)1
       Splitter Ratio: 0.5
     Tree Height: 557
+  - Class: rviz_common/Views
+    Expanded:
+      - /Current View1
+    Name: Views
+    Splitter Ratio: 0.5
 Visualization Manager:
   Class: ""
   Displays:
@@ -72,6 +77,40 @@ Visualization Manager:
     Background Color: 30; 33; 42
     Fixed Frame: base_link
     Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/Interact
+      Hide Inactive Objects: true
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 6.0
+      Eye:
+        X: 2.0
+        Y: -4.5
+        Z: 3.5
+      Focal Point:
+        X: 1.5
+        Y: 0.0
+        Z: 0.8
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05
+      Invert Z Axis: false
+      Name: Current View
+      Near Clip Distance: 0.01
+      Pitch: 0.55
+      Target Frame: base_link
+      Value: Orbit (rviz)
+      Yaw: 1.25
+    Saved: ~
 Window Geometry:
+  Displays:
+    collapsed: false
   Height: 850
-  Width: 1200
+  Hide Left Dock: false
+  Hide Right Dock: false
+  Width: 1280
