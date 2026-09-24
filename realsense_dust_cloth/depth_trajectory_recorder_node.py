@@ -15,7 +15,9 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 
 from sensor_msgs.msg import Image, CameraInfo
-from geometry_msgs.msg import TransformStamped, PointStamped
+from geometry_msgs.msg import TransformStamped, PointStamped, Point, PoseStamped
+from nav_msgs.msg import Path
+from visualization_msgs.msg import Marker
 from tf2_ros import TransformBroadcaster
 
 
@@ -34,6 +36,10 @@ class DepthTrajectoryTFNode(Node):
         self.declare_parameter('camera_height_offset_m', 0.35)
         self.declare_parameter('camera_x_offset_m', 0.25)
 
+        self.declare_parameter('depth_topic', '/camera/camera/depth/image_rect_raw')
+        self.declare_parameter('camera_info_topic', '/camera/camera/depth/camera_info')
+        self.declare_parameter('trajectory_history_sec', 3.0)
+
         self.bridge = CvBridge()
         self.tf_broadcaster = TransformBroadcaster(self)
 
@@ -46,8 +52,15 @@ class DepthTrajectoryTFNode(Node):
         self.is_collecting_bg = True
         self.bg_target_frames = 20
 
-        # Optional Debug Publisher
+        # Visualization Publishers for Experiment Evaluation
         self.pub_point = self.create_publisher(PointStamped, '/cloth/position', 10)
+        self.pub_path = self.create_publisher(Path, '/cloth/measured_path', 10)
+        self.pub_marker = self.create_publisher(Marker, '/cloth/trajectory_marker', 10)
+
+        self.trajectory_points = []  # list of (timestamp_sec, Point)
+
+        depth_topic = self.get_parameter('depth_topic').value
+        camera_info_topic = self.get_parameter('camera_info_topic').value
 
         qos = QoSProfile(
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
@@ -56,13 +69,13 @@ class DepthTrajectoryTFNode(Node):
         )
 
         self.sub_depth = self.create_subscription(
-            Image, '/camera/camera/depth/image_rect_raw', self.depth_callback, qos
+            Image, depth_topic, self.depth_callback, qos
         )
         self.sub_info = self.create_subscription(
-            CameraInfo, '/camera/camera/depth/camera_info', self.info_callback, 10
+            CameraInfo, camera_info_topic, self.info_callback, 10
         )
 
-        self.get_logger().info('Lightweight Cloth TF Broadcaster started. Waiting for depth stream...')
+        self.get_logger().info(f'Lightweight Cloth TF Broadcaster started. Listening on {depth_topic}...')
 
     def info_callback(self, msg: CameraInfo):
         if self.fx is None:
@@ -186,6 +199,59 @@ class DepthTrajectoryTFNode(Node):
                     pt.point.y = float(y_robot)
                     pt.point.z = float(z_robot)
                     self.pub_point.publish(pt)
+
+                    # Manage trajectory history for visual evaluation in RViz
+                    now_sec = self.get_clock().now().nanoseconds * 1e-9
+                    keep_duration = self.get_parameter('trajectory_history_sec').value
+
+                    # If there's a big time gap (>1.5s), reset history to start a new trajectory
+                    if len(self.trajectory_points) > 0:
+                        last_t, _ = self.trajectory_points[-1]
+                        if (now_sec - last_t) > 1.5:
+                            self.trajectory_points.clear()
+
+                    p_geom = Point()
+                    p_geom.x = float(x_robot)
+                    p_geom.y = float(y_robot)
+                    p_geom.z = float(z_robot)
+                    self.trajectory_points.append((now_sec, p_geom))
+
+                    # Remove old points outside time window
+                    self.trajectory_points = [
+                        (t, p) for (t, p) in self.trajectory_points
+                        if (now_sec - t) <= keep_duration
+                    ]
+
+                    # Publish Marker (Yellow line strip showing experimental flight arc)
+                    marker = Marker()
+                    marker.header.stamp = now
+                    marker.header.frame_id = 'base_link'
+                    marker.ns = 'cloth_experiment'
+                    marker.id = 0
+                    marker.type = Marker.LINE_STRIP
+                    marker.action = Marker.ADD
+                    marker.scale.x = 0.035  # Line thickness (m)
+                    marker.color.r = 1.0
+                    marker.color.g = 0.85
+                    marker.color.b = 0.0
+                    marker.color.a = 0.95
+                    marker.points = [p for (_, p) in self.trajectory_points]
+                    self.pub_marker.publish(marker)
+
+                    # Also publish Path
+                    path_msg = Path()
+                    path_msg.header.stamp = now
+                    path_msg.header.frame_id = 'base_link'
+                    for _, p in self.trajectory_points:
+                        pose = PoseStamped()
+                        pose.header.stamp = now
+                        pose.header.frame_id = 'base_link'
+                        pose.pose.position.x = p.x
+                        pose.pose.position.y = p.y
+                        pose.pose.position.z = p.z
+                        pose.pose.orientation.w = 1.0
+                        path_msg.poses.append(pose)
+                    self.pub_path.publish(path_msg)
 
 
 def main(args=None):
