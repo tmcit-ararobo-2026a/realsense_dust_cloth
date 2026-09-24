@@ -25,7 +25,6 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'cloth_subscribe_node = dust_cloth_subscriber.cloth_subscribe_node:main',
             'depth_trajectory_recorder_node = realsense_dust_cloth.depth_trajectory_recorder_node:main',
             'trajectory_analyzer = realsense_dust_cloth.trajectory_analyzer:main',
         ],
