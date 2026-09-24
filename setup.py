@@ -28,6 +28,7 @@ setup(
             'cloth_subscribe_node = dust_cloth_subscriber.cloth_subscribe_node:main',
             'depth_trajectory_recorder_node = realsense_dust_cloth.depth_trajectory_recorder_node:main',
             'trajectory_analyzer = realsense_dust_cloth.trajectory_analyzer:main',
+            'dummy_depth_simulator = realsense_dust_cloth.dummy_depth_simulator:main',
         ],
     },
 )

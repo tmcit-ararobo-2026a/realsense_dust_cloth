@@ -39,7 +39,7 @@ class DepthTrajectoryRecorderNode(Node):
         self.declare_parameter('camera_height_offset_m', 0.35)
         self.declare_parameter('camera_pitch_deg', 45.0)  # Tilt angle relative to horizon
 
-        self.output_dir = self.get_parameter('output_dir').as_string()
+        self.output_dir = self.get_parameter('output_dir').value
         os.makedirs(self.output_dir, exist_ok=True)
 
         self.bridge = CvBridge()
@@ -141,7 +141,7 @@ class DepthTrajectoryRecorderNode(Node):
 
         # Phase 1: Background Learning
         if self.is_collecting_bg:
-            valid_mask = (depth_m > 0.1) & (depth_m < self.get_parameter('max_depth_m').as_double())
+            valid_mask = (depth_m > 0.1) & (depth_m < self.get_parameter('max_depth_m').value)
             depth_clean = np.where(valid_mask, depth_m, np.nan)
             self.bg_collect_frames.append(depth_clean)
 
@@ -155,9 +155,9 @@ class DepthTrajectoryRecorderNode(Node):
             return
 
         # Phase 2: Foreground Extraction (Depth Subtraction)
-        diff_thresh = self.get_parameter('depth_diff_threshold_m').as_double()
-        min_depth = self.get_parameter('min_depth_m').as_double()
-        max_depth = self.get_parameter('max_depth_m').as_double()
+        diff_thresh = self.get_parameter('depth_diff_threshold_m').value
+        min_depth = self.get_parameter('min_depth_m').value
+        max_depth = self.get_parameter('max_depth_m').value
 
         # Foreground is objects significantly CLOSER than background
         fg_mask = (depth_m > min_depth) & (depth_m < (self.bg_depth_map - diff_thresh)) & (depth_m < max_depth)
@@ -169,8 +169,8 @@ class DepthTrajectoryRecorderNode(Node):
 
         # Find largest connected component (the flying cloth)
         contours, _ = cv2.findContours(fg_cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        min_pix = self.get_parameter('min_cluster_pixels').as_int()
-        max_pix = self.get_parameter('max_cluster_pixels').as_int()
+        min_pix = self.get_parameter('min_cluster_pixels').value
+        max_pix = self.get_parameter('max_cluster_pixels').value
 
         best_contour = None
         best_area = 0
@@ -202,8 +202,8 @@ class DepthTrajectoryRecorderNode(Node):
 
                     # Transform to Robot base_link Frame (Vertical Portrait mount + Pitch tilt)
                     # For vertical camera: camera +Y is robot -X or +X depending on 90deg roll
-                    pitch_rad = np.deg2rad(self.get_parameter('camera_pitch_deg').as_double())
-                    h_offset = self.get_parameter('camera_height_offset_m').as_double()
+                    pitch_rad = np.deg2rad(self.get_parameter('camera_pitch_deg').value)
+                    h_offset = self.get_parameter('camera_height_offset_m').value
 
                     # Transformed coordinates (Robot base_link: X forward, Y left, Z up)
                     # Camera is rotated 90 deg roll + tilted pitch
@@ -226,7 +226,7 @@ class DepthTrajectoryRecorderNode(Node):
 
         # Check for trajectory completion (idle timeout)
         if self.is_recording:
-            idle_timeout = self.get_parameter('idle_timeout_sec').as_double()
+            idle_timeout = self.get_parameter('idle_timeout_sec').value
             if (now_sec - self.last_detected_time) > idle_timeout:
                 self.finish_recording()
 
@@ -246,7 +246,7 @@ class DepthTrajectoryRecorderNode(Node):
         pts_arr = np.array([[p[1], p[2], p[3]] for p in self.recorded_points])
         t_arr = np.array([p[0] for p in self.recorded_points])
 
-        level = self.get_parameter('current_output_level').as_int()
+        level = self.get_parameter('current_output_level').value
         fit_res = ClothPhysicsModel.fit_trajectory(t_arr, pts_arr)
 
         timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
