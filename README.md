@@ -2,28 +2,46 @@
 
 Intel RealSense D435 の **Depth（深度）情報のみ** を用いた、飛翔中の雑巾（布）の 3次元弾道リアルタイム検出・TF配信パッケージです（TMCIT 荒川ロボコン 2026A 向け）。
 
-検出した布の 3次元位置を **TF（`base_link -> flying_cloth`）** としてリアルタイム配信し、**rosbag で記録するだけで放物線データを丸ごと保存** できます。
+機体搭載の **NVIDIA Jetson** に RealSense を接続して超軽量に深度計測とTF配信を行い、手元の **操作用PC** で RViz2 監視や rosbag 記録を行う分散構成を標準としています。
 
 ---
 
-## 1. 特徴
+## 1. ハードウェア構成・接続
+
+### 1.1 USB 接続
+* **接続先**: NVIDIA Jetson 本体の **USB 3.0 ポート（青色端子 / SSマーク）**
+* **注意**: RealSense D435 は 60fps の深度ストリームを送信するため、必ず USB 3.0 ポートに直結してください（USB 2.0 ポートや非給電ハブでは帯域不足・認識エラーの原因になります）。
+
+### 1.2 カメラ設置方法（ベルト先端・縦置き90°）
+* **設置場所**: ベルト射出機構の直動先端部
+* **設置向き**: **90° ロール回転させた縦置き**
+  * カメラを縦向きにすることで、垂直視野角を約 90° に拡大（水平視野角は約 60°）。
+  * 高く打ち上がる雑巾の最高到達点（頂点）を見失うことなく追尾します。
+* **仰角**: 水平から **上向き 45°**
+
+---
+
+## 2. 特徴
 * **色・照明非依存（No RGB / Depth Only）**:
   * カラー画像（RGB）を一切使わず、深度背景差分のみで動体を抽出。
   * 会場の照明変化、影、布の色や柄に全く左右されません。
-* **ベルト直動先端・縦向き設置対応（上下 90° FOV）**:
-  * D435 を 90° ロール回転させて縦置き（上下視野角 約90° / 横 約60°）。
-  * 高く打ち上がる放物線の最高到達点（頂点）から着地までを画面外に見切れることなく追尾。
 * **相手ロボット誤認防止 ＆ 2種類の雑巾対応**:
-  * 超軽量な 3D バウンディングボックス上限判定（$0.65\,\text{m}$）により、**通常雑巾（約48g / $200\times300\,\text{mm}$）** と **スーパー雑巾（4枚連結 約140g / 約$400\times600\,\text{mm}$）** を両方通過させ、巨大な **相手ロボット（$0.7\,\text{m}$超）** を瞬時に除外・スキップ。
-* **超軽量設計（Low Latency）**:
-  * 重いファイル保存や物理計算を全廃し、深度差分 ＋ 空間マスク ＋ 重心抽出に特化。60〜90fps の高フレームレートでも極小の CPU 負荷で動作。
-* **rosbag で丸ごと記録**:
-  * `ros2 bag record /tf /tf_static` を実行するだけで、実験時の全放物線が TF として自動保存。
+  * 3D バウンディングボックス上限判定（$0.65\,\text{m}$）により、**通常雑巾（約48g / $200\times300\,\text{mm}$）** と **スーパー雑巾（4枚連結 約140g / 約$400\times600\,\text{mm}$）** を両方通過させ、巨大な **相手ロボット（$0.7\,\text{m}$超）** を瞬時に除外。
+* **Jetson 負荷を考慮した超軽量設計**:
+  * 深度差分 ＋ 空間マスク ＋ 重心抽出に特化。60fps でも Jetson の CPU をほとんど消費しません。
+  * GUI 描画（RViz2）やログ保存は手元 PC に任せる分散運用が可能。
 
 ---
 
-## 2. ビルド
+## 3. セットアップ（Jetson 側）
 
+### 3.1 ドライバインストール
+```bash
+sudo apt update
+sudo apt install -y ros-humble-realsense2-camera
+```
+
+### 3.2 ワークスペースのビルド
 ```bash
 cd ~/ros2_ws
 colcon build --packages-select realsense_dust_cloth
@@ -32,10 +50,10 @@ source install/setup.bash
 
 ---
 
-## 3. 実機での動かし方
+## 4. 実験手順（Jetson + 操作用PC）
 
-### ステップ 1: RealSense D435 カメラの起動
-カラーカメラを停止し、Depth のみ 60fps（848x480）で起動します：
+### ステップ 1: [Jetson 側] RealSense カメラの起動
+Depth のみ 60fps（848x480）で起動します：
 ```bash
 source /opt/ros/humble/setup.bash
 ros2 launch realsense2_camera rs_launch.py \
@@ -43,42 +61,46 @@ ros2 launch realsense2_camera rs_launch.py \
   enable_color:=false
 ```
 
-### ステップ 2: 弾道トラッカー ＆ RViz2 の起動
+### ステップ 2: [Jetson 側] 弾道トラッカーの起動（GUIなし）
+Jetson 側では画面描画を省き、トラッカーと TF 配信のみを軽量実行します：
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
-ros2 launch realsense_dust_cloth trajectory_recorder.launch.py
+ros2 launch realsense_dust_cloth trajectory_recorder.launch.py rviz:=false
 ```
-* **起動後 1 秒間**: ロボットを静止させておくと、前方の空間深度を自動学習し、`Background calibrated! Ready to broadcast flying_cloth TF.` と表示されて準備完了になります。
-* **RViz2 が自動起動** し、ロボット座標（`base_link`）とカメラ姿勢が表示されます。
-* ※ RViz2 を起動したくない場合は `rviz:=false` を指定してください。
+> [!NOTE]
+> 起動直後の約 1 秒間はカメラの前に手や雑巾をかざさず静止させてください。背景を自動学習し、`Background calibrated! Ready to broadcast flying_cloth TF.` と出たら準備完了です。
 
-### ステップ 3: rosbag で放物線を記録開始
+### ステップ 3: [手元 PC 側] RViz2 で 3D 弾道のリアルタイム監視
+同一 Wi-Fi LAN に接続した手元のノート PC 等で RViz2 を起動します：
 ```bash
 source /opt/ros/humble/setup.bash
-ros2 bag record /tf /tf_static -o cloth_experiment_bag
+source ~/ros2_ws/install/setup.bash
+rviz2 -d ~/ros2_ws/src/realsense_dust_cloth/rviz/cloth_tracker.rviz
 ```
-* 布を射出すると、布の飛翔に合わせて **`flying_cloth` TF が空間内を放物線を描いて移動** し、rosbag に記録されます。
-* 射出実験が終わったら `Ctrl + C` で記録を停止します。
+* **黄色ライン（Flight Path）**: 実際の雑巾が描いた 3D 飛翔放物線（約3秒間残像表示）
+* **赤色ポイント**: 雑巾の瞬時 3D 位置
+* **緑色ライン**: `shooter_calculator` の計算による目標弾道（同時起動時）
+* **視点操作**: 左ドラッグで 3D 自由回転、中ドラッグでパン、ホイールで拡大縮小が可能。
 
----
-
-## 4. 記録した放物線の再生・確認
-
-記録したバッグファイルを再生して、RViz2 で実際の放物線を目視確認できます：
-
+### ステップ 4: [手元 PC または Jetson] rosbag で放物線を丸ごと記録
 ```bash
-# ターミナル 1: バッグを再生
-ros2 bag play cloth_experiment_bag
-
-# ターミナル 2: RViz を起動
-rviz2
+ros2 bag record /tf /tf_static /cloth/trajectory_marker -o cloth_experiment_bag
 ```
-* RViz2 で **Fixed Frame** を `base_link` にし、**TF** を表示すると、射出された布の放物線がそのまま空間内に再生されます。
+* 射出実験が終わったら `Ctrl + C` で停止します。
 
 ---
 
-## 5. パラメータ設定 (`config/tracker_params.yaml`)
+## 5. shooter_calculator との連携
+実験で得られた各出力レベル（1〜10）ごとの初速・飛距離データは、付属の `trajectory_analyzer` で解析できます：
+```bash
+ros2 run realsense_dust_cloth trajectory_analyzer --data-dir <データ保存先>
+```
+出力されたルックアップテーブル（LUT）コードを `shooter_calculator_node.cpp` に反映することで、実際の布の空気抵抗やスリップを織り込んだ高精度自動照準が可能になります。
+
+---
+
+## 6. パラメータ設定 (`config/tracker_params.yaml`)
 
 | パラメータ | 既定値 | 説明 |
 | :--- | :---: | :--- |
@@ -87,4 +109,5 @@ rviz2
 | `min_depth_m` | `0.25` [m] | ベルト先端・機体フレームの至近距離除外マスク |
 | `max_depth_m` | `6.0` [m] | 最大計測距離 |
 | `diff_threshold_m` | `0.12` [m] | 背景より手前何mを動体とみなすかの閾値 |
-| `max_cloth_size_m` | `0.65` [m] | 雑巾の最大3Dサイズ（スーパー雑巾を許容し、相手ロボットを即座に除外） |
+| `max_cloth_size_m` | `0.65` [m] | 雑巾の最大3Dサイズ（スーパー雑巾を許容し、相手ロボットを除外） |
+| `trajectory_history_sec` | `3.0` [s] | RViz2 上に放物線アークを残像表示する秒数 |
