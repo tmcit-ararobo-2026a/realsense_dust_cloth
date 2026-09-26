@@ -65,8 +65,6 @@ install(TARGETS cloth_tracker_cuda_node
 ament_python_install_package(${PROJECT_NAME})
 
 install(PROGRAMS
-  realsense_dust_cloth/pointcloud_cloth_tracker_node.py
-  realsense_dust_cloth/depth_trajectory_recorder_node.py
   realsense_dust_cloth/trajectory_analyzer.py
   realsense_dust_cloth/sim_cloth_flight.py
   DESTINATION lib/${PROJECT_NAME}
