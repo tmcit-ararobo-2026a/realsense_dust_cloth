@@ -171,6 +171,7 @@ ClothTrackerCudaNode::ClothTrackerCudaNode(const rclcpp::NodeOptions& options)
     pub_path_ = this->create_publisher<nav_msgs::msg::Path>("/cloth/measured_path", 10);
     pub_raw_color_ = this->create_publisher<sensor_msgs::msg::Image>("/camera/camera/color/image_raw", 10);
     pub_compressed_color_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("/camera/camera/color/image_raw/compressed", 10);
+    pub_color_info_ = this->create_publisher<sensor_msgs::msg::CameraInfo>("/camera/camera/color/camera_info", 10);
 
     // Debug publishers (always available for RViz visualization & verification)
     pub_roi_markers_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("/cloth/debug/roi_markers", 10);
@@ -402,6 +403,26 @@ void ClothTrackerCudaNode::color_image_callback(const sensor_msgs::msg::Image::S
         comp_msg.format = "jpeg";
         comp_msg.data = std::move(compressed_buf);
         pub_compressed_color_->publish(comp_msg);
+
+        if (pub_color_info_) {
+            sensor_msgs::msg::CameraInfo cinfo;
+            cinfo.header = msg->header;
+            cinfo.header.frame_id = "camera_color_optical_frame";
+            cinfo.width = msg->width;
+            cinfo.height = msg->height;
+            cinfo.distortion_model = "plumb_bob";
+            cinfo.d.resize(5, 0.0);
+            cinfo.k[0] = (camera_intrin_.fx > 0.0f) ? camera_intrin_.fx : 600.0;
+            cinfo.k[2] = msg->width * 0.5;
+            cinfo.k[4] = (camera_intrin_.fy > 0.0f) ? camera_intrin_.fy : 600.0;
+            cinfo.k[5] = msg->height * 0.5;
+            cinfo.k[8] = 1.0;
+            cinfo.r[0] = 1.0; cinfo.r[4] = 1.0; cinfo.r[8] = 1.0;
+            cinfo.p[0] = cinfo.k[0]; cinfo.p[2] = cinfo.k[2];
+            cinfo.p[5] = cinfo.k[4]; cinfo.p[6] = cinfo.k[5];
+            cinfo.p[10] = 1.0;
+            pub_color_info_->publish(cinfo);
+        }
     } catch (const std::exception& e) {
         RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
                              "Color compression relay error: %s", e.what());
@@ -1040,9 +1061,54 @@ void ClothTrackerCudaNode::run_direct_realsense_loop() {
         camera_intrin_.height = intrin.height;
         intrinsics_ready_ = true;
 
+        sensor_msgs::msg::CameraInfo color_info_msg;
+        if (enable_color_stream_) {
+            try {
+                auto color_stream = profile.get_stream(RS2_STREAM_COLOR).as<rs2::video_stream_profile>();
+                rs2_intrinsics c_intrin = color_stream.get_intrinsics();
+                color_info_msg.width = c_intrin.width;
+                color_info_msg.height = c_intrin.height;
+                color_info_msg.distortion_model = "plumb_bob";
+                color_info_msg.d.resize(5, 0.0);
+                for (int i = 0; i < 5; ++i) {
+                    color_info_msg.d[i] = c_intrin.coeffs[i];
+                }
+                color_info_msg.k[0] = c_intrin.fx;
+                color_info_msg.k[2] = c_intrin.ppx;
+                color_info_msg.k[4] = c_intrin.fy;
+                color_info_msg.k[5] = c_intrin.ppy;
+                color_info_msg.k[8] = 1.0;
+
+                color_info_msg.r[0] = 1.0;
+                color_info_msg.r[4] = 1.0;
+                color_info_msg.r[8] = 1.0;
+
+                color_info_msg.p[0] = c_intrin.fx;
+                color_info_msg.p[2] = c_intrin.ppx;
+                color_info_msg.p[5] = c_intrin.fy;
+                color_info_msg.p[6] = c_intrin.ppy;
+                color_info_msg.p[10] = 1.0;
+            } catch (const std::exception& e) {
+                RCLCPP_WARN(this->get_logger(), "Failed to extract color intrinsics: %s", e.what());
+                color_info_msg.width = 640;
+                color_info_msg.height = 480;
+                color_info_msg.distortion_model = "plumb_bob";
+                color_info_msg.d.resize(5, 0.0);
+                color_info_msg.k[0] = 600.0;
+                color_info_msg.k[2] = 320.0;
+                color_info_msg.k[4] = 600.0;
+                color_info_msg.k[5] = 240.0;
+                color_info_msg.k[8] = 1.0;
+                color_info_msg.r[0] = 1.0; color_info_msg.r[4] = 1.0; color_info_msg.r[8] = 1.0;
+                color_info_msg.p[0] = 600.0; color_info_msg.p[2] = 320.0;
+                color_info_msg.p[5] = 600.0; color_info_msg.p[6] = 240.0;
+                color_info_msg.p[10] = 1.0;
+            }
+        }
+
         RCLCPP_INFO(this->get_logger(), "RealSense Hardware Pipeline streaming: Depth %dx%d @ 60fps%s",
                     intrin.width, intrin.height,
-                    enable_color_stream_ ? ", Color 640x480 (JPEG compressed)" : "");
+                    enable_color_stream_ ? ", Color 640x480 (JPEG compressed + CameraInfo)" : "");
 
         std::vector<int> jpeg_params = {cv::IMWRITE_JPEG_QUALITY, jpeg_quality_};
         std::vector<uint8_t> compressed_buf;
@@ -1073,6 +1139,12 @@ void ClothTrackerCudaNode::run_direct_realsense_loop() {
                     comp_msg.format = "jpeg";
                     comp_msg.data = std::move(compressed_buf);
                     pub_compressed_color_->publish(comp_msg);
+
+                    if (pub_color_info_) {
+                        color_info_msg.header.stamp = now;
+                        color_info_msg.header.frame_id = "camera_color_optical_frame";
+                        pub_color_info_->publish(color_info_msg);
+                    }
                 }
             }
         }
