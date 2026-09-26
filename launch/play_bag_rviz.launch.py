@@ -18,8 +18,9 @@ def generate_launch_description():
         parameters=[
             config_file,
             {
-                'publish_debug_cloud': False,
-                'use_direct_realsense': False
+                'publish_debug_cloud': True,
+                'use_direct_realsense': False,
+                'use_sim_time': True,
             }
         ]
     )

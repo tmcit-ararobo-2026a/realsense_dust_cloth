@@ -39,11 +39,40 @@ Visualization Manager:
       Update Interval: 0
 
     - Class: rviz_default_plugins/Image
-      Name: Real-time Camera Video (Color)
+      Name: Real-time Camera Video
       Enabled: true
       Topic:
         Value: /camera/camera/color/image_raw
         Depth: 5
+
+    - Class: rviz_default_plugins/PointCloud2
+      Name: ROI Filtered Points (All Live Points)
+      Enabled: true
+      Topic:
+        Value: /cloth/debug/filtered_points
+        Depth: 5
+      Color: 180; 180; 255
+      Color Transformer: FlatColor
+      Size (Pixels): 3
+      Style: Points
+
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Cloth Candidate Cluster
+      Enabled: true
+      Topic:
+        Value: /cloth/debug/cluster_points
+        Depth: 5
+      Color: 0; 255; 180
+      Color Transformer: FlatColor
+      Size (Pixels): 6
+      Style: Points
+
+    - Class: rviz_default_plugins/MarkerArray
+      Name: ROI & Launch Gate Boxes (Debug)
+      Enabled: true
+      Topic:
+        Value: /cloth/debug/roi_markers
+        Depth: 10
 
     - Class: rviz_default_plugins/PointStamped
       Name: Cloth Real-time Position (Point)
@@ -53,7 +82,7 @@ Visualization Manager:
         Depth: 10
       Color: 255; 40; 40
       Radius: 0.10
-      History Length: 500
+      History Length: 1
 
     - Class: rviz_default_plugins/Marker
       Name: Cloth Flight Path (Yellow Arc)
@@ -73,20 +102,9 @@ Visualization Manager:
       Line Style: Lines
       Line Width: 0.03
 
-    - Class: rviz_default_plugins/PointCloud2
-      Name: Segmented Cloth PointCloud
-      Enabled: true
-      Topic:
-        Value: /cloth/cluster_points
-        Depth: 5
-      Color: 0; 255; 200
-      Color Transformer: FlatColor
-      Size (Pixels): 4
-      Style: Points
-
     - Class: rviz_default_plugins/MarkerArray
       Name: Theoretical Trajectory (shooter_calculator)
-      Enabled: true
+      Enabled: false
       Topic:
         Value: /shooter_calculator/trajectory_markers
         Depth: 10

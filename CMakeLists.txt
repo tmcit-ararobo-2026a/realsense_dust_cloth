@@ -22,6 +22,8 @@ find_package(visualization_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(cv_bridge REQUIRED)
+find_package(OpenCV REQUIRED)
 
 # Optional hardware-native RealSense C++ SDK
 find_package(realsense2 QUIET)
@@ -42,9 +44,10 @@ target_include_directories(cloth_tracker_cuda_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
   ${CUDAToolkit_INCLUDE_DIRS}
+  ${OpenCV_INCLUDE_DIRS}
 )
 
-target_link_libraries(cloth_tracker_cuda_node CUDA::cudart)
+target_link_libraries(cloth_tracker_cuda_node CUDA::cudart ${OpenCV_LIBRARIES})
 
 ament_target_dependencies(cloth_tracker_cuda_node
   rclcpp
@@ -54,6 +57,7 @@ ament_target_dependencies(cloth_tracker_cuda_node
   nav_msgs
   tf2
   tf2_ros
+  cv_bridge
 )
 
 if(realsense2_FOUND)

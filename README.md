@@ -1,110 +1,93 @@
 # realsense_dust_cloth
 
-Intel RealSense D435 と NVIDIA Jetson (CUDA) を C++ で密結合した、飛翔中の雑巾（布）の 3次元弾道リアルタイム追尾・TF配信・自動放物線解析パッケージです（TMCIT 荒川ロボコン 2026A 向け）。
+Intel RealSense D435 と NVIDIA Jetson (CUDA) を C++ で密結合した、飛翔中の雑巾（布）の **3次元弾道リアルタイム追尾・最高確率放物線フィッティング・自動データセット蓄積パッケージ** です（TMCIT 荒川ロボコン 2026A 向け）。
 
 ---
 
-## 1. 特徴
+## 1. 特徴 & システム概要
 * **C++ & CUDA 完全GPUパイプライン（60fps / 超低遅延 < 2ms）**:
-  * 深度画像の 3D 逆投影・空間ROI・背景差分・Voxel間引き・クラスタリング・重心算出を **すべて GPU 内で一貫処理**。
-  * Jetson の CPU 負荷はほぼゼロ（数%以下）で動作します。
-* **生の実測点のみを忠実にプロット**:
-  * 架空の補間点は一切生成せず、カメラが捉えた本物のフレーム位置（TF / 赤い点列）を出力。
-  * クリティカルダンピング平滑化により、布のヒラヒラ展開による重心ノイズを吸収して滑らかな放物線を描画。
-* **自動放物線ロギング & 最確軌道解析（重複自動排除）**:
-  * 雑巾を飛ばすたびに自動で検知して CSV に記録。
-  * 同じデータの重複保存を自動でスキップし、実験を重ねることで「最も確率の高い放物線 $Z(X)$」と「着地点のばらつき（$\pm 1\sigma$）」を全自動で算出。
-* **RealSense C++ API (`librealsense2`) 直結モード内蔵**:
-  * ROS 2 のカメラノードを別で立ち上げなくても、ノード単体でカメラから直接ゼロコピーで GPU にストリーミング可能。
+  * 深度画像の 3D 逆投影・空間ROI・背景差分・Voxel間引き・DBSCANクラスタリング・重心算出を **すべて GPU 内で一貫処理**。
+  * Jetson の CPU 負荷は数%以下で動作します。
+* **リアルタイム最高確率放物線フィッティング（数学的最適弾道モデル）**:
+  * 飛翔中の布のはためきや RealSense の微小深度ノイズを100%除去。
+  * 最小二乗法により、数学的に最も確からしい真の放物線 $Z(X) = a X^2 + b X + c$ と直進線 $Y(X) = d X + e$ をリアルタイム算出（信頼度 $R^2 \ge 95\%$）。
+  * 最高到達点（Apex）と着地予測地点（Landing Target）をミリ単位で即時計算。
+* **ロボット静止時 / 走行時の両対応モード**:
+  * **停止時（発射反動あり）**: 背景差分（`use_bg_subtraction:=true`）により周囲の壁や家具を完全消去。
+  * **台車走行時（移動射撃）**: 背景差分を OFF（`use_bg_subtraction:=false`）にし、空間ROI ＋ 発射口ゲート ＋ 進行速度ベクトル照合で追尾。
+* **超軽量 JPEG 圧縮カラー配信（rosbag 記録容量 95% 削減）**:
+  * `/camera/camera/color/image_raw/compressed` を自動配信。いつ投げたかの映像記録を Jetson のディスクを圧迫せず軽量に保存可能。
+* **全自動データセット蓄積（Headless 運用）**:
+  * GUI (RViz2) を起動せず、投擲するたびに自動で CSV（`cloth_trajectories_dataset.csv`）に蓄積。
+  * 統計解析ツールで最確軌道グラフ（`most_probable_trajectory.png`）をワンコマンド出力。
 
 ---
 
-## 2. ハードウェア設置
+## 2. ハードウェア設置 & 座標系 (Static TF)
 
-* **USB 接続**: Jetson の **USB 3.0 ポート（青色端子 / SSマーク）に直結**（※USB 2.0 だと帯域不足になります）。
+* **USB 接続**: Jetson の **USB 3.0 ポート（青色端子 / SSマーク）に直結**。
 * **カメラ設置向き**: **90° ロール回転の縦置き**（垂直視野角を約 90° に拡大し、放物線の最高到達点を見失わない配置）。
 * **取り付け仰角**: 水平から **上向き 20°** (`camera_pitch_deg: 20.0`)。
-* **機体オフセット**: 前方 $0.15\,\text{m}$、高さ $0.35\,\text{m}$。
+* **機体オフセット**: 前方 $0.15\,\text{m}$ (`camera_x_offset_m: 0.15`)、高さ $0.35\,\text{m}$ (`camera_height_offset_m: 0.35`)。
+* **Static TF**: ノード起動時に `base_link -> camera_link -> camera_depth_optical_frame` が自動配信されます。
 
 ---
 
-## 3. Jetson でのセットアップ & 起動手順
+## 3. 起動コマンド（用途別）
 
-### ステップ 1: Jetson に RealSense SDK をインストール
+### A. 本番運用：実機 RealSense での自動データ蓄積（GUIなし・超軽量）
+
 ```bash
-sudo apt update
-sudo apt install -y librealsense2-dev librealsense2-utils
+source ~/ros2_ws/install/setup.bash
 
-# カメラ認識確認（接続して実行）
-rs-enumerate-devices
+# 1. 停止して撃つ場合（デフォルト・高精度背景差分）
+ros2 launch realsense_dust_cloth cloth_tracker.launch.py use_direct_realsense:=true
+
+# 2. ロボットが走行しながら撃つ場合（移動撮影モード）
+ros2 launch realsense_dust_cloth cloth_tracker.launch.py use_direct_realsense:=true use_bg_subtraction:=false
 ```
 
-### ステップ 2: ワークスペースのビルド
+### B. デバッグ・可視化運用：RViz2 付きで画面確認しながら起動
 ```bash
-cd ~/ros2_ws
-colcon build --packages-select realsense_dust_cloth
-source install/setup.bash
-```
-> **Tip**: CMake が自動で `librealsense2` を検知し、`#include <librealsense2/rs.hpp>` が有効化されます。
-
-### ステップ 3: Jetson のパフォーマンス最大化
-```bash
-sudo nvpmodel -m 0   # パワーモード最大
-sudo jetson_clocks   # GPU/CPU クロック最大固定
+ros2 launch realsense_dust_cloth play_bag_rviz.launch.py
 ```
 
-### ステップ 4: 起動（カメラ直結モード）
+### C. 記録済み rosbag を再生してテスト
 ```bash
-ros2 launch realsense_dust_cloth cloth_tracker_cuda.launch.py use_direct_realsense:=true
-```
-* 画面に `RealSense Hardware Pipeline streaming: 848x480 @ 60fps` と出れば成功です！
+# ターミナル1: トラッカー & RViz
+ros2 launch realsense_dust_cloth play_bag_rviz.launch.py
 
----
-
-## 4. 放物線データの記録・解析方法
-
-何回も発射実験を行い、データを記録して最確軌道を出したい場合は、別ターミナルで記録ツールを動かします：
-
-```bash
-python3 ~/ros2_ws/src/realsense_dust_cloth/realsense_dust_cloth/record_trajectories.py
-```
-
-* **自動記録**: 雑巾が飛ぶたびに自動で検知し、`data/trajectories_日時.csv` に実測座標が追記されます。
-* **重複自動排除**: 同じ飛び方や同一 bag の再生物は自動でスキップされるため、データが汚れません。
-* **終了とグラフ生成**: `Ctrl + C` を押すと記録が終了し、最確放物線 $Z(X)$ と着地点ばらつき（$\pm 1\sigma$）のグラフ画像（`.png`）が自動保存されます。
-
----
-
-## 5. PCでの遠隔 RViz 可視化 / bag 再生
-
-### 手元 PC から RViz2 を起動してリアルタイム目視
-```bash
-rviz2 -d ~/ros2_ws/src/realsense_dust_cloth/rviz/cloth_tracker.rviz
-```
-
-### 記録済み rosbag を再生してテスト
-```bash
-# ループ再生（何回も繰り返す場合）
-ros2 bag play ~/ros2_ws/data/test_bag --loop
-```
-
-### rqt_bag で GUI 操作（シークバー・巻き戻し再生）
-```bash
-ros2 run rqt_bag rqt_bag &
+# ターミナル2: bag 再生
+ros2 bag play ~/ros2_ws/data/test_bag/rosbag2_2026_09_26-09_54_28_0.db3 --loop --clock
 ```
 
 ---
 
-## 6. 主要パラメータ (`config/tracker_params.yaml`)
+## 4. 蓄積データの統計解析 & グラフ出力
+
+投擲を重ねてデータが CSV（`data/cloth_trajectories_dataset.csv`）に溜まったら、以下のコマンドで解析グラフを出力します：
+
+```bash
+python3 ~/ros2_ws/src/realsense_dust_cloth/realsense_dust_cloth/trajectory_probability_analyzer.py --plot
+```
+* **出力内容**:
+  * 最高確率放物線 $Z(X)$ と信頼区間（$\pm 1\sigma$ エラーバンド）
+  * 着地点のばらつき分布（X方向・Y方向の標準偏差）
+  * グラフ画像 `most_probable_trajectory.png` の自動生成
+
+---
+
+## 5. 主要パラメータ (`config/tracker_params.yaml`)
 
 | パラメータ | 既定値 | 説明 |
 | :--- | :---: | :--- |
-| `use_direct_realsense` | `false` | RealSense C++ API 直接ストリーミング（Jetson 実機時は `true` 推奨） |
+| `use_direct_realsense` | `false` | RealSense C++ API 直接ストリーミング（実機接続時は `true`） |
+| `use_bg_subtraction` | `true` | 静止背景差分（停止時は `true`、台車走行射撃時は `false`） |
 | `camera_pitch_deg` | `20.0` [deg] | カメラ仰角（上向き 20°） |
 | `camera_roll_deg` | `90.0` [deg] | カメラ縦置き角度（90° ロール） |
-| `min_x_m` / `max_x_m` | `0.40` / `3.80` [m] | 前後方向の ROI 抽出空間 |
-| `min_z_m` / `max_z_m` | `0.20` / `2.20` [m] | 高さ方向の抽出空間（床面・天井を除外） |
-| `bg_diff_thresh_m` | `0.15` [m] | 背景差分閾値（静止した壁・机を消去） |
-| `voxel_size_m` | `0.03` [m] | 空間ハッシュ Voxel 解像度（3cm 間引き） |
-| `cluster_eps_m` | `0.15` [m] | クラスタ探索距離 |
-| `max_cloth_size_m` | `1.50` [m] | 雑巾の最大サイズ（展開した布を包含） |
+| `min_x_m` / `max_x_m` | `0.40` / `3.50` [m] | 前後方向の ROI 抽出空間 |
+| `min_z_m` / `max_z_m` | `0.00` / `1.80` [m] | 高さ方向の抽出空間（最高到達点 $1.4\text{m}$ を包含） |
+| `launch_min_x` / `launch_max_x` | `0.50` / `1.20` [m] | 発射口ロックオンエリア X |
+| `launch_min_z` / `launch_max_z` | `0.85` / `1.60` [m] | 発射口ロックオンエリア Z |
+| `gate_radius_m` | `0.40` [m] | 飛行追跡ゲート半径（周囲ノイズを完全遮断） |
+| `enable_color_stream` | `true` | JPEG 圧縮カラー配信（rosbag 記録用） |

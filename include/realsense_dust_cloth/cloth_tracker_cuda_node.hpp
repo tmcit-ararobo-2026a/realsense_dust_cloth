@@ -8,13 +8,17 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <visualization_msgs/msg/marker.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <tf2_ros/transform_broadcaster.h>
+#include <tf2_ros/static_transform_broadcaster.h>
+#include <tf2/LinearMath/Quaternion.h>
 
 #include "realsense_dust_cloth/cuda_kernels.cuh"
 
@@ -56,11 +60,12 @@ private:
 
     // Trajectory history
     std::vector<std::pair<double, geometry_msgs::msg::Point>> trajectory_points_;
+    double last_frame_stamp_sec_{0.0};
     geometry_msgs::msg::Point last_published_pt_;
     bool has_last_published_pt_{false};
 
     // Ballistic State Tracker (Eliminates stationary noise, locks onto flying cloth)
-    enum class TrackerState { IDLE, TRACKING };
+    enum class TrackerState { IDLE, TRACKING, LANDED };
     struct BallisticTracker {
         TrackerState state{TrackerState::IDLE};
         double x{0.0}, y{0.0}, z{0.0};
@@ -73,17 +78,17 @@ private:
         bool has_pending{false};
         double pending_x{0.0}, pending_y{0.0}, pending_z{0.0};
         double pending_stamp{0.0};
-        double min_launch_vx{1.0}; // minimum forward velocity (m/s) to confirm launch
+        double min_launch_vx{0.30}; // minimum forward velocity (m/s) to confirm launch
 
         // Parameters
-        double launch_min_x{0.6};
-        double launch_max_x{2.2};
-        double launch_min_y{-0.8};
-        double launch_max_y{0.8};
-        double launch_min_z{0.2};
-        double launch_max_z{1.8};
-        double gate_radius_m{0.85};
-        int max_lost_frames{5};
+        double launch_min_x{0.40};
+        double launch_max_x{0.85};
+        double launch_min_y{-0.30};
+        double launch_max_y{0.30};
+        double launch_min_z{0.65};
+        double launch_max_z{1.30};
+        double gate_radius_m{0.80};
+        int max_lost_frames{6};
         double gravity_m_s2{9.8};
 
         void reset() {
@@ -105,7 +110,7 @@ private:
             }
             px = static_cast<float>(x + vx * dt);
             py = static_cast<float>(y + vy * dt);
-            pz = static_cast<float>(z + vz * dt - 0.5 * gravity_m_s2 * dt * dt);
+            pz = static_cast<float>(z + vz * dt - 0.5 * 3.0 * dt * dt);
             return true;
         }
 
@@ -114,13 +119,28 @@ private:
 
     // ROS 2 Interfaces
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+    std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
     rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pub_point_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_marker_;
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_roi_markers_;
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_path_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_cluster_cloud_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_filtered_cloud_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_raw_color_;
+    rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr pub_compressed_color_;
 
     rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr sub_camera_info_;
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_depth_image_;
+    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_color_image_;
+
+    void color_image_callback(const sensor_msgs::msg::Image::SharedPtr msg);
+
+    void publish_static_tf();
+    void publish_roi_markers(const rclcpp::Time& stamp, const ClothTrackingResult& raw_res);
+
+    bool enable_color_stream_{true};
+    int color_fps_{30};
+    int jpeg_quality_{65};
 
     // Direct RealSense Thread
     std::atomic<bool> is_running_{false};

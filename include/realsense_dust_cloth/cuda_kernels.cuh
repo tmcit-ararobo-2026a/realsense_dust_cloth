@@ -112,6 +112,7 @@ namespace realsense_dust_cloth
         const CameraPoseConfig &pose,
         const FilterConfig &filter,
         std::vector<float3> *out_cluster_points = nullptr,
+        std::vector<float3> *out_filtered_points = nullptr,
         float pred_x = 0.0f,
         float pred_y = 0.0f,
         float pred_z = 0.0f,

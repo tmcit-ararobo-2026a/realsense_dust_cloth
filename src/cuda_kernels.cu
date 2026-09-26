@@ -107,12 +107,15 @@ namespace realsense_dust_cloth
             float z_cam = z_raw;
 
             // Transform to base_link:
-            // Mounted vertically (90 deg roll) and tilted up by pitch_deg
+            // Vertical mounting (90 deg roll) and tilted up by pitch_deg
             float pitch_rad = pose.pitch_deg * (3.14159265358979323846f / 180.0f);
             float cos_p = cosf(pitch_rad);
             float sin_p = sinf(pitch_rad);
 
-            // True vertical mounting coordinate transformation (Roll 90, Pitch 20)
+            // True physical coordinate transformation (Roll 90 deg, Pitch 20 deg):
+            // Forward X: z_cam * cos_p + x_cam * sin_p
+            // Lateral Y: -y_cam
+            // Vertical Z: height_offset + (z_cam * sin_p - x_cam * cos_p)
             float x_rob = pose.x_offset_m + (z_cam * cos_p + x_cam * sin_p);
             float y_rob = -y_cam;
             float z_rob = pose.height_offset_m + (z_cam * sin_p - x_cam * cos_p);
@@ -349,12 +352,21 @@ namespace realsense_dust_cloth
                         {
                             continue; // Out of flight gate
                         }
-                        // Prioritize proximity to predicted cloth position with point count bonus
+                        // Strictly prioritize proximity to predicted parabolic position
                         score = 1000.0f - dist * 400.0f + static_cast<float>(sz) * 0.05f;
                     }
                     else
                     {
-                        score = static_cast<float>(sz);
+                        // When waiting for launch: prioritize clusters in the robot launcher zone (X <= 1.20m, Z >= 0.80m)
+                        if (c_cx > 1.30f || c_cz < 0.70f)
+                        {
+                            // Far/floor noise: heavily penalized
+                            score = static_cast<float>(sz) * 0.001f;
+                        }
+                        else
+                        {
+                            score = 500.0f - c_cx * 50.0f + static_cast<float>(sz) * 0.05f;
+                        }
                     }
 
                     if (score > best_score)
@@ -517,6 +529,7 @@ namespace realsense_dust_cloth
         const CameraPoseConfig &pose,
         const FilterConfig &filter,
         std::vector<float3> *out_cluster_points,
+        std::vector<float3> *out_filtered_points,
         float pred_x,
         float pred_y,
         float pred_z,
@@ -619,14 +632,23 @@ namespace realsense_dust_cloth
 
         ClothTrackingResult final_res = *ctx.h_result_pinned;
 
+        // Optional: Extract debug all filtered/voxel points
+        std::vector<float3> h_all_voxels;
+        if (out_filtered_points || out_cluster_points)
+        {
+            h_all_voxels.resize(num_points);
+            cudaMemcpy(h_all_voxels.data(), ctx.d_voxel_points, num_points * sizeof(float3), cudaMemcpyDeviceToHost);
+            if (out_filtered_points)
+            {
+                *out_filtered_points = h_all_voxels;
+            }
+        }
+
         // Optional: Extract debug cluster points
-        if (out_cluster_points && final_res.valid && h_best_root >= 0)
+        if (out_cluster_points && h_best_root >= 0)
         {
             out_cluster_points->clear();
-            std::vector<float3> h_all_voxels(num_points);
             std::vector<int> h_parents(num_points);
-
-            cudaMemcpy(h_all_voxels.data(), ctx.d_voxel_points, num_points * sizeof(float3), cudaMemcpyDeviceToHost);
             cudaMemcpy(h_parents.data(), ctx.d_parent, num_points * sizeof(int), cudaMemcpyDeviceToHost);
 
             for (int i = 0; i < num_points; ++i)
