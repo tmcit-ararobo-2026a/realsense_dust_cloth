@@ -49,10 +49,68 @@ private:
     bool intrinsics_ready_{false};
     bool publish_debug_cloud_{false};
     bool use_direct_realsense_{false};
+    bool enable_ballistic_filter_{true};
     double trajectory_history_sec_{3.0};
+    int bg_frames_collected_{0};
+    int bg_target_frames_{20};
 
     // Trajectory history
     std::vector<std::pair<double, geometry_msgs::msg::Point>> trajectory_points_;
+    geometry_msgs::msg::Point last_published_pt_;
+    bool has_last_published_pt_{false};
+
+    // Ballistic State Tracker (Eliminates stationary noise, locks onto flying cloth)
+    enum class TrackerState { IDLE, TRACKING };
+    struct BallisticTracker {
+        TrackerState state{TrackerState::IDLE};
+        double x{0.0}, y{0.0}, z{0.0};
+        double vx{0.0}, vy{0.0}, vz{0.0};
+        double last_stamp{0.0};
+        int tracked_count{0};
+        int lost_count{0};
+
+        // Launch velocity detection (prevents stationary noise from triggering)
+        bool has_pending{false};
+        double pending_x{0.0}, pending_y{0.0}, pending_z{0.0};
+        double pending_stamp{0.0};
+        double min_launch_vx{1.0}; // minimum forward velocity (m/s) to confirm launch
+
+        // Parameters
+        double launch_min_x{0.6};
+        double launch_max_x{2.2};
+        double launch_min_y{-0.8};
+        double launch_max_y{0.8};
+        double launch_min_z{0.2};
+        double launch_max_z{1.8};
+        double gate_radius_m{0.85};
+        int max_lost_frames{5};
+        double gravity_m_s2{9.8};
+
+        void reset() {
+            state = TrackerState::IDLE;
+            tracked_count = 0;
+            lost_count = 0;
+            has_pending = false;
+            last_stamp = 0.0;
+            pending_stamp = 0.0;
+        }
+
+        bool get_prediction(double stamp_sec, float& px, float& py, float& pz) const {
+            if (state != TrackerState::TRACKING || last_stamp <= 0.0) {
+                return false;
+            }
+            double dt = stamp_sec - last_stamp;
+            if (dt <= 0.0 || dt > 0.3) {
+                dt = 0.016; // 60fps fallback
+            }
+            px = static_cast<float>(x + vx * dt);
+            py = static_cast<float>(y + vy * dt);
+            pz = static_cast<float>(z + vz * dt - 0.5 * gravity_m_s2 * dt * dt);
+            return true;
+        }
+
+        bool update(const ClothTrackingResult& raw, double stamp_sec, ClothTrackingResult& out);
+    } ballistic_tracker_;
 
     // ROS 2 Interfaces
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;

@@ -1,38 +1,55 @@
 /**:
   ros__parameters:
     # 追跡モード: 'pointcloud' または 'depth'
-    tracking_mode: "pointcloud"
+    tracking_mode: "depth"
 
     # カメラトピック設定
     points_topic: "/camera/camera/depth/color/points"
     depth_topic: "/camera/camera/depth/image_rect_raw"
     camera_info_topic: "/camera/camera/depth/camera_info"
     
-    # カメラ姿勢・オフセット
-    camera_width: 848
+    # カメラ姿勢・オフセット（縦置きRoll 90°, 仰角20°）
+    camera_width: 640
     camera_height: 480
-    camera_pitch_deg: 45.0
+    camera_pitch_deg: 20.0
     camera_roll_deg: 90.0
     camera_height_offset_m: 0.35
-    camera_x_offset_m: 0.25
+    camera_x_offset_m: 0.15
 
     # CUDA / Direct API 設定
     use_direct_realsense: false
     publish_debug_cloud: false
 
-    # 空間ROIフィルタ（base_link 基準）
-    min_x_m: 0.30            # ベルト先端直前の至近距離ノイズカット
-    max_x_m: 6.0             # 最大計測距離
-    min_y_m: -1.5            # 左右制限
-    max_y_m: 1.5
-    min_z_m: 0.05            # 床面カット
-    max_z_m: 3.5             # 天井カット
+    # 空間ROIフィルタ（base_link 基準: 縦置きRoll90, 仰角20度）
+    min_x_m: 0.40            # ロボット手前発射台境界
+    max_x_m: 3.80            # 着地先境界
+    min_y_m: -0.60           # 左右境界（真正面中心）
+    max_y_m: 0.60
+    min_z_m: 0.20            # 床面カット
+    max_z_m: 2.20            # 天井カット（放物線頂点1.40mを余裕で包含）
+
+    # 背景差分（静止した壁・天井・家具を消去）
+    use_bg_subtraction: true
+    bg_diff_thresh_m: 0.15   # 背景より15cm手前に現れた動く物体のみ抽出
+    bg_target_frames: 5      # 背景学習フレーム数 (約0.08秒で即時完了)
     
+    # 弾道ステートマシン（ロボットの揺れ・壁ノイズを完全遮断し、飛んでいる布のみロックオン）
+    enable_ballistic_filter: true
+    launch_min_x: 0.50       # 発射口エリア X 最小(m)
+    launch_max_x: 1.10       # 発射口エリア X 最大(m)
+    launch_min_y: -0.30      # 発射口エリア Y 最小(m)
+    launch_max_y: 0.30       # 発射口エリア Y 最大(m)
+    launch_min_z: 0.80       # 発射口エリア Z 最小(m)
+    launch_max_z: 1.40       # 発射口エリア Z 最大(m)
+    min_launch_vx: 0.30      # 発射確定最小前進速度(m/s)
+    gate_radius_m: 1.20      # 放物線予測ゲート半径(m) - ロボットの揺れでも追尾継続
+    max_lost_frames: 10      # 見失い許容フレーム数 (物理放物線補間で完全連続)
+
     # 点群クラスタリング & 雑巾判定パラメータ
     voxel_size_m: 0.03       # 3cm ボクセルダウンサンプリング (Jetson負荷抑制)
     cluster_eps_m: 0.15      # クラスタ探索距離 (m)
-    min_cluster_points: 10   # 雑巾として認識する最小点群数
-    max_cluster_points: 1500 # 最大点群数
-    max_cloth_size_m: 0.65   # 最大3Dサイズ(m): スーパー雑巾(約0.6m)を許容し相手ロボット(>0.7m)を除外
+    min_cluster_points: 15   # 雑巾として認識する最小点群数（微小ノイズ除外）
+    max_cluster_points: 6000 # 最大点群数 (展開布の全点をカバー)
+    max_cloth_size_m: 1.50   # 最大3Dサイズ(m): 着地時・展開布(約0.6~1.2m)を許容
     
-    trajectory_history_sec: 3.0 # RViz残像表示秒数
+    trajectory_history_sec: 15.0 # RViz残像表示秒数 (次回発射まで放物線ラインを画面に保持)

@@ -63,6 +63,8 @@ namespace realsense_dust_cloth
         // -------------------------------------------------------------
         __global__ void kernel_backproject_and_passthrough(
             const uint16_t *__restrict__ depth,
+            const uint16_t *__restrict__ bg_depth,
+            bool use_bg_sub,
             CameraIntrinsics intrin,
             CameraPoseConfig pose,
             FilterConfig filter,
@@ -85,6 +87,20 @@ namespace realsense_dust_cloth
             if (z_raw < filter.min_depth_m || z_raw > filter.max_depth_m)
                 return;
 
+            // Background Subtraction: If this pixel is at or behind the background, discard!
+            if (use_bg_sub && bg_depth != nullptr)
+            {
+                uint16_t bg = bg_depth[idx];
+                if (bg > 0)
+                {
+                    float z_bg = bg * intrin.depth_scale;
+                    if (z_raw >= (z_bg - filter.bg_diff_thresh_m))
+                    {
+                        return; // Part of background (walls, ceiling, floor, furniture)
+                    }
+                }
+            }
+
             // Camera optical frame (Z forward, X right, Y down)
             float x_cam = (static_cast<float>(u) - intrin.cx) * z_raw / intrin.fx;
             float y_cam = (static_cast<float>(v) - intrin.cy) * z_raw / intrin.fy;
@@ -96,9 +112,11 @@ namespace realsense_dust_cloth
             float cos_p = cosf(pitch_rad);
             float sin_p = sinf(pitch_rad);
 
-            float x_rob = pose.x_offset_m + (z_cam * cos_p - y_cam * sin_p);
-            float y_rob = -x_cam;
-            float z_rob = pose.height_offset_m + (z_cam * sin_p + y_cam * cos_p);
+            // True vertical mounting coordinate transformation (Roll 90, Pitch 20)
+            float x_rob = pose.x_offset_m + (z_cam * cos_p + x_cam * sin_p);
+            float y_rob = -y_cam;
+            float z_rob = pose.height_offset_m + (z_cam * sin_p - x_cam * cos_p);
+
 
             // PassThrough in base_link
             if (x_rob < filter.min_x_m || x_rob > filter.max_x_m ||
@@ -277,6 +295,8 @@ namespace realsense_dust_cloth
             const float3 *__restrict__ cluster_sum,
             int count,
             FilterConfig filter,
+            float3 pred_pos,
+            bool has_prediction,
             ClothTrackingResult *__restrict__ result,
             int *__restrict__ best_root_out)
         {
@@ -294,6 +314,7 @@ namespace realsense_dust_cloth
 
                 int best_count = 0;
                 int best_idx = -1;
+                float best_score = -1e9f;
 
                 for (int i = 0; i < count; ++i)
                 {
@@ -313,8 +334,32 @@ namespace realsense_dust_cloth
                         continue;
                     }
 
-                    if (sz > best_count)
+                    float c_cx = cluster_sum[i].x / static_cast<float>(sz);
+                    float c_cy = cluster_sum[i].y / static_cast<float>(sz);
+                    float c_cz = cluster_sum[i].z / static_cast<float>(sz);
+
+                    float score = 0.0f;
+                    if (has_prediction)
                     {
+                        float dpx = c_cx - pred_pos.x;
+                        float dpy = c_cy - pred_pos.y;
+                        float dpz = c_cz - pred_pos.z;
+                        float dist = sqrtf(dpx * dpx + dpy * dpy + dpz * dpz);
+                        if (dist > 1.20f)
+                        {
+                            continue; // Out of flight gate
+                        }
+                        // Prioritize proximity to predicted cloth position with point count bonus
+                        score = 1000.0f - dist * 400.0f + static_cast<float>(sz) * 0.05f;
+                    }
+                    else
+                    {
+                        score = static_cast<float>(sz);
+                    }
+
+                    if (score > best_score)
+                    {
+                        best_score = score;
                         best_count = sz;
                         best_idx = i;
                     }
@@ -346,6 +391,10 @@ namespace realsense_dust_cloth
         cudaStreamCreate(&ctx.stream);
 
         cudaMalloc(&ctx.d_depth, ctx.max_pixels * sizeof(uint16_t));
+        cudaMalloc(&ctx.d_bg_depth, ctx.max_pixels * sizeof(uint16_t));
+        cudaMemset(ctx.d_bg_depth, 0, ctx.max_pixels * sizeof(uint16_t));
+        ctx.bg_ready = false;
+
         cudaMalloc(&ctx.d_valid_points, ctx.max_pixels * sizeof(float3));
         cudaMalloc(&ctx.d_valid_count, sizeof(int));
 
@@ -361,9 +410,59 @@ namespace realsense_dust_cloth
 
         cudaMalloc(&ctx.d_result, sizeof(ClothTrackingResult));
         cudaMallocHost(&ctx.h_result_pinned, sizeof(ClothTrackingResult));
+        cudaMalloc(&ctx.d_best_root, sizeof(int));
 
         ctx.initialized = true;
         return true;
+    }
+
+    void reset_background_cuda(CudaTrackerContext &ctx)
+    {
+        if (!ctx.initialized || ctx.d_bg_depth == nullptr)
+            return;
+        cudaMemset(ctx.d_bg_depth, 0, ctx.max_pixels * sizeof(uint16_t));
+        ctx.bg_ready = false;
+    }
+
+    __global__ void kernel_update_bg(
+        const uint16_t *__restrict__ depth,
+        uint16_t *__restrict__ bg_depth,
+        int total_pixels)
+    {
+        int idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= total_pixels)
+            return;
+        uint16_t d = depth[idx];
+        if (d > 0)
+        {
+            uint16_t old = bg_depth[idx];
+            if (old == 0)
+            {
+                bg_depth[idx] = d;
+            }
+            else
+            {
+                // Running average for stable background calibration
+                bg_depth[idx] = static_cast<uint16_t>((old * 3 + d + 2) / 4);
+            }
+        }
+    }
+
+
+    void update_background_cuda(CudaTrackerContext &ctx, const uint16_t *host_depth_ptr, int width, int height)
+    {
+        if (!ctx.initialized || host_depth_ptr == nullptr || ctx.d_bg_depth == nullptr)
+            return;
+        int total_pixels = width * height;
+        if (total_pixels > ctx.max_pixels)
+            return;
+
+        cudaMemcpyAsync(ctx.d_depth, host_depth_ptr, total_pixels * sizeof(uint16_t), cudaMemcpyHostToDevice, ctx.stream);
+        int block = 256;
+        int grid = (total_pixels + block - 1) / block;
+        kernel_update_bg<<<grid, block, 0, ctx.stream>>>(ctx.d_depth, ctx.d_bg_depth, total_pixels);
+        cudaStreamSynchronize(ctx.stream);
+        ctx.bg_ready = true;
     }
 
     void destroy_cuda_tracker(CudaTrackerContext &ctx)
@@ -373,6 +472,8 @@ namespace realsense_dust_cloth
 
         if (ctx.d_depth)
             cudaFree(ctx.d_depth);
+        if (ctx.d_bg_depth)
+            cudaFree(ctx.d_bg_depth);
         if (ctx.d_valid_points)
             cudaFree(ctx.d_valid_points);
         if (ctx.d_valid_count)
@@ -400,6 +501,8 @@ namespace realsense_dust_cloth
             cudaFree(ctx.d_result);
         if (ctx.h_result_pinned)
             cudaFreeHost(ctx.h_result_pinned);
+        if (ctx.d_best_root)
+            cudaFree(ctx.d_best_root);
 
         if (ctx.stream)
             cudaStreamDestroy(ctx.stream);
@@ -413,7 +516,11 @@ namespace realsense_dust_cloth
         const CameraIntrinsics &intrin,
         const CameraPoseConfig &pose,
         const FilterConfig &filter,
-        std::vector<float3> *out_cluster_points)
+        std::vector<float3> *out_cluster_points,
+        float pred_x,
+        float pred_y,
+        float pred_z,
+        bool has_prediction)
     {
         ClothTrackingResult empty_res;
         if (!ctx.initialized || host_depth_ptr == nullptr)
@@ -427,12 +534,14 @@ namespace realsense_dust_cloth
         cudaMemcpyAsync(ctx.d_depth, host_depth_ptr, total_pixels * sizeof(uint16_t), cudaMemcpyHostToDevice, ctx.stream);
         cudaMemsetAsync(ctx.d_valid_count, 0, sizeof(int), ctx.stream);
 
-        // 2. Kernel 1: Back-project & PassThrough
+        // 2. Kernel 1: Back-project & PassThrough with Background Subtraction
         dim3 block2d(32, 16);
         dim3 grid2d((intrin.width + block2d.x - 1) / block2d.x, (intrin.height + block2d.y - 1) / block2d.y);
 
         kernel_backproject_and_passthrough<<<grid2d, block2d, 0, ctx.stream>>>(
             ctx.d_depth,
+            ctx.d_bg_depth,
+            filter.use_bg_subtraction && ctx.bg_ready,
             intrin,
             pose,
             filter,
@@ -496,20 +605,17 @@ namespace realsense_dust_cloth
             ctx.d_voxel_points, ctx.d_parent, num_points,
             ctx.d_cluster_sizes, ctx.d_cluster_min, ctx.d_cluster_max, ctx.d_cluster_sum);
 
-        // 6. Kernel 5: Select best cloth cluster
-        int *d_best_root = nullptr;
-        cudaMalloc(&d_best_root, sizeof(int));
-
+        // 6. Kernel 5: Select best cloth cluster (guided by ballistic prediction if tracking)
+        float3 pred_pt = make_float3(pred_x, pred_y, pred_z);
         kernel_select_cloth<<<1, 1, 0, ctx.stream>>>(
             ctx.d_cluster_sizes, ctx.d_cluster_min, ctx.d_cluster_max, ctx.d_cluster_sum,
-            num_points, filter, ctx.d_result, d_best_root);
+            num_points, filter, pred_pt, has_prediction, ctx.d_result, ctx.d_best_root);
 
         // Copy result back
         cudaMemcpyAsync(ctx.h_result_pinned, ctx.d_result, sizeof(ClothTrackingResult), cudaMemcpyDeviceToHost, ctx.stream);
         int h_best_root = -1;
-        cudaMemcpyAsync(&h_best_root, d_best_root, sizeof(int), cudaMemcpyDeviceToHost, ctx.stream);
+        cudaMemcpyAsync(&h_best_root, ctx.d_best_root, sizeof(int), cudaMemcpyDeviceToHost, ctx.stream);
         cudaStreamSynchronize(ctx.stream);
-        cudaFree(d_best_root);
 
         ClothTrackingResult final_res = *ctx.h_result_pinned;
 

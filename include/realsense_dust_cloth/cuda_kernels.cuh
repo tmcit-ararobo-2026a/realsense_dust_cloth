@@ -39,6 +39,10 @@ namespace realsense_dust_cloth
         float min_z_m{0.05f};
         float max_z_m{3.5f};
 
+        // Background Subtraction
+        float bg_diff_thresh_m{0.15f}; // Object must be at least 15cm in front of background
+        bool use_bg_subtraction{true};
+
         // Clustering & Voxel
         float voxel_size_m{0.03f};
         float cluster_eps_m{0.15f};
@@ -84,9 +88,13 @@ namespace realsense_dust_cloth
         float3 *d_cluster_max{nullptr};
         float3 *d_cluster_sum{nullptr};
 
+        uint16_t *d_bg_depth{nullptr};
+        bool bg_ready{false};
+
         // Host pinned memory for fast result transfer
         ClothTrackingResult *h_result_pinned{nullptr};
         ClothTrackingResult *d_result{nullptr};
+        int *d_best_root{nullptr};
 
         cudaStream_t stream{nullptr};
         bool initialized{false};
@@ -94,6 +102,8 @@ namespace realsense_dust_cloth
 
     bool init_cuda_tracker(CudaTrackerContext &ctx, int max_depth_width = 848, int max_depth_height = 480);
     void destroy_cuda_tracker(CudaTrackerContext &ctx);
+    void reset_background_cuda(CudaTrackerContext &ctx);
+    void update_background_cuda(CudaTrackerContext &ctx, const uint16_t *host_depth_ptr, int width, int height);
 
     ClothTrackingResult process_depth_frame_cuda(
         CudaTrackerContext &ctx,
@@ -101,6 +111,10 @@ namespace realsense_dust_cloth
         const CameraIntrinsics &intrin,
         const CameraPoseConfig &pose,
         const FilterConfig &filter,
-        std::vector<float3> *out_cluster_points = nullptr);
+        std::vector<float3> *out_cluster_points = nullptr,
+        float pred_x = 0.0f,
+        float pred_y = 0.0f,
+        float pred_z = 0.0f,
+        bool has_prediction = false);
 
 } // namespace realsense_dust_cloth

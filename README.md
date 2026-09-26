@@ -1,86 +1,110 @@
 # realsense_dust_cloth
 
-Intel RealSense D435 と NVIDIA Jetson (CUDA) を C++ で密結合した、飛翔中の雑巾（布）の 3次元弾道リアルタイム追尾・TF配信パッケージです（TMCIT 荒川ロボコン 2026A 向け）。
+Intel RealSense D435 と NVIDIA Jetson (CUDA) を C++ で密結合した、飛翔中の雑巾（布）の 3次元弾道リアルタイム追尾・TF配信・自動放物線解析パッケージです（TMCIT 荒川ロボコン 2026A 向け）。
+
+---
 
 ## 1. 特徴
-* **C++ & CUDA 密結合（60fps / 超低遅延 < 3ms）**:
-  * RealSense C++ API (`librealsense2`) から取得した Depth データを直接 GPU メモリへ転送。
-  * 3D 逆投影・姿勢変換・空間切り出し・Voxel間引き・クラスタリング・重心算出を **すべて GPU 内で完結** させ、Jetson の CPU 負荷を最小化。
-* **rosbag 容量の激減（99.9% 削減）**:
-  * 生の巨大な点群（毎分数十GB）を ROS 通信に流さず、算出された **雑巾の重心（`/tf`, `/cloth/position`）と軌跡マーカーのみ** を配信・記録。1分間でも **数百KB** に収まります。
-* **相手ロボット誤認防止 ＆ 2種類の雑巾対応**:
-  * 3D バウンディングボックス上限（$0.65\,\text{m}$）により、**通常雑巾** と **スーパー雑巾** を両方通過させ、巨大な **相手ロボット（$0.7\,\text{m}$超）** を瞬時に除外。
+* **C++ & CUDA 完全GPUパイプライン（60fps / 超低遅延 < 2ms）**:
+  * 深度画像の 3D 逆投影・空間ROI・背景差分・Voxel間引き・クラスタリング・重心算出を **すべて GPU 内で一貫処理**。
+  * Jetson の CPU 負荷はほぼゼロ（数%以下）で動作します。
+* **生の実測点のみを忠実にプロット**:
+  * 架空の補間点は一切生成せず、カメラが捉えた本物のフレーム位置（TF / 赤い点列）を出力。
+  * クリティカルダンピング平滑化により、布のヒラヒラ展開による重心ノイズを吸収して滑らかな放物線を描画。
+* **自動放物線ロギング & 最確軌道解析（重複自動排除）**:
+  * 雑巾を飛ばすたびに自動で検知して CSV に記録。
+  * 同じデータの重複保存を自動でスキップし、実験を重ねることで「最も確率の高い放物線 $Z(X)$」と「着地点のばらつき（$\pm 1\sigma$）」を全自動で算出。
+* **RealSense C++ API (`librealsense2`) 直結モード内蔵**:
+  * ROS 2 のカメラノードを別で立ち上げなくても、ノード単体でカメラから直接ゼロコピーで GPU にストリーミング可能。
 
 ---
 
-## 2. ハードウェア設置・接続
+## 2. ハードウェア設置
 
-* **USB 接続**: Jetson 本体の **USB 3.0 ポート（青色端子 / SSマーク）に直結**（※USB 2.0 だと帯域不足で 30fps に制限されます）。
-* **カメラ設置向き**: **90° ロール回転の縦置き**（垂直視野角を約 90° に拡大し、最高到達点を見失わない配置）。
+* **USB 接続**: Jetson の **USB 3.0 ポート（青色端子 / SSマーク）に直結**（※USB 2.0 だと帯域不足になります）。
+* **カメラ設置向き**: **90° ロール回転の縦置き**（垂直視野角を約 90° に拡大し、放物線の最高到達点を見失わない配置）。
 * **取り付け仰角**: 水平から **上向き 20°** (`camera_pitch_deg: 20.0`)。
-* **設置位置**: ベルト射出機構の直動先端部（機体中心から前方 $0.25\,\text{m}$、高さ $0.35\,\text{m}$）。
+* **機体オフセット**: 前方 $0.15\,\text{m}$、高さ $0.35\,\text{m}$。
 
 ---
 
-## 3. ビルド手順
+## 3. Jetson でのセットアップ & 起動手順
 
+### ステップ 1: Jetson に RealSense SDK をインストール
+```bash
+sudo apt update
+sudo apt install -y librealsense2-dev librealsense2-utils
+
+# カメラ認識確認（接続して実行）
+rs-enumerate-devices
+```
+
+### ステップ 2: ワークスペースのビルド
 ```bash
 cd ~/ros2_ws
 colcon build --packages-select realsense_dust_cloth
 source install/setup.bash
 ```
-> **Tip**: 特定の GPU アーキテクチャに絞って超高速ビルドしたい場合（例: RTX 3050 は `86`、Jetson Orin は `87`、Xavier は `72`）:
-> `colcon build --packages-select realsense_dust_cloth --cmake-args -DCMAKE_CUDA_ARCHITECTURES=86`
+> **Tip**: CMake が自動で `librealsense2` を検知し、`#include <librealsense2/rs.hpp>` が有効化されます。
 
----
-
-## 4. 実行手順
-
-### 4.1 [Jetson 実機] 射出実験の実行（GUIなし・最高速）
-
-#### ステップ 1: CUDA トラッカー起動（RealSense 直叩きモード）
+### ステップ 3: Jetson のパフォーマンス最大化
 ```bash
-source /opt/ros/humble/setup.bash
-source ~/ros2_ws/install/setup.bash
+sudo nvpmodel -m 0   # パワーモード最大
+sudo jetson_clocks   # GPU/CPU クロック最大固定
+```
+
+### ステップ 4: 起動（カメラ直結モード）
+```bash
 ros2 launch realsense_dust_cloth cloth_tracker_cuda.launch.py use_direct_realsense:=true
 ```
-※ GUI（RViz2）は立ち上がらない完全なヘッドレス動作のため、Jetson のリソースを消費しません。
-
-#### ステップ 2: rosbag で弾道を軽量記録
-```bash
-ros2 bag record /tf /cloth/position /cloth/trajectory_marker -o cloth_flight_bag
-```
-* 布が射出されると、**`flying_cloth` TF が空間内を放物線を描いて移動** し、軽量に記録されます。
+* 画面に `RealSense Hardware Pipeline streaming: 848x480 @ 60fps` と出れば成功です！
 
 ---
 
-### 4.2 [手元 PC] 3D 弾道の遠隔リアルタイム監視（任意）
-同一 Wi-Fi LAN に接続した手元のノート PC 等で RViz2 を起動すると、Jetson に負荷をかけずに遠隔で弾道を目視確認できます：
+## 4. 放物線データの記録・解析方法
+
+何回も発射実験を行い、データを記録して最確軌道を出したい場合は、別ターミナルで記録ツールを動かします：
+
+```bash
+python3 ~/ros2_ws/src/realsense_dust_cloth/realsense_dust_cloth/record_trajectories.py
+```
+
+* **自動記録**: 雑巾が飛ぶたびに自動で検知し、`data/trajectories_日時.csv` に実測座標が追記されます。
+* **重複自動排除**: 同じ飛び方や同一 bag の再生物は自動でスキップされるため、データが汚れません。
+* **終了とグラフ生成**: `Ctrl + C` を押すと記録が終了し、最確放物線 $Z(X)$ と着地点ばらつき（$\pm 1\sigma$）のグラフ画像（`.png`）が自動保存されます。
+
+---
+
+## 5. PCでの遠隔 RViz 可視化 / bag 再生
+
+### 手元 PC から RViz2 を起動してリアルタイム目視
 ```bash
 rviz2 -d ~/ros2_ws/src/realsense_dust_cloth/rviz/cloth_tracker.rviz
 ```
 
----
-
-### 4.3 [開発 PC] シミュレータによる 3D 可視化デモ（カメラ不要）
-手元 PC だけで動作確認したい場合、物理運動シミュレータと RViz2 がワンタッチで起動するデモを用意しています：
+### 記録済み rosbag を再生してテスト
 ```bash
-ros2 launch realsense_dust_cloth demo_flight_rviz.launch.py
+# ループ再生（何回も繰り返す場合）
+ros2 bag play ~/ros2_ws/data/test_bag --loop
 ```
-* エメラルドグリーンの点群（雑巾）が 2.5 秒ごとに放物線を描いて打ち上がり、黄色い軌跡ラインが描画されます。
+
+### rqt_bag で GUI 操作（シークバー・巻き戻し再生）
+```bash
+ros2 run rqt_bag rqt_bag &
+```
 
 ---
 
-## 5. 主要パラメータ (`config/tracker_params.yaml`)
+## 6. 主要パラメータ (`config/tracker_params.yaml`)
 
 | パラメータ | 既定値 | 説明 |
 | :--- | :---: | :--- |
-| `use_direct_realsense` | `false` | RealSense C++ API 直接ストリーミング有効化（Jetson実機時は `true` 推奨） |
+| `use_direct_realsense` | `false` | RealSense C++ API 直接ストリーミング（Jetson 実機時は `true` 推奨） |
 | `camera_pitch_deg` | `20.0` [deg] | カメラ仰角（上向き 20°） |
 | `camera_roll_deg` | `90.0` [deg] | カメラ縦置き角度（90° ロール） |
-| `min_x_m` / `max_x_m` | `0.30` / `6.0` [m] | 前後方向の抽出空間（ベルト先端手前を除外） |
-| `min_z_m` / `max_z_m` | `0.05` / `3.5` [m] | 高さ方向の抽出空間（床面・天井を除外） |
+| `min_x_m` / `max_x_m` | `0.40` / `3.80` [m] | 前後方向の ROI 抽出空間 |
+| `min_z_m` / `max_z_m` | `0.20` / `2.20` [m] | 高さ方向の抽出空間（床面・天井を除外） |
+| `bg_diff_thresh_m` | `0.15` [m] | 背景差分閾値（静止した壁・机を消去） |
 | `voxel_size_m` | `0.03` [m] | 空間ハッシュ Voxel 解像度（3cm 間引き） |
-| `cluster_eps_m` | `0.15` [m] | 近傍結合クラスタリング探索距離 |
-| `max_cloth_size_m` | `0.65` [m] | 雑巾の最大3Dサイズ（スーパー雑巾を許容し、相手ロボットを除外） |
-| `publish_debug_cloud` | `false` | RViz 確認用クラスタ点群（`/cloth/cluster_points`）のパブリッシュ有効化 |
+| `cluster_eps_m` | `0.15` [m] | クラスタ探索距離 |
+| `max_cloth_size_m` | `1.50` [m] | 雑巾の最大サイズ（展開した布を包含） |

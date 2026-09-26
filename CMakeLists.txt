@@ -2,8 +2,8 @@ cmake_minimum_required(VERSION 3.18)
 project(realsense_dust_cloth LANGUAGES CXX CUDA)
 
 if(NOT CMAKE_CUDA_ARCHITECTURES)
-  # Xavier (sm_72), Ampere RTX 3050 (sm_86), Orin (sm_87)
-  set(CMAKE_CUDA_ARCHITECTURES 72 86 87)
+  # Jetson Nano (sm_53), Xavier (sm_72), RTX 3050 (sm_86), Orin (sm_87)
+  set(CMAKE_CUDA_ARCHITECTURES 53 72 86 87)
 endif()
 
 set(CMAKE_CXX_STANDARD 17)
@@ -66,6 +66,8 @@ ament_python_install_package(${PROJECT_NAME})
 
 install(PROGRAMS
   realsense_dust_cloth/trajectory_analyzer.py
+  realsense_dust_cloth/trajectory_probability_analyzer.py
+  realsense_dust_cloth/record_trajectories.py
   realsense_dust_cloth/sim_cloth_flight.py
   DESTINATION lib/${PROJECT_NAME}
 )
