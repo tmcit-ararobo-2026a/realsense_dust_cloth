@@ -15,10 +15,11 @@ Intel RealSense D435 と NVIDIA Jetson (CUDA) を C++ で密結合した、飛�
 * **ロボット静止時 / 走行時の両対応モード**:
   * **停止時（発射反動あり）**: 背景差分（`use_bg_subtraction:=true`）により周囲の壁や家具を完全消去。
   * **台車走行時（移動射撃）**: 背景差分を OFF（`use_bg_subtraction:=false`）にし、空間ROI ＋ 発射口ゲート ＋ 進行速度ベクトル照合で追尾。
-* **超軽量 JPEG 圧縮カラー配信（rosbag 記録容量 95% 削減）**:
-  * `/camera/camera/color/image_raw/compressed` を自動配信。いつ投げたかの映像記録を Jetson のディスクを圧迫せず軽量に保存可能。
+* **超軽量 JPEG エンコーダ圧縮配信（rosbag 記録容量 95% 削減 & Wi-Fi 遠隔配信）**:
+  * Jetson の高速ハードウェア/SIMD エンコーダで JPEG 圧縮し、`/camera/camera/color/image_raw/compressed` を自動配信。
+  * ディスク容量を消費せず rosbag に投擲映像を記録でき、Wi-Fi 経由でも遅延なく手元 PC へ映像をストリーミング可能。
 * **全自動データセット蓄積（Headless 運用）**:
-  * GUI (RViz2) を起動せず、投擲するたびに自動で CSV（`cloth_trajectories_dataset.csv`）に蓄積。
+  * GUI (RViz2) を起動せず、投擲するたびに自動で CSV（`data/cloth_trajectories_dataset.csv`）に蓄積。
   * 統計解析ツールで最確軌道グラフ（`most_probable_trajectory.png`）をワンコマンド出力。
 
 ---
@@ -35,7 +36,7 @@ Intel RealSense D435 と NVIDIA Jetson (CUDA) を C++ で密結合した、飛�
 
 ## 3. 起動コマンド（用途別）
 
-### A. 本番運用：実機 RealSense での自動データ蓄積（GUIなし・超軽量）
+### A. 本番運用：Jetson 単体での自動データ蓄積（GUIなし・超軽量）
 
 ```bash
 source ~/ros2_ws/install/setup.bash
@@ -47,12 +48,40 @@ ros2 launch realsense_dust_cloth cloth_tracker.launch.py use_direct_realsense:=t
 ros2 launch realsense_dust_cloth cloth_tracker.launch.py use_direct_realsense:=true use_bg_subtraction:=false
 ```
 
-### B. デバッグ・可視化運用：RViz2 付きで画面確認しながら起動
+---
+
+### B. 遠隔監視：Jetson でノードを動かし、手元 PC の RViz2 で映像・弾道を見る方法
+
+Jetson と手元 PC を同じ Wi-Fi（または有線LAN）に接続し、同一の `ROS_DOMAIN_ID` を指定します。
+
+#### ① Jetson 側でトラッカーを起動
 ```bash
-ros2 launch realsense_dust_cloth play_bag_rviz.launch.py
+source ~/ros2_ws/install/setup.bash
+export ROS_DOMAIN_ID=30
+
+ros2 launch realsense_dust_cloth cloth_tracker.launch.py use_direct_realsense:=true
 ```
 
+#### ② 手元 PC 側で RViz2 を起動
+```bash
+source ~/ros2_ws/install/setup.bash
+export ROS_DOMAIN_ID=30
+
+# パソコン側でモニター画面を開く
+rviz2 -d ~/ros2_ws/src/realsense_dust_cloth/rviz/cloth_tracker.rviz
+```
+
+* **画面で確認できる内容**:
+  * **左上**: 投擲時のリアルタイムカラーカメラ映像（JPEG 圧縮で Wi-Fi でも低遅延）
+  * **黄色の放物線**: 数学的に算出された真の弾道ライン
+  * **紫の球体**: 最高到達点（Apex）
+  * **緑の円形**: 着地予測ターゲット
+  * **赤緑青の軸**: カメラが捉えた全フレームの TF 座標軸
+
+---
+
 ### C. 記録済み rosbag を再生してテスト
+
 ```bash
 # ターミナル1: トラッカー & RViz
 ros2 launch realsense_dust_cloth play_bag_rviz.launch.py
@@ -90,4 +119,6 @@ python3 ~/ros2_ws/src/realsense_dust_cloth/realsense_dust_cloth/trajectory_proba
 | `launch_min_x` / `launch_max_x` | `0.50` / `1.20` [m] | 発射口ロックオンエリア X |
 | `launch_min_z` / `launch_max_z` | `0.85` / `1.60` [m] | 発射口ロックオンエリア Z |
 | `gate_radius_m` | `0.40` [m] | 飛行追跡ゲート半径（周囲ノイズを完全遮断） |
-| `enable_color_stream` | `true` | JPEG 圧縮カラー配信（rosbag 記録用） |
+| `enable_color_stream` | `true` | JPEG 圧縮カラー配信（rosbag 記録 & 遠隔監視用） |
+| `jpeg_quality` | `65` | JPEG 圧縮品質（1〜100、65 で帯域 95% 削減） |
+| `color_fps` | `30` | カラー画像配信レート (fps) |
