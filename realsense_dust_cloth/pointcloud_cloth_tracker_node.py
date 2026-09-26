@@ -35,7 +35,7 @@ class PointCloudClothTrackerNode(Node):
 
         # 3D ROI Parameters (in camera / robot frame)
         self.declare_parameter('points_topic', '/camera/camera/depth/color/points')
-        self.declare_parameter('camera_pitch_deg', 45.0)
+        self.declare_parameter('camera_pitch_deg', 20.0)
         self.declare_parameter('camera_height_offset_m', 0.35)
         self.declare_parameter('camera_x_offset_m', 0.25)
 

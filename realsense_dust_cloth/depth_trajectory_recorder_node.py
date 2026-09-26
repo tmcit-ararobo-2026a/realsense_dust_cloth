@@ -32,7 +32,7 @@ class DepthTrajectoryTFNode(Node):
         self.declare_parameter('min_cluster_pixels', 20)
         self.declare_parameter('max_cluster_pixels', 8000)
         self.declare_parameter('max_cloth_size_m', 0.65)  # Super cloth is ~0.4x0.6m; reject opponent robot (>0.7m)
-        self.declare_parameter('camera_pitch_deg', 45.0)
+        self.declare_parameter('camera_pitch_deg', 20.0)
         self.declare_parameter('camera_height_offset_m', 0.35)
         self.declare_parameter('camera_x_offset_m', 0.25)
 

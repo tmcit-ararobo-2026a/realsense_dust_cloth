@@ -9,9 +9,16 @@
     camera_info_topic: "/camera/camera/depth/camera_info"
     
     # カメラ姿勢・オフセット
+    camera_width: 848
+    camera_height: 480
     camera_pitch_deg: 45.0
+    camera_roll_deg: 90.0
     camera_height_offset_m: 0.35
     camera_x_offset_m: 0.25
+
+    # CUDA / Direct API 設定
+    use_direct_realsense: false
+    publish_debug_cloud: false
 
     # 空間ROIフィルタ（base_link 基準）
     min_x_m: 0.30            # ベルト先端直前の至近距離ノイズカット
