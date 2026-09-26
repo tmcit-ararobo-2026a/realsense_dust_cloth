@@ -11,6 +11,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
+find_package(CUDAToolkit REQUIRED)
 # Find ROS 2 dependencies
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
@@ -40,7 +41,10 @@ add_executable(cloth_tracker_cuda_node
 target_include_directories(cloth_tracker_cuda_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
+  ${CUDAToolkit_INCLUDE_DIRS}
 )
+
+target_link_libraries(cloth_tracker_cuda_node CUDA::cudart)
 
 ament_target_dependencies(cloth_tracker_cuda_node
   rclcpp
@@ -53,7 +57,7 @@ ament_target_dependencies(cloth_tracker_cuda_node
 )
 
 if(realsense2_FOUND)
-  target_link_libraries(cloth_tracker_cuda_node ${realsense2_LIBRARY})
+  target_link_libraries(cloth_tracker_cuda_node ${realsense2_LIBRARY} CUDA::cudart)
 endif()
 
 # Install C++ executable
