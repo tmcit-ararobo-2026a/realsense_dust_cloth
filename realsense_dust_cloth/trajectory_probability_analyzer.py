@@ -199,19 +199,20 @@ def analyze_dataset(flights, plot_output=None):
 def main():
     rclpy.init()
     parser = argparse.ArgumentParser(description="Cloth Trajectory Probability Analyzer")
-    parser.add_argument('--record', action='store_true', help="Record incoming trajectories in real-time")
+    parser.add_argument('--record', action='store_true', default=True, help="Record incoming trajectories in real-time")
     parser.add_argument('--analyze', action='store_true', help="Analyze existing recorded trajectories")
-    parser.add_argument('--csv', type=str, default="/home/akeru/ros2_ws/data/cloth_trajectories_dataset.csv")
-    parser.add_argument('--plot', type=str, default="/home/akeru/ros2_ws/data/most_probable_trajectory.png")
-    args = parser.parse_args()
+    default_csv = os.path.expanduser('~/ros2_ws/data/cloth_trajectories_dataset.csv')
+    default_plot = os.path.expanduser('~/ros2_ws/data/most_probable_trajectory.png')
+    parser.add_argument('--csv', type=str, default=default_csv)
+    parser.add_argument('--plot', type=str, default=default_plot)
+    args, unknown = parser.parse_known_args()
 
-    if args.analyze or not args.record:
-        logger = ClothTrajectoryLogger(args.csv)
-        analyze_dataset(logger.all_flights, args.plot)
-        if not args.record:
-            rclpy.shutdown()
-            return
     logger = ClothTrajectoryLogger(args.csv)
+    if args.analyze:
+        analyze_dataset(logger.all_flights, args.plot)
+        rclpy.shutdown()
+        return
+
     print("📡 Listening for cloth trajectories... (Press Ctrl+C to stop and analyze)")
     try:
         while rclpy.ok():

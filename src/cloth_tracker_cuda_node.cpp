@@ -130,17 +130,18 @@ ParabolaFit compute_most_probable_parabola(
     }
     res.r2 = (ss_tot > 1e-6) ? std::clamp(1.0 - ss_res / ss_tot, 0.0, 1.0) : 0.0;
 
-    // Generate 120 smooth points along the mathematical parabola from launch to landing!
-    double x_min = std::min(res.x_start, 0.60);
+    // Generate 150 smooth points along the mathematical parabola from launch to landing!
+    double x_min = std::min(res.x_start, 0.35);
     double x_max = std::max(res.x_land, raw_pts.back().second.x);
-    x_max = std::min(x_max, 4.0);
-    int num_steps = 120;
+    x_max = std::min(x_max, 6.0);
+    int num_steps = 150;
     double dx = (x_max - x_min) / static_cast<double>(num_steps);
 
     for (int i = 0; i <= num_steps; ++i) {
         double px = x_min + i * dx;
         double py = d * px + e;
-        double pz = std::max(0.0, a * px * px + b * px + c);
+        double pz = a * px * px + b * px + c;
+        if (pz < 0.0) pz = 0.0;
         geometry_msgs::msg::Point pt;
         pt.x = px;
         pt.y = py;
@@ -363,13 +364,39 @@ void ClothTrackerCudaNode::depth_image_callback(const sensor_msgs::msg::Image::S
         camera_intrin_.cy = msg->height * 0.5f;
     }
 
-    if (msg->encoding != "16UC1" && msg->encoding != "mono16") {
+    // Auto-resize CUDA context if incoming image exceeds allocated max_pixels
+    int img_pixels = static_cast<int>(msg->width) * msg->height;
+    if (img_pixels > cuda_ctx_.max_pixels) {
+        destroy_cuda_tracker(cuda_ctx_);
+        init_cuda_tracker(cuda_ctx_, msg->width, msg->height);
+    }
+
+    std::vector<uint16_t> depth_u16_buf;
+    const uint16_t* depth_ptr = nullptr;
+
+    if (msg->encoding == "16UC1" || msg->encoding == "mono16") {
+        depth_ptr = reinterpret_cast<const uint16_t*>(msg->data.data());
+    } else if (msg->encoding == "32FC1") {
+        // Convert Isaac Sim float depth (meters) to uint16 (millimeters)
+        size_t num_pixels = static_cast<size_t>(msg->width) * msg->height;
+        depth_u16_buf.resize(num_pixels);
+        const float* fptr = reinterpret_cast<const float*>(msg->data.data());
+        for (size_t i = 0; i < num_pixels; ++i) {
+            float d_m = fptr[i];
+            if (std::isnan(d_m) || std::isinf(d_m) || d_m <= 0.0f) {
+                depth_u16_buf[i] = 0;
+            } else {
+                float d_mm = d_m * 1000.0f;
+                depth_u16_buf[i] = (d_mm > 65535.0f) ? 65535 : static_cast<uint16_t>(d_mm);
+            }
+        }
+        depth_ptr = depth_u16_buf.data();
+    } else {
         RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
-                             "Expected 16UC1/mono16 depth encoding, got: %s", msg->encoding.c_str());
+                             "Expected 16UC1/mono16 or 32FC1 depth encoding, got: %s", msg->encoding.c_str());
         return;
     }
 
-    const uint16_t* depth_ptr = reinterpret_cast<const uint16_t*>(msg->data.data());
     // Use msg header stamp for robust and exact time delta calculation (works identically on rosbag & real hardware)
     rclcpp::Time stamp(msg->header.stamp);
     if (stamp.nanoseconds() == 0) {
@@ -467,10 +494,11 @@ bool ClothTrackerCudaNode::BallisticTracker::update(
             return false;
         }
 
-        // Lightweight ballistic prediction (accounting for cloth aerodynamics)
-        double pred_x = x + vx * dt;
+        // Ballistic prediction with aerodynamic drag deceleration
+        double drag_factor = std::max(0.50, 1.0 - 1.2 * dt);
+        double pred_x = x + vx * dt * drag_factor;
         double pred_y = y + vy * dt;
-        double pred_z = z + vz * dt - 0.5 * 3.0 * dt * dt;
+        double pred_z = z + vz * dt - 0.5 * 9.8 * dt * dt; // True gravity acceleration
 
         bool matched = false;
         if (raw.valid) {
@@ -484,10 +512,8 @@ bool ClothTrackerCudaNode::BallisticTracker::update(
             double dz_prev = raw.cz - z;
             double dist_prev = std::sqrt(dx_prev * dx_prev + dy_prev * dy_prev + dz_prev * dz_prev);
 
-            // Forward motion check: cloth flying forward
-            bool is_physical = (raw.cx >= x - 0.15);
-
-            if ((dist_pred <= 0.60 || dist_prev <= 0.60) && is_physical) {
+            // Accept cloth even if aerodynamically stalling (dropping downward with low/zero forward speed)
+            if (dist_pred <= 0.85 || dist_prev <= 0.85) {
                 matched = true;
                 double dt_safe = std::clamp(dt, 0.005, 0.100);
 
@@ -512,8 +538,8 @@ bool ClothTrackerCudaNode::BallisticTracker::update(
                 out.cy = static_cast<float>(y);
                 out.cz = static_cast<float>(z);
 
-                // Landing check: reached terminal landing area (X >= 3.30m or descending into table/ground)
-                if (x >= 3.30 || (x >= 3.00 && z <= 0.80)) {
+                // Stop only when truly settled on the floor or out of bounds
+                if (z <= 0.04 || x >= 5.0) {
                     state = TrackerState::LANDED;
                 }
                 return true;
@@ -522,7 +548,7 @@ bool ClothTrackerCudaNode::BallisticTracker::update(
 
         if (!matched) {
             lost_count++;
-            if (lost_count > 15 || pred_z <= 0.0 || pred_x >= 3.65) {
+            if (lost_count > 25 || pred_z <= -0.05 || pred_x >= 5.20) {
                 state = TrackerState::LANDED;
                 return false;
             }

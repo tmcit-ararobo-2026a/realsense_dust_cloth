@@ -142,6 +142,8 @@ private:
     bool enable_color_stream_{true};
     int color_fps_{30};
     int jpeg_quality_{65};
+    int color_rotation_deg_{180};
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_rotated_color_;
 
     // Direct RealSense Thread
     std::atomic<bool> is_running_{false};
