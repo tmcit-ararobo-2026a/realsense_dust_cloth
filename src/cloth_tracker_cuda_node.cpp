@@ -249,7 +249,7 @@ void ClothTrackerCudaNode::declare_parameters() {
     this->declare_parameter("min_y_m", -1.50);
     this->declare_parameter("max_y_m", 1.50);
     this->declare_parameter("min_z_m", 0.00);
-    this->declare_parameter("max_z_m", 2.20);
+    this->declare_parameter("max_z_m", 3.50);
 
     this->declare_parameter("voxel_size_m", 0.02);
     this->declare_parameter("cluster_eps_m", 0.15);

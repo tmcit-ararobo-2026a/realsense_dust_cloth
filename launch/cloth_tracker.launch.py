@@ -80,13 +80,13 @@ def generate_launch_description():
 
     declare_min_y_m = DeclareLaunchArgument(
         'min_y_m',
-        default_value='-0.35',
+        default_value='-1.20',
         description='PassThrough ROI Min Y (m)'
     )
 
     declare_max_y_m = DeclareLaunchArgument(
         'max_y_m',
-        default_value='1.00',
+        default_value='1.20',
         description='PassThrough ROI Max Y (m)'
     )
 
@@ -98,7 +98,7 @@ def generate_launch_description():
 
     declare_max_z_m = DeclareLaunchArgument(
         'max_z_m',
-        default_value='2.20',
+        default_value='3.50',
         description='PassThrough ROI Max Z (m)'
     )
 
@@ -122,7 +122,7 @@ def generate_launch_description():
 
     declare_launch_max_z = DeclareLaunchArgument(
         'launch_max_z',
-        default_value='1.80',
+        default_value='2.00',
         description='Ballistic launch gate Max Z (m)'
     )
 
