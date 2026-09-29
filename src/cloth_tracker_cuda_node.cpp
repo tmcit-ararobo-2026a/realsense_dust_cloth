@@ -840,7 +840,10 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
     );
 
     // Publish Debug Point Clouds & ROI Markers
-    publish_point_cloud(pub_filtered_cloud_, debug_filtered_pts, stamp, "base_link");
+    if (publish_debug_cloud_) {
+        publish_point_cloud(pub_filtered_cloud_, debug_filtered_pts, stamp, "base_link");
+        publish_roi_markers(stamp, raw_res);
+    }
     
     // Publish cyan cluster ONLY when actively flying; clear it immediately when landed/idle
     if (ballistic_tracker_.state == TrackerState::TRACKING && !debug_cluster_pts.empty())
@@ -852,7 +855,6 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
         std::vector<float3> empty_pts;
         publish_point_cloud(pub_cluster_cloud_, empty_pts, stamp, "base_link");
     }
-    publish_roi_markers(stamp, raw_res);
 
     // Diagnostics to console every 1 second
     RCLCPP_INFO_THROTTLE(
@@ -964,9 +966,19 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
         pub_marker_->publish(del_ball);
     }
 
-    // 4. PERSISTENT VISUALIZATION: Always keep trajectory line and landing markers visible!
-    // Even after cloth lands on the ground, keep displaying the trajectory curve and target until next launch.
-    if (!trajectory_points_.empty()) {
+    // 4. PERSISTENT VISUALIZATION:
+    // When actively tracking: publish every frame for silky-smooth motion.
+    // When landed/idle: throttle to 1Hz (RViz retains markers automatically, completely eliminates lag!)
+    static double last_static_publish_sec = 0.0;
+    bool should_publish_markers = is_actively_tracked;
+    if (!is_actively_tracked && !trajectory_points_.empty()) {
+        if (now_sec - last_static_publish_sec >= 1.0) {
+            should_publish_markers = true;
+            last_static_publish_sec = now_sec;
+        }
+    }
+
+    if (should_publish_markers && !trajectory_points_.empty()) {
         // 1. Mathematical Parabola Line Strip (Bright Gold, 100% noise-free smooth curve)
         visualization_msgs::msg::Marker line_marker;
         line_marker.header.stamp = stamp;
@@ -1010,7 +1022,7 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
         }
         pub_marker_->publish(raw_points_marker);
 
-        // 3. TF Frame Coordinate Triad (RGB axes: Red=X, Green=Y, Blue=Z for EVERY camera frame)
+        // 3. TF Frame Coordinate Triad (Spaced every 4 points to avoid GPU overloading)
         visualization_msgs::msg::Marker axes_marker;
         axes_marker.header.stamp = stamp;
         axes_marker.header.frame_id = "base_link";
@@ -1026,8 +1038,8 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
         col_b.r = 0.1f; col_b.g = 0.4f; col_b.b = 1.0f; col_b.a = 0.95f;
 
         const double axis_len = 0.07; // 7cm axis length
-        for (const auto& item : trajectory_points_) {
-            const auto& orig = item.second;
+        for (size_t i = 0; i < trajectory_points_.size(); i += 4) {
+            const auto& orig = trajectory_points_[i].second;
 
             // X (Red)
             geometry_msgs::msg::Point px = orig;
