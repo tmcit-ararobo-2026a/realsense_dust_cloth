@@ -116,7 +116,7 @@ def generate_launch_description():
 
     declare_launch_min_z = DeclareLaunchArgument(
         'launch_min_z',
-        default_value='0.50',
+        default_value='0.40',
         description='Ballistic launch gate Min Z (m)'
     )
 

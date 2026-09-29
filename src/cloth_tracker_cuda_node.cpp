@@ -481,16 +481,17 @@ bool ClothTrackerCudaNode::BallisticTracker::update(
             return false;
         }
 
-        // Check if detected cluster is within launch ROI (initial eject zone)
+        // Lock onto genuine newly ejected cloth only (substantial points >= 25 to reject edge noise)
         if (raw.cx >= launch_min_x && raw.cx <= launch_max_x &&
             raw.cy >= launch_min_y && raw.cy <= launch_max_y &&
-            raw.cz >= launch_min_z && raw.cz <= launch_max_z)
+            raw.cz >= launch_min_z && raw.cz <= launch_max_z &&
+            raw.cluster_points_count >= 25)
         {
             state = TrackerState::TRACKING;
             x = raw.cx;
             y = raw.cy;
             z = raw.cz;
-            vx = 1.5;
+            vx = 2.0;
             vy = 0.0;
             vz = 0.5;
             last_stamp = stamp_sec;
@@ -503,11 +504,10 @@ bool ClothTrackerCudaNode::BallisticTracker::update(
             has_pending = false;
             return false;
         }
-    } else { // TRACKING
+    } else { // TRACKING: Persistently follow this single cloth cluster until it touches the ground!
         double dt = stamp_sec - last_stamp;
-        if (dt <= 0.0 || dt > 0.35) {
-            state = TrackerState::LANDED;
-            return false;
+        if (dt <= 0.0 || dt > 0.40) {
+            dt = 0.033;
         }
 
         // Ballistic prediction with aerodynamic drag deceleration & cloth effective gravity (~5.0 m/s^2)
@@ -517,7 +517,7 @@ bool ClothTrackerCudaNode::BallisticTracker::update(
         double pred_z = z + vz * dt - 0.5 * 5.0 * dt * dt;
 
         bool matched = false;
-        if (raw.valid) {
+        if (raw.valid && raw.cluster_points_count >= 8) {
             double dx_pred = raw.cx - pred_x;
             double dy_pred = raw.cy - pred_y;
             double dz_pred = raw.cz - pred_z;
@@ -528,8 +528,8 @@ bool ClothTrackerCudaNode::BallisticTracker::update(
             double dz_prev = raw.cz - z;
             double dist_prev = std::sqrt(dx_prev * dx_prev + dy_prev * dy_prev + dz_prev * dz_prev);
 
-            // Accept cloth even with severe aerodynamic drag, fluttering, or terminal velocity descent
-            if (dist_pred <= 1.60 || dist_prev <= 1.60) {
+            // Persistently track this cloth cluster (within 1.2m of last known location)
+            if (dist_pred <= 1.20 || dist_prev <= 1.20) {
                 matched = true;
                 double dt_safe = std::clamp(dt, 0.005, 0.100);
 

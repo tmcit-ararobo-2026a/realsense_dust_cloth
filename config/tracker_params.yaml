@@ -28,34 +28,34 @@
 
     # 空間ROIフィルタ（base_link 基準: 縦置きRoll90, 仰角20度）
     min_x_m: 0.40            # ロボット手前境界 (m)
-    max_x_m: 5.00            # 着地先境界 (m, 5m着地までカバー)
-    min_y_m: -0.80           # 左右幅 (m)
-    max_y_m: 0.80
+    max_x_m: 3.50            # 着地先境界 (m)
+    min_y_m: -0.35           # 左右幅 (m)
+    max_y_m: 0.35
     min_z_m: 0.00            # 床面境界 (m)
-    max_z_m: 2.20            # 上限 (m, 最高到達点を完全にカバー)
+    max_z_m: 1.80            # 上限 (m, 最高到達点 1.40m を完全にカバー)
 
-    # 背景差分（静止した床・壁・天井・家具を100%消去し、動く雑巾のみ抽出）
+    # 背景差分（静止した壁・天井・家具・周囲の物を100%消去）
     use_bg_subtraction: true
-    bg_diff_thresh_m: 0.06   # 背景より6cm手前に現れた動く物体のみ抽出
+    bg_diff_thresh_m: 0.08   # 背景より8cm手前に現れた動く物体のみ抽出
     bg_target_frames: 10     # 背景学習フレーム数
     
     # 弾道ステートマシン（放物線で飛ぶ雑巾のみをロックオン）
     enable_ballistic_filter: true
-    launch_min_x: 0.40       # 発射口エリア X 最小(m)
-    launch_max_x: 1.50       # 発射口エリア X 最大(m)
-    launch_min_y: -0.40      # 発射口エリア Y 最小(m)
-    launch_max_y: 0.40       # 発射口エリア Y 最大(m)
-    launch_min_z: 0.50       # 発射口エリア Z 最小(m, 床の雑巾を無視)
-    launch_max_z: 1.80       # 発射口エリア Z 最大(m)
+    launch_min_x: 0.50       # 発射口エリア X 最小(m)
+    launch_max_x: 1.20       # 発射口エリア X 最大(m)
+    launch_min_y: -0.25      # 発射口エリア Y 最小(m)
+    launch_max_y: 0.25       # 発射口エリア Y 最大(m)
+    launch_min_z: 0.85       # 発射口エリア Z 最小(m)
+    launch_max_z: 1.60       # 発射口エリア Z 最大(m, 発射口初期位置 1.15m をロックオン)
     min_launch_vx: 0.10      # 発射確定最小前進速度(m/s)
-    gate_radius_m: 0.80      # 探索ゲート半径(m)
-    max_lost_frames: 20      # 見失い許容フレーム数
+    gate_radius_m: 0.40      # 探索ゲート半径(m)
+    max_lost_frames: 12      # 見失い許容フレーム数
 
     # 点群クラスタリング & 雑巾判定パラメータ
-    voxel_size_m: 0.02       # 2cm ボクセル（遠距離でも点群を密に保持）
-    cluster_eps_m: 0.20      # クラスタ探索距離 (m, 遠距離疎点群を確実に結合)
-    min_cluster_points: 10   # 雑巾最小点群数 (遠距離10点でも確実に捕捉)
-    max_cluster_points: 8000 # 最大点群数
-    max_cloth_size_m: 1.20   # 最大3Dサイズ(m, はためき布を包括)
+    voxel_size_m: 0.03       # 3cm ボクセルダウンサンプリング
+    cluster_eps_m: 0.15      # クラスタ探索距離 (m)
+    min_cluster_points: 30   # 雑巾最小点群数 (微小ノイズ排除)
+    max_cluster_points: 6000 # 最大点群数
+    max_cloth_size_m: 0.85   # 最大3Dサイズ(m)
     
     trajectory_history_sec: 15.0 # RViz残像表示秒数
