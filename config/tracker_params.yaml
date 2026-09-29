@@ -34,8 +34,8 @@
     min_z_m: 0.00            # 床面境界 (m)
     max_z_m: 1.80            # 上限 (m, 最高到達点 1.40m を完全にカバー)
 
-    # 背景差分（静止した壁・天井・家具・周囲の物を100%消去）
-    use_bg_subtraction: true
+    # 背景差分（静止した壁・天井・家具・周囲の物を100%消去、移動ロボットやシムではfalse推奨）
+    use_bg_subtraction: false
     bg_diff_thresh_m: 0.08   # 背景より8cm手前に現れた動く物体のみ抽出
     bg_target_frames: 10     # 背景学習フレーム数
     
