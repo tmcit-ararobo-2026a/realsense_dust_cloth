@@ -349,15 +349,15 @@ namespace realsense_dust_cloth
                         float dpy = c_cy - pred_pos.y;
                         float dpz = c_cz - pred_pos.z;
                         float dist = sqrtf(dpx * dpx + dpy * dpy + dpz * dpz);
-                        if (dist <= 1.50f)
+                        if (dist <= 1.80f)
                         {
                             // Close to prediction: highest priority
                             score = 3000.0f - dist * 1000.0f + static_cast<float>(sz) * 0.1f;
                         }
-                        else if (dist <= 2.20f)
+                        else if (dist <= 3.00f || c_cx >= pred_pos.x - 0.40f)
                         {
                             // Extended gate: never drop the cloth even with sudden drag or fluttering
-                            score = 1000.0f - dist * 300.0f + static_cast<float>(sz) * 0.05f;
+                            score = 1000.0f - dist * 200.0f + static_cast<float>(sz) * 0.05f;
                         }
                         else
                         {

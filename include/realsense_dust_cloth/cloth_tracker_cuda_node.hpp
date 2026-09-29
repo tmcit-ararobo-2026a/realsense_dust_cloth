@@ -76,6 +76,12 @@ private:
     geometry_msgs::msg::Point last_published_pt_;
     bool has_last_published_pt_{false};
 
+    // Last known cloth position (for continuous TF broadcasting base_link -> flying_cloth)
+    double last_cloth_x_{0.0};
+    double last_cloth_y_{0.0};
+    double last_cloth_z_{0.0};
+    bool has_cloth_pose_{false};
+
     // Ballistic State Tracker (Eliminates stationary noise, locks onto flying cloth)
     enum class TrackerState { IDLE, TRACKING, LANDED };
     struct BallisticTracker {
@@ -122,7 +128,7 @@ private:
             }
             px = static_cast<float>(x + vx * dt);
             py = static_cast<float>(y + vy * dt);
-            pz = static_cast<float>(z + vz * dt - 0.5 * 3.0 * dt * dt);
+            pz = static_cast<float>(z + vz * dt - 0.5 * 9.8 * dt * dt);
             return true;
         }
 

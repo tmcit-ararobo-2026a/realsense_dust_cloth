@@ -27,10 +27,10 @@
     jpeg_quality: 65
 
     # 空間ROIフィルタ（base_link 基準: 縦置きRoll90, 仰角20度）
-    min_x_m: 0.40            # ロボット手前境界 (m)
-    max_x_m: 5.00            # 着地先境界 (m, 5m着地までカバー)
-    min_y_m: -0.40           # 左右幅 (m)
-    max_y_m: 0.40
+    min_x_m: 0.30            # ロボット手前境界 (m)
+    max_x_m: 5.50            # 着地先境界 (m, 5.5m着地までカバー)
+    min_y_m: -1.20           # 左右幅 (m, 横ブレでもロストしない幅)
+    max_y_m: 1.20
     min_z_m: 0.00            # 床面境界 (m)
     max_z_m: 2.20            # 上限 (m, 最高到達点を完全にカバー)
 
@@ -49,12 +49,12 @@
     launch_max_z: 1.60       # 発射口エリア Z 最大(m, 発射口初期位置 1.15m をロックオン)
     min_launch_vx: 0.10      # 発射確定最小前進速度(m/s)
     gate_radius_m: 0.80      # 探索ゲート半径(m)
-    max_lost_frames: 20      # 見失い許容フレーム数
+    max_lost_frames: 25      # 見失い許容フレーム数
 
     # 点群クラスタリング & 雑巾判定パラメータ
     voxel_size_m: 0.02       # 2cm ボクセル（遠距離でも点群を密に保持）
     cluster_eps_m: 0.20      # クラスタ探索距離 (m, 遠距離疎点群を確実に結合)
-    min_cluster_points: 15   # 雑巾最小点群数 (遠距離15点でも確実に捕捉)
+    min_cluster_points: 10   # 雑巾最小点群数 (遠距離10点でも確実に捕捉)
     max_cluster_points: 8000 # 最大点群数
     max_cloth_size_m: 1.20   # 最大3Dサイズ(m, はためき布を包括)
     
