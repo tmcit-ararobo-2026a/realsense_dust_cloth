@@ -63,9 +63,7 @@ source ~/ros2_ws/install/setup.bash
 ros2 launch realsense_dust_cloth cloth_tracker.launch.py \
   rviz:=true \
   use_sim_time:=true \
-  use_bg_subtraction:=false \
-  camera_height_offset_m:=0.81 \
-  camera_x_offset_m:=0.43
+  use_bg_subtraction:=false
 ```
 
 ---
