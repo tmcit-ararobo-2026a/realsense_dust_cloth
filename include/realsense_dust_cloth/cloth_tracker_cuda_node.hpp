@@ -28,6 +28,17 @@
 
 namespace realsense_dust_cloth {
 
+struct ParabolaFit {
+    bool valid{false};
+    double a{0.0}, b{0.0}, c{0.0}; // Z(X) = a*X^2 + b*X + c
+    double d{0.0}, e{0.0};          // Y(X) = d*X + e
+    double x_start{0.0};
+    double x_apex{0.0}, z_apex{0.0};
+    double x_land{0.0}, y_land{0.0}, z_land{0.0};
+    double r2{0.0};
+    std::vector<geometry_msgs::msg::Point> curve_pts;
+};
+
 class ClothTrackerCudaNode : public rclcpp::Node {
 public:
     explicit ClothTrackerCudaNode(const rclcpp::NodeOptions& options = rclcpp::NodeOptions());
@@ -58,8 +69,9 @@ private:
     int bg_frames_collected_{0};
     int bg_target_frames_{20};
 
-    // Trajectory history
+    // Trajectory history & persistent parabola visualization
     std::vector<std::pair<double, geometry_msgs::msg::Point>> trajectory_points_;
+    ParabolaFit cached_parabola_;
     double last_frame_stamp_sec_{0.0};
     geometry_msgs::msg::Point last_published_pt_;
     bool has_last_published_pt_{false};

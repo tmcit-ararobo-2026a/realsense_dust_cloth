@@ -31,16 +31,7 @@ geometry_msgs::msg::Point interpolate_catmull_rom(
     return pt;
 }
 
-struct ParabolaFit {
-    bool valid{false};
-    double a{0.0}, b{0.0}, c{0.0}; // Z(X) = a*X^2 + b*X + c
-    double d{0.0}, e{0.0};          // Y(X) = d*X + e
-    double x_start{0.0};
-    double x_apex{0.0}, z_apex{0.0};
-    double x_land{0.0}, y_land{0.0}, z_land{0.0};
-    double r2{0.0};
-    std::vector<geometry_msgs::msg::Point> curve_pts;
-};
+// ParabolaFit is declared in cloth_tracker_cuda_node.hpp
 
 ParabolaFit compute_most_probable_parabola(
     const std::vector<std::pair<double, geometry_msgs::msg::Point>>& raw_pts,
@@ -282,7 +273,7 @@ void ClothTrackerCudaNode::declare_parameters() {
     this->declare_parameter("launch_max_x", 1.80);
     this->declare_parameter("launch_min_y", -1.00);
     this->declare_parameter("launch_max_y", 1.00);
-    this->declare_parameter("launch_min_z", 0.30);
+    this->declare_parameter("launch_min_z", 0.50);
     this->declare_parameter("launch_max_z", 2.00);
     this->declare_parameter("gate_radius_m", 0.60);
     this->declare_parameter("max_lost_frames", 15);
@@ -563,8 +554,8 @@ bool ClothTrackerCudaNode::BallisticTracker::update(
                 out.cy = static_cast<float>(y);
                 out.cz = static_cast<float>(z);
 
-                // Stop only when truly settled on the floor or out of bounds
-                if (z <= 0.02 || x >= 5.5) {
+                // Stop tracking immediately when cloth descends to floor or forward motion stops near ground
+                if (z <= 0.15 || (z <= 0.28 && vx <= 0.4) || x >= 5.5) {
                     state = TrackerState::LANDED;
                 }
                 return true;
@@ -573,7 +564,7 @@ bool ClothTrackerCudaNode::BallisticTracker::update(
 
         if (!matched) {
             lost_count++;
-            if (lost_count > 25 || pred_z <= -0.05 || pred_x >= 5.20) {
+            if (lost_count > 12 || pred_z <= 0.08 || pred_x >= 5.20) {
                 state = TrackerState::LANDED;
                 return false;
             }
@@ -851,10 +842,15 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
     // Publish Debug Point Clouds & ROI Markers
     publish_point_cloud(pub_filtered_cloud_, debug_filtered_pts, stamp, "base_link");
     
-    // Publish cyan cluster ONLY when the cloth is actively flying in a parabolic trajectory
+    // Publish cyan cluster ONLY when actively flying; clear it immediately when landed/idle
     if (ballistic_tracker_.state == TrackerState::TRACKING && !debug_cluster_pts.empty())
     {
         publish_point_cloud(pub_cluster_cloud_, debug_cluster_pts, stamp, "base_link");
+    }
+    else
+    {
+        std::vector<float3> empty_pts;
+        publish_point_cloud(pub_cluster_cloud_, empty_pts, stamp, "base_link");
     }
     publish_roi_markers(stamp, raw_res);
 
@@ -868,225 +864,240 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
 
     // Phase 2: Ballistic State Tracking (Filter out stationary walls/ceiling & robot shaking)
     ClothTrackingResult res;
-    bool should_publish = false;
+    bool is_actively_tracked = false;
     if (enable_ballistic_filter_) {
-        should_publish = ballistic_tracker_.update(raw_res, stamp.seconds(), res);
+        is_actively_tracked = ballistic_tracker_.update(raw_res, stamp.seconds(), res);
     } else {
         res = raw_res;
-        should_publish = raw_res.valid;
+        is_actively_tracked = raw_res.valid;
     }
 
-    if (!should_publish) {
-        return;
-    }
+    if (is_actively_tracked) {
+        RCLCPP_DEBUG(this->get_logger(),
+                     "TRACKED CLOTH: points=%d, pos=(%.2f, %.2f, %.2f)",
+                     res.cluster_points_count, res.cx, res.cy, res.cz);
 
-    RCLCPP_DEBUG(this->get_logger(),
-                 "TRACKED CLOTH: points=%d, pos=(%.2f, %.2f, %.2f)",
-                 res.cluster_points_count, res.cx, res.cy, res.cz);
+        // 1. Broadcast TF: base_link -> flying_cloth
+        geometry_msgs::msg::TransformStamped tf_msg;
+        tf_msg.header.stamp = stamp;
+        tf_msg.header.frame_id = "base_link";
+        tf_msg.child_frame_id = "flying_cloth";
+        tf_msg.transform.translation.x = res.cx;
+        tf_msg.transform.translation.y = res.cy;
+        tf_msg.transform.translation.z = res.cz;
+        tf_msg.transform.rotation.w = 1.0;
+        tf_broadcaster_->sendTransform(tf_msg);
 
-    // 1. Broadcast TF: base_link -> flying_cloth
-    geometry_msgs::msg::TransformStamped tf_msg;
-    tf_msg.header.stamp = stamp;
-    tf_msg.header.frame_id = "base_link";
-    tf_msg.child_frame_id = "flying_cloth";
-    tf_msg.transform.translation.x = res.cx;
-    tf_msg.transform.translation.y = res.cy;
-    tf_msg.transform.translation.z = res.cz;
-    tf_msg.transform.rotation.w = 1.0;
-    tf_broadcaster_->sendTransform(tf_msg);
+        // 2. Publish Centroid Point (Strictly TRUE measured point only, no artificial interpolation!)
+        if (ballistic_tracker_.tracked_count <= 1) {
+            trajectory_points_.clear(); // Brand new launch: clear previous trajectory line
+            cached_parabola_ = ParabolaFit{};
+        }
 
-    // 2. Publish Centroid Point (Strictly TRUE measured point only, no artificial interpolation!)
-    if (ballistic_tracker_.tracked_count <= 1) {
-        trajectory_points_.clear(); // Brand new launch: clear previous trajectory line
-    }
+        geometry_msgs::msg::PointStamped pt_msg;
+        pt_msg.header.stamp = stamp;
+        pt_msg.header.frame_id = "base_link";
+        pt_msg.point.x = res.cx;
+        pt_msg.point.y = res.cy;
+        pt_msg.point.z = res.cz;
+        pub_point_->publish(pt_msg);
 
-    geometry_msgs::msg::PointStamped pt_msg;
-    pt_msg.header.stamp = stamp;
-    pt_msg.header.frame_id = "base_link";
-    pt_msg.point.x = res.cx;
-    pt_msg.point.y = res.cy;
-    pt_msg.point.z = res.cz;
-    pub_point_->publish(pt_msg);
+        // 3. Trajectory History & RViz Markers (Strictly true measured forward-moving points)
+        geometry_msgs::msg::Point p_geom;
+        p_geom.x = res.cx;
+        p_geom.y = res.cy;
+        p_geom.z = res.cz;
 
-    // 3. Trajectory History & RViz Markers (Strictly true measured forward-moving points)
-    geometry_msgs::msg::Point p_geom;
-    p_geom.x = res.cx;
-    p_geom.y = res.cy;
-    p_geom.z = res.cz;
-
-    // Only append if it's the first point or advancing forward (prevents backward warp/loops)
-    if (trajectory_points_.empty()) {
-        trajectory_points_.emplace_back(now_sec, p_geom);
-    } else {
-        const auto& prev_pt = trajectory_points_.back().second;
-        double dx = p_geom.x - prev_pt.x;
-        // Cloth must fly forward (+X) or have tiny motion
-        if (dx >= -0.05) {
-            double dy = p_geom.y - prev_pt.y;
-            double dz = p_geom.z - prev_pt.z;
-            double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-            if (dist >= 0.003) { // 3mm resolution: captures EVERY camera frame!
-                trajectory_points_.emplace_back(now_sec, p_geom);
+        // Only append if it's the first point or advancing forward (prevents backward warp/loops)
+        if (trajectory_points_.empty()) {
+            trajectory_points_.emplace_back(now_sec, p_geom);
+        } else {
+            const auto& prev_pt = trajectory_points_.back().second;
+            double dx = p_geom.x - prev_pt.x;
+            // Cloth must fly forward (+X) or have tiny motion
+            if (dx >= -0.05) {
+                double dy = p_geom.y - prev_pt.y;
+                double dz = p_geom.z - prev_pt.z;
+                double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+                if (dist >= 0.003) { // 3mm resolution: captures EVERY camera frame!
+                    trajectory_points_.emplace_back(now_sec, p_geom);
+                }
             }
         }
-    }
 
-    if (trajectory_points_.size() > 500) {
-        trajectory_points_.erase(trajectory_points_.begin());
-    }
-
-    // Compute Mathematical Most Probable Ballistic Parabola (RANSAC / Least Squares)
-    ParabolaFit parabola = compute_most_probable_parabola(trajectory_points_, 0.0);
-
-    // 1. Mathematical Parabola Line Strip (Bright Gold, 100% noise-free smooth curve)
-    visualization_msgs::msg::Marker line_marker;
-    line_marker.header.stamp = stamp;
-    line_marker.header.frame_id = "base_link";
-    line_marker.ns = "cloth_cuda_trajectory";
-    line_marker.id = 0;
-    line_marker.type = visualization_msgs::msg::Marker::LINE_STRIP;
-    line_marker.action = visualization_msgs::msg::Marker::ADD;
-    line_marker.scale.x = 0.038;
-    line_marker.color.r = 1.0f;
-    line_marker.color.g = 0.85f;
-    line_marker.color.b = 0.0f;
-    line_marker.color.a = 0.95f;
-
-    if (parabola.valid && !parabola.curve_pts.empty()) {
-        line_marker.points = parabola.curve_pts;
-    } else {
-        for (const auto& item : trajectory_points_) {
-            line_marker.points.push_back(item.second);
+        if (trajectory_points_.size() > 500) {
+            trajectory_points_.erase(trajectory_points_.begin());
         }
-    }
-    pub_marker_->publish(line_marker);
 
-    // 2. Flying Cloth Tip Ball (Red Sphere, diameter 10cm at current true location)
-    visualization_msgs::msg::Marker ball_marker;
-    ball_marker.header.stamp = stamp;
-    ball_marker.header.frame_id = "base_link";
-    ball_marker.ns = "cloth_tip_ball";
-    ball_marker.id = 1;
-    ball_marker.type = visualization_msgs::msg::Marker::SPHERE;
-    ball_marker.action = visualization_msgs::msg::Marker::ADD;
-    ball_marker.pose.position = p_geom;
-    ball_marker.pose.orientation.w = 1.0;
-    ball_marker.scale.x = 0.10;
-    ball_marker.scale.y = 0.10;
-    ball_marker.scale.z = 0.10;
-    ball_marker.color.r = 1.0f;
-    ball_marker.color.g = 0.15f;
-    ball_marker.color.b = 0.15f;
-    ball_marker.color.a = 0.95f;
-    pub_marker_->publish(ball_marker);
+        // Compute Mathematical Most Probable Ballistic Parabola (RANSAC / Least Squares)
+        ParabolaFit parabola = compute_most_probable_parabola(trajectory_points_, 0.0);
+        if (parabola.valid) {
+            cached_parabola_ = parabola;
+        }
 
-    // 3. True Measured Points Marker (Orange Spheres, exactly where camera detected cloth)
-    visualization_msgs::msg::Marker raw_points_marker;
-    raw_points_marker.header.stamp = stamp;
-    raw_points_marker.header.frame_id = "base_link";
-    raw_points_marker.ns = "cloth_measured_points";
-    raw_points_marker.id = 2;
-    raw_points_marker.type = visualization_msgs::msg::Marker::SPHERE_LIST;
-    raw_points_marker.action = visualization_msgs::msg::Marker::ADD;
-    raw_points_marker.scale.x = 0.045;
-    raw_points_marker.scale.y = 0.045;
-    raw_points_marker.scale.z = 0.045;
-    raw_points_marker.color.r = 1.0f;
-    raw_points_marker.color.g = 0.40f;
-    raw_points_marker.color.b = 0.0f;
-    raw_points_marker.color.a = 0.95f;
-    for (const auto& item : trajectory_points_) {
-        raw_points_marker.points.push_back(item.second);
-    }
-    pub_marker_->publish(raw_points_marker);
-
-    // 4. TF Frame Coordinate Triad (RGB axes: Red=X, Green=Y, Blue=Z for EVERY camera frame)
-    visualization_msgs::msg::Marker axes_marker;
-    axes_marker.header.stamp = stamp;
-    axes_marker.header.frame_id = "base_link";
-    axes_marker.ns = "cloth_trajectory_tf_axes";
-    axes_marker.id = 3;
-    axes_marker.type = visualization_msgs::msg::Marker::LINE_LIST;
-    axes_marker.action = visualization_msgs::msg::Marker::ADD;
-    axes_marker.scale.x = 0.007; // 7mm line thickness
-
-    std_msgs::msg::ColorRGBA col_r, col_g, col_b;
-    col_r.r = 1.0f; col_r.g = 0.1f; col_r.b = 0.1f; col_r.a = 0.95f;
-    col_g.r = 0.1f; col_g.g = 1.0f; col_g.b = 0.1f; col_g.a = 0.95f;
-    col_b.r = 0.1f; col_b.g = 0.4f; col_b.b = 1.0f; col_b.a = 0.95f;
-
-    const double axis_len = 0.07; // 7cm axis length
-    for (const auto& item : trajectory_points_) {
-        const auto& orig = item.second;
-
-        // X (Red)
-        geometry_msgs::msg::Point px = orig;
-        px.x += axis_len;
-        axes_marker.points.push_back(orig); axes_marker.colors.push_back(col_r);
-        axes_marker.points.push_back(px);   axes_marker.colors.push_back(col_r);
-
-        // Y (Green)
-        geometry_msgs::msg::Point py = orig;
-        py.y += axis_len;
-        axes_marker.points.push_back(orig); axes_marker.colors.push_back(col_g);
-        axes_marker.points.push_back(py);   axes_marker.colors.push_back(col_g);
-
-        // Z (Blue)
-        geometry_msgs::msg::Point pz = orig;
-        pz.z += axis_len;
-        axes_marker.points.push_back(orig); axes_marker.colors.push_back(col_b);
-        axes_marker.points.push_back(pz);   axes_marker.colors.push_back(col_b);
-    }
-    pub_marker_->publish(axes_marker);
-
-    // 5. Parabolic Apex & Predicted Landing Markers
-    if (parabola.valid) {
-        // Apex (Purple Sphere)
-        visualization_msgs::msg::Marker apex_marker;
-        apex_marker.header.stamp = stamp;
-        apex_marker.header.frame_id = "base_link";
-        apex_marker.ns = "parabola_apex";
-        apex_marker.id = 4;
-        apex_marker.type = visualization_msgs::msg::Marker::SPHERE;
-        apex_marker.action = visualization_msgs::msg::Marker::ADD;
-        apex_marker.pose.position.x = parabola.x_apex;
-        apex_marker.pose.position.y = parabola.d * parabola.x_apex + parabola.e;
-        apex_marker.pose.position.z = parabola.z_apex;
-        apex_marker.pose.orientation.w = 1.0;
-        apex_marker.scale.x = 0.12; apex_marker.scale.y = 0.12; apex_marker.scale.z = 0.12;
-        apex_marker.color.r = 0.8f; apex_marker.color.g = 0.2f; apex_marker.color.b = 1.0f; apex_marker.color.a = 0.95f;
-        pub_marker_->publish(apex_marker);
-
-        // Landing Target Cylinder / Ring (Emerald Green)
-        visualization_msgs::msg::Marker target_marker;
-        target_marker.header.stamp = stamp;
-        target_marker.header.frame_id = "base_link";
-        target_marker.ns = "parabola_landing_target";
-        target_marker.id = 5;
-        target_marker.type = visualization_msgs::msg::Marker::CYLINDER;
-        target_marker.action = visualization_msgs::msg::Marker::ADD;
-        target_marker.pose.position.x = parabola.x_land;
-        target_marker.pose.position.y = parabola.y_land;
-        target_marker.pose.position.z = 0.02;
-        target_marker.pose.orientation.w = 1.0;
-        target_marker.scale.x = 0.25; target_marker.scale.y = 0.25; target_marker.scale.z = 0.04;
-        target_marker.color.r = 0.0f; target_marker.color.g = 1.0f; target_marker.color.b = 0.4f; target_marker.color.a = 0.85f;
-        pub_marker_->publish(target_marker);
+        // Flying Cloth Tip Ball (Red Sphere, diameter 10cm at current true location)
+        visualization_msgs::msg::Marker ball_marker;
+        ball_marker.header.stamp = stamp;
+        ball_marker.header.frame_id = "base_link";
+        ball_marker.ns = "cloth_tip_ball";
+        ball_marker.id = 1;
+        ball_marker.type = visualization_msgs::msg::Marker::SPHERE;
+        ball_marker.action = visualization_msgs::msg::Marker::ADD;
+        ball_marker.pose.position = p_geom;
+        ball_marker.pose.orientation.w = 1.0;
+        ball_marker.scale.x = 0.10;
+        ball_marker.scale.y = 0.10;
+        ball_marker.scale.z = 0.10;
+        ball_marker.color.r = 1.0f;
+        ball_marker.color.g = 0.15f;
+        ball_marker.color.b = 0.15f;
+        ball_marker.color.a = 0.95f;
+        pub_marker_->publish(ball_marker);
+    } else {
+        // When cloth has landed or idle, remove flying red ball marker
+        visualization_msgs::msg::Marker del_ball;
+        del_ball.header.stamp = stamp;
+        del_ball.header.frame_id = "base_link";
+        del_ball.ns = "cloth_tip_ball";
+        del_ball.id = 1;
+        del_ball.action = visualization_msgs::msg::Marker::DELETE;
+        pub_marker_->publish(del_ball);
     }
 
-    // 5. Measured Path (True measured points only)
-    nav_msgs::msg::Path path_msg;
-    path_msg.header.stamp = stamp;
-    path_msg.header.frame_id = "base_link";
-    for (const auto& item : trajectory_points_) {
-        geometry_msgs::msg::PoseStamped pose;
-        pose.header.stamp = stamp;
-        pose.header.frame_id = "base_link";
-        pose.pose.position = item.second;
-        pose.pose.orientation.w = 1.0;
-        path_msg.poses.push_back(pose);
+    // 4. PERSISTENT VISUALIZATION: Always keep trajectory line and landing markers visible!
+    // Even after cloth lands on the ground, keep displaying the trajectory curve and target until next launch.
+    if (!trajectory_points_.empty()) {
+        // 1. Mathematical Parabola Line Strip (Bright Gold, 100% noise-free smooth curve)
+        visualization_msgs::msg::Marker line_marker;
+        line_marker.header.stamp = stamp;
+        line_marker.header.frame_id = "base_link";
+        line_marker.ns = "cloth_cuda_trajectory";
+        line_marker.id = 0;
+        line_marker.type = visualization_msgs::msg::Marker::LINE_STRIP;
+        line_marker.action = visualization_msgs::msg::Marker::ADD;
+        line_marker.scale.x = 0.038;
+        line_marker.color.r = 1.0f;
+        line_marker.color.g = 0.85f;
+        line_marker.color.b = 0.0f;
+        line_marker.color.a = 0.95f;
+
+        if (cached_parabola_.valid && !cached_parabola_.curve_pts.empty()) {
+            line_marker.points = cached_parabola_.curve_pts;
+        } else {
+            for (const auto& item : trajectory_points_) {
+                line_marker.points.push_back(item.second);
+            }
+        }
+        pub_marker_->publish(line_marker);
+
+        // 2. True Measured Points Marker (Orange Spheres, exactly where camera detected cloth)
+        visualization_msgs::msg::Marker raw_points_marker;
+        raw_points_marker.header.stamp = stamp;
+        raw_points_marker.header.frame_id = "base_link";
+        raw_points_marker.ns = "cloth_measured_points";
+        raw_points_marker.id = 2;
+        raw_points_marker.type = visualization_msgs::msg::Marker::SPHERE_LIST;
+        raw_points_marker.action = visualization_msgs::msg::Marker::ADD;
+        raw_points_marker.scale.x = 0.045;
+        raw_points_marker.scale.y = 0.045;
+        raw_points_marker.scale.z = 0.045;
+        raw_points_marker.color.r = 1.0f;
+        raw_points_marker.color.g = 0.40f;
+        raw_points_marker.color.b = 0.0f;
+        raw_points_marker.color.a = 0.95f;
+        for (const auto& item : trajectory_points_) {
+            raw_points_marker.points.push_back(item.second);
+        }
+        pub_marker_->publish(raw_points_marker);
+
+        // 3. TF Frame Coordinate Triad (RGB axes: Red=X, Green=Y, Blue=Z for EVERY camera frame)
+        visualization_msgs::msg::Marker axes_marker;
+        axes_marker.header.stamp = stamp;
+        axes_marker.header.frame_id = "base_link";
+        axes_marker.ns = "cloth_trajectory_tf_axes";
+        axes_marker.id = 3;
+        axes_marker.type = visualization_msgs::msg::Marker::LINE_LIST;
+        axes_marker.action = visualization_msgs::msg::Marker::ADD;
+        axes_marker.scale.x = 0.007; // 7mm line thickness
+
+        std_msgs::msg::ColorRGBA col_r, col_g, col_b;
+        col_r.r = 1.0f; col_r.g = 0.1f; col_r.b = 0.1f; col_r.a = 0.95f;
+        col_g.r = 0.1f; col_g.g = 1.0f; col_g.b = 0.1f; col_g.a = 0.95f;
+        col_b.r = 0.1f; col_b.g = 0.4f; col_b.b = 1.0f; col_b.a = 0.95f;
+
+        const double axis_len = 0.07; // 7cm axis length
+        for (const auto& item : trajectory_points_) {
+            const auto& orig = item.second;
+
+            // X (Red)
+            geometry_msgs::msg::Point px = orig;
+            px.x += axis_len;
+            axes_marker.points.push_back(orig); axes_marker.colors.push_back(col_r);
+            axes_marker.points.push_back(px);   axes_marker.colors.push_back(col_r);
+
+            // Y (Green)
+            geometry_msgs::msg::Point py = orig;
+            py.y += axis_len;
+            axes_marker.points.push_back(orig); axes_marker.colors.push_back(col_g);
+            axes_marker.points.push_back(py);   axes_marker.colors.push_back(col_g);
+
+            // Z (Blue)
+            geometry_msgs::msg::Point pz = orig;
+            pz.z += axis_len;
+            axes_marker.points.push_back(orig); axes_marker.colors.push_back(col_b);
+            axes_marker.points.push_back(pz);   axes_marker.colors.push_back(col_b);
+        }
+        pub_marker_->publish(axes_marker);
+
+        // 4. Parabolic Apex & Predicted Landing Markers
+        if (cached_parabola_.valid) {
+            // Apex (Purple Sphere)
+            visualization_msgs::msg::Marker apex_marker;
+            apex_marker.header.stamp = stamp;
+            apex_marker.header.frame_id = "base_link";
+            apex_marker.ns = "parabola_apex";
+            apex_marker.id = 4;
+            apex_marker.type = visualization_msgs::msg::Marker::SPHERE;
+            apex_marker.action = visualization_msgs::msg::Marker::ADD;
+            apex_marker.pose.position.x = cached_parabola_.x_apex;
+            apex_marker.pose.position.y = cached_parabola_.d * cached_parabola_.x_apex + cached_parabola_.e;
+            apex_marker.pose.position.z = cached_parabola_.z_apex;
+            apex_marker.pose.orientation.w = 1.0;
+            apex_marker.scale.x = 0.12; apex_marker.scale.y = 0.12; apex_marker.scale.z = 0.12;
+            apex_marker.color.r = 0.8f; apex_marker.color.g = 0.2f; apex_marker.color.b = 1.0f; apex_marker.color.a = 0.95f;
+            pub_marker_->publish(apex_marker);
+
+            // Landing Target Cylinder / Ring (Emerald Green)
+            visualization_msgs::msg::Marker target_marker;
+            target_marker.header.stamp = stamp;
+            target_marker.header.frame_id = "base_link";
+            target_marker.ns = "parabola_landing_target";
+            target_marker.id = 5;
+            target_marker.type = visualization_msgs::msg::Marker::CYLINDER;
+            target_marker.action = visualization_msgs::msg::Marker::ADD;
+            target_marker.pose.position.x = cached_parabola_.x_land;
+            target_marker.pose.position.y = cached_parabola_.y_land;
+            target_marker.pose.position.z = 0.02;
+            target_marker.pose.orientation.w = 1.0;
+            target_marker.scale.x = 0.25; target_marker.scale.y = 0.25; target_marker.scale.z = 0.04;
+            target_marker.color.r = 0.0f; target_marker.color.g = 1.0f; target_marker.color.b = 0.4f; target_marker.color.a = 0.85f;
+            pub_marker_->publish(target_marker);
+        }
+
+        // 5. Measured Path (True measured points only)
+        nav_msgs::msg::Path path_msg;
+        path_msg.header.stamp = stamp;
+        path_msg.header.frame_id = "base_link";
+        for (const auto& item : trajectory_points_) {
+            geometry_msgs::msg::PoseStamped pose;
+            pose.header.stamp = stamp;
+            pose.header.frame_id = "base_link";
+            pose.pose.position = item.second;
+            pose.pose.orientation.w = 1.0;
+            path_msg.poses.push_back(pose);
+        }
+        pub_path_->publish(path_msg);
     }
-    pub_path_->publish(path_msg);
 }
 
 void ClothTrackerCudaNode::run_direct_realsense_loop() {
