@@ -349,12 +349,20 @@ namespace realsense_dust_cloth
                         float dpy = c_cy - pred_pos.y;
                         float dpz = c_cz - pred_pos.z;
                         float dist = sqrtf(dpx * dpx + dpy * dpy + dpz * dpz);
-                        if (dist > 1.20f)
+                        if (dist <= 1.50f)
                         {
-                            continue; // Out of flight gate
+                            // Close to prediction: highest priority
+                            score = 3000.0f - dist * 1000.0f + static_cast<float>(sz) * 0.1f;
                         }
-                        // Strictly prioritize proximity to predicted parabolic position
-                        score = 1000.0f - dist * 400.0f + static_cast<float>(sz) * 0.05f;
+                        else if (dist <= 2.20f)
+                        {
+                            // Extended gate: never drop the cloth even with sudden drag or fluttering
+                            score = 1000.0f - dist * 300.0f + static_cast<float>(sz) * 0.05f;
+                        }
+                        else
+                        {
+                            continue; // Out of tracking gate
+                        }
                     }
                     else
                     {
