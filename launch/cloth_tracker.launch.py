@@ -54,6 +54,12 @@ def generate_launch_description():
         description='Camera roll angle in degrees (+90 or -90 for vertical)'
     )
 
+    declare_color_rotation_deg = DeclareLaunchArgument(
+        'color_rotation_deg',
+        default_value='180',
+        description='Color image rotation in degrees (0, 90, 180, 270) to make display upright'
+    )
+
     declare_camera_pitch_deg = DeclareLaunchArgument(
         'camera_pitch_deg',
         default_value='20.0',
@@ -145,6 +151,7 @@ def generate_launch_description():
                 'launch_max_y': LaunchConfiguration('launch_max_y'),
                 'launch_min_z': LaunchConfiguration('launch_min_z'),
                 'launch_max_z': LaunchConfiguration('launch_max_z'),
+                'color_rotation_deg': LaunchConfiguration('color_rotation_deg'),
             }
         ]
     )
@@ -186,6 +193,7 @@ def generate_launch_description():
         declare_enable_analyzer,
         declare_rviz,
         declare_camera_roll_deg,
+        declare_color_rotation_deg,
         declare_camera_pitch_deg,
         declare_camera_height_offset_m,
         declare_camera_x_offset_m,

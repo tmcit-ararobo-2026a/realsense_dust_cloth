@@ -107,18 +107,19 @@ namespace realsense_dust_cloth
             float z_cam = z_raw;
 
             // Transform to base_link:
-            // Vertical mounting (90 deg roll) and tilted up by pitch_deg
+            // Transform to base_link:
+            // Vertical mounting (upright with upward pitch 20 deg):
             float pitch_rad = pose.pitch_deg * (3.14159265358979323846f / 180.0f);
             float cos_p = cosf(pitch_rad);
             float sin_p = sinf(pitch_rad);
 
-            // True physical coordinate transformation (Roll 90 deg, Pitch 20 deg):
-            // Forward X: z_cam * cos_p + x_cam * sin_p
-            // Lateral Y: -y_cam
-            // Vertical Z: height_offset + (z_cam * sin_p - x_cam * cos_p)
-            float x_rob = pose.x_offset_m + (z_cam * cos_p + x_cam * sin_p);
-            float y_rob = -y_cam;
-            float z_rob = pose.height_offset_m + (z_cam * sin_p - x_cam * cos_p);
+            // Upright physical coordinate transformation (180 deg flipped from upside-down):
+            // Forward X: z_cam * cos_p - x_cam * sin_p
+            // Lateral Y: y_cam
+            // Vertical Z: height_offset + (z_cam * sin_p + x_cam * cos_p)
+            float x_rob = pose.x_offset_m + (z_cam * cos_p - x_cam * sin_p);
+            float y_rob = y_cam;
+            float z_rob = pose.height_offset_m + (z_cam * sin_p + x_cam * cos_p);
 
 
             // PassThrough in base_link
@@ -357,15 +358,17 @@ namespace realsense_dust_cloth
                     }
                     else
                     {
-                        // When waiting for launch: prioritize clusters in the robot launcher zone (X <= 1.20m, Z >= 0.80m)
-                        if (c_cx > 1.30f || c_cz < 0.70f)
+                        // When waiting for launch: prioritize clusters in the robot launcher/eject zone (X: 0.3~2.2m, Y: -1.0~1.0m, Z: 0.2~2.0m)
+                        if (c_cx >= 0.30f && c_cx <= 2.20f &&
+                            c_cy >= -1.00f && c_cy <= 1.00f &&
+                            c_cz >= 0.20f && c_cz <= 2.00f)
                         {
-                            // Far/floor noise: heavily penalized
-                            score = static_cast<float>(sz) * 0.001f;
+                            score = 1000.0f - c_cx * 20.0f + static_cast<float>(sz) * 0.1f;
                         }
                         else
                         {
-                            score = 500.0f - c_cx * 50.0f + static_cast<float>(sz) * 0.05f;
+                            // Far/floor noise
+                            score = static_cast<float>(sz) * 0.005f;
                         }
                     }
 

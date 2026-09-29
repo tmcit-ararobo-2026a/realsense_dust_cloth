@@ -173,6 +173,7 @@ ClothTrackerCudaNode::ClothTrackerCudaNode(const rclcpp::NodeOptions& options)
     pub_raw_color_ = this->create_publisher<sensor_msgs::msg::Image>("/camera/camera/color/image_raw", 10);
     pub_compressed_color_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("/camera/camera/color/image_raw/compressed", 10);
     pub_color_info_ = this->create_publisher<sensor_msgs::msg::CameraInfo>("/camera/camera/color/camera_info", 10);
+    pub_rotated_color_ = this->create_publisher<sensor_msgs::msg::Image>("/cloth/camera_view", 10);
 
     // Debug publishers (always available for RViz visualization & verification)
     pub_roi_markers_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("/cloth/debug/roi_markers", 10);
@@ -252,16 +253,16 @@ void ClothTrackerCudaNode::declare_parameters() {
     this->declare_parameter("min_depth_m", 0.25);
     this->declare_parameter("max_depth_m", 4.5);
 
-    this->declare_parameter("min_x_m", 0.40);
-    this->declare_parameter("max_x_m", 3.50);
-    this->declare_parameter("min_y_m", -0.35);
-    this->declare_parameter("max_y_m", 0.35);
+    this->declare_parameter("min_x_m", 0.30);
+    this->declare_parameter("max_x_m", 5.50);
+    this->declare_parameter("min_y_m", -1.50);
+    this->declare_parameter("max_y_m", 1.50);
     this->declare_parameter("min_z_m", 0.00);
-    this->declare_parameter("max_z_m", 1.80);
+    this->declare_parameter("max_z_m", 2.20);
 
-    this->declare_parameter("voxel_size_m", 0.03);
+    this->declare_parameter("voxel_size_m", 0.02);
     this->declare_parameter("cluster_eps_m", 0.15);
-    this->declare_parameter("min_cluster_points", 30);
+    this->declare_parameter("min_cluster_points", 10);
     this->declare_parameter("max_cluster_points", 6000);
     this->declare_parameter("max_cloth_size_m", 0.85);
     this->declare_parameter("use_bg_subtraction", true);
@@ -273,17 +274,18 @@ void ClothTrackerCudaNode::declare_parameters() {
     this->declare_parameter("enable_color_stream", true);
     this->declare_parameter("color_fps", 30);
     this->declare_parameter("jpeg_quality", 65);
+    this->declare_parameter("color_rotation_deg", 180);
 
     // Ballistic Filter & Launch Gate parameters
     this->declare_parameter("enable_ballistic_filter", true);
-    this->declare_parameter("launch_min_x", 0.50);
-    this->declare_parameter("launch_max_x", 1.20);
-    this->declare_parameter("launch_min_y", -0.25);
-    this->declare_parameter("launch_max_y", 0.25);
-    this->declare_parameter("launch_min_z", 0.85);
-    this->declare_parameter("launch_max_z", 1.60);
-    this->declare_parameter("gate_radius_m", 0.40);
-    this->declare_parameter("max_lost_frames", 12);
+    this->declare_parameter("launch_min_x", 0.30);
+    this->declare_parameter("launch_max_x", 1.80);
+    this->declare_parameter("launch_min_y", -1.00);
+    this->declare_parameter("launch_max_y", 1.00);
+    this->declare_parameter("launch_min_z", 0.30);
+    this->declare_parameter("launch_max_z", 2.00);
+    this->declare_parameter("gate_radius_m", 0.60);
+    this->declare_parameter("max_lost_frames", 15);
     this->declare_parameter("min_launch_vx", 0.10);
 }
 
@@ -298,6 +300,7 @@ void ClothTrackerCudaNode::load_parameters() {
     camera_pose_.roll_deg = static_cast<float>(this->get_parameter("camera_roll_deg").as_double());
     camera_pose_.x_offset_m = static_cast<float>(this->get_parameter("camera_x_offset_m").as_double());
     camera_pose_.height_offset_m = static_cast<float>(this->get_parameter("camera_height_offset_m").as_double());
+    color_rotation_deg_ = this->get_parameter("color_rotation_deg").as_int();
 
     filter_cfg_.min_depth_m = static_cast<float>(this->get_parameter("min_depth_m").as_double());
     filter_cfg_.max_depth_m = static_cast<float>(this->get_parameter("max_depth_m").as_double());
@@ -419,6 +422,28 @@ void ClothTrackerCudaNode::color_image_callback(const sensor_msgs::msg::Image::S
             frame = cv::Mat(msg->height, msg->width, CV_8UC1, const_cast<uchar*>(msg->data.data()), msg->step);
         } else {
             return;
+        }
+
+        if (color_rotation_deg_ == 180) {
+            cv::rotate(frame, frame, cv::ROTATE_180);
+        } else if (color_rotation_deg_ == 90) {
+            cv::rotate(frame, frame, cv::ROTATE_90_CLOCKWISE);
+        } else if (color_rotation_deg_ == 270) {
+            cv::rotate(frame, frame, cv::ROTATE_90_COUNTERCLOCKWISE);
+        }
+
+        if (pub_rotated_color_) {
+            sensor_msgs::msg::Image out_img;
+            out_img.header = msg->header;
+            out_img.height = frame.rows;
+            out_img.width = frame.cols;
+            out_img.encoding = "bgr8";
+            out_img.is_bigendian = false;
+            out_img.step = static_cast<sensor_msgs::msg::Image::_step_type>(frame.step);
+            size_t size = frame.step * frame.rows;
+            out_img.data.resize(size);
+            std::memcpy(out_img.data.data(), frame.data, size);
+            pub_rotated_color_->publish(out_img);
         }
 
         std::vector<int> jpeg_params = {cv::IMWRITE_JPEG_QUALITY, jpeg_quality_};

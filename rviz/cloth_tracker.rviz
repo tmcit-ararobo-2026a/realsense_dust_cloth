@@ -42,7 +42,7 @@ Visualization Manager:
       Name: Real-time Camera Video
       Enabled: true
       Topic:
-        Value: /camera/camera/color/image_raw
+        Value: /cloth/camera_view
         Depth: 5
 
     - Class: rviz_default_plugins/PointCloud2
