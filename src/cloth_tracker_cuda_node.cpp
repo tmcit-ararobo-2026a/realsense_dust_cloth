@@ -510,11 +510,11 @@ bool ClothTrackerCudaNode::BallisticTracker::update(
             return false;
         }
 
-        // Ballistic prediction with aerodynamic drag deceleration
+        // Ballistic prediction with aerodynamic drag deceleration & cloth effective gravity (~5.0 m/s^2)
         double drag_factor = std::max(0.50, 1.0 - 1.2 * dt);
         double pred_x = x + vx * dt * drag_factor;
         double pred_y = y + vy * dt;
-        double pred_z = z + vz * dt - 0.5 * 9.8 * dt * dt; // True gravity acceleration
+        double pred_z = z + vz * dt - 0.5 * 5.0 * dt * dt;
 
         bool matched = false;
         if (raw.valid) {
@@ -528,8 +528,8 @@ bool ClothTrackerCudaNode::BallisticTracker::update(
             double dz_prev = raw.cz - z;
             double dist_prev = std::sqrt(dx_prev * dx_prev + dy_prev * dy_prev + dz_prev * dz_prev);
 
-            // Accept cloth even with severe aerodynamic drag, tumbling, or sudden drop
-            if (dist_pred <= 1.20 || dist_prev <= 1.20) {
+            // Accept cloth even with severe aerodynamic drag, fluttering, or terminal velocity descent
+            if (dist_pred <= 1.60 || dist_prev <= 1.60) {
                 matched = true;
                 double dt_safe = std::clamp(dt, 0.005, 0.100);
 
@@ -554,8 +554,8 @@ bool ClothTrackerCudaNode::BallisticTracker::update(
                 out.cy = static_cast<float>(y);
                 out.cz = static_cast<float>(z);
 
-                // Stop tracking immediately when cloth descends to floor or forward motion stops near ground
-                if (z <= 0.15 || (z <= 0.28 && vx <= 0.4) || x >= 5.5) {
+                // Stop tracking ONLY when cloth truly touches the floor plane (Z <= 8cm)
+                if (z <= 0.08 || (z <= 0.15 && vx <= 0.20) || x >= 5.5) {
                     state = TrackerState::LANDED;
                 }
                 return true;
@@ -564,7 +564,7 @@ bool ClothTrackerCudaNode::BallisticTracker::update(
 
         if (!matched) {
             lost_count++;
-            if (lost_count > 12 || pred_z <= 0.08 || pred_x >= 5.20) {
+            if (lost_count > 20 || pred_z <= 0.03 || pred_x >= 5.20) {
                 state = TrackerState::LANDED;
                 return false;
             }
@@ -916,8 +916,8 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
         } else {
             const auto& prev_pt = trajectory_points_.back().second;
             double dx = p_geom.x - prev_pt.x;
-            // Cloth must fly forward (+X) or have tiny motion
-            if (dx >= -0.05) {
+            // Cloth must advance forward or descend vertically near floor
+            if (dx >= -0.20) {
                 double dy = p_geom.y - prev_pt.y;
                 double dz = p_geom.z - prev_pt.z;
                 double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
