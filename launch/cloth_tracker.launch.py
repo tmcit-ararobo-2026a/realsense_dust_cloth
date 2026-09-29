@@ -32,7 +32,7 @@ def generate_launch_description():
 
     declare_use_bg_subtraction = DeclareLaunchArgument(
         'use_bg_subtraction',
-        default_value='false',
+        default_value='true',
         description='Whether to use static background subtraction (set to false if moving while shooting)'
     )
 
