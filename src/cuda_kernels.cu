@@ -333,7 +333,8 @@ namespace realsense_dust_cloth
                     float dz = cluster_max[i].z - cluster_min[i].z;
 
                     // Reject opponent robot or huge noise (> max_cloth_size_m)
-                    if (dx > filter.max_cloth_size_m || dy > filter.max_cloth_size_m || dz > filter.max_cloth_size_m)
+                    float max_size = has_prediction ? (filter.max_cloth_size_m * 1.5f) : filter.max_cloth_size_m;
+                    if (dx > max_size || dy > max_size || dz > max_size)
                     {
                         continue;
                     }
@@ -349,12 +350,16 @@ namespace realsense_dust_cloth
                         float dpy = c_cy - pred_pos.y;
                         float dpz = c_cz - pred_pos.z;
                         float dist = sqrtf(dpx * dpx + dpy * dpy + dpz * dpz);
-                        if (dist > 1.20f)
+                        if (dist <= 1.50f)
                         {
-                            continue; // Out of flight gate
+                            // Close to ballistic prediction: highest priority
+                            score = 2000.0f - dist * 500.0f + static_cast<float>(sz) * 0.05f;
                         }
-                        // Strictly prioritize proximity to predicted parabolic position
-                        score = 1000.0f - dist * 400.0f + static_cast<float>(sz) * 0.05f;
+                        else
+                        {
+                            // Extended gate: never drop entirely if no closer candidate exists
+                            score = 500.0f - dist * 100.0f + static_cast<float>(sz) * 0.01f;
+                        }
                     }
                     else
                     {

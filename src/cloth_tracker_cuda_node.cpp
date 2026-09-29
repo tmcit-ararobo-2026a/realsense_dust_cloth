@@ -537,8 +537,8 @@ bool ClothTrackerCudaNode::BallisticTracker::update(
             double dz_prev = raw.cz - z;
             double dist_prev = std::sqrt(dx_prev * dx_prev + dy_prev * dy_prev + dz_prev * dz_prev);
 
-            // Accept cloth even if aerodynamically stalling (dropping downward with low/zero forward speed)
-            if (dist_pred <= 0.85 || dist_prev <= 0.85) {
+            // Accept cloth even with severe aerodynamic drag, tumbling, or sudden drop
+            if (dist_pred <= 1.20 || dist_prev <= 1.20) {
                 matched = true;
                 double dt_safe = std::clamp(dt, 0.005, 0.100);
 
@@ -564,7 +564,7 @@ bool ClothTrackerCudaNode::BallisticTracker::update(
                 out.cz = static_cast<float>(z);
 
                 // Stop only when truly settled on the floor or out of bounds
-                if (z <= 0.04 || x >= 5.0) {
+                if (z <= 0.02 || x >= 5.5) {
                     state = TrackerState::LANDED;
                 }
                 return true;
