@@ -121,13 +121,6 @@ namespace realsense_dust_cloth
             float x_rob = pose.x_offset_m + (z_cam * cos_p - x_cam * sin_p);
             float y_rob = y_cam;
             float z_rob = pose.height_offset_m + (z_cam * sin_p + x_cam * cos_p);
-            // Forward X: z_cam * cos_p + roll_sign * x_cam * sin_p
-            // Lateral Y: -y_cam
-            // Vertical Z: height_offset + (z_cam * sin_p - roll_sign * x_cam * cos_p)
-            float roll_sign = (pose.roll_deg >= 0.0f) ? 1.0f : -1.0f;
-            float x_rob = pose.x_offset_m + (z_cam * cos_p + roll_sign * x_cam * sin_p);
-            float y_rob = -y_cam;
-            float z_rob = pose.height_offset_m + (z_cam * sin_p - roll_sign * x_cam * cos_p);
 
 
             // PassThrough in base_link

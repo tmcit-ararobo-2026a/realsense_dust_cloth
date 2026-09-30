@@ -13,11 +13,13 @@ class TrajectoryRecorder(Node):
         super().__init__('trajectory_recorder')
 
         # Declare output CSV path
+        home_dir = os.path.expanduser('~')
+        data_dir = os.path.join(home_dir, 'ros2_ws', 'data')
+        os.makedirs(data_dir, exist_ok=True)
         timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
-        default_csv = f"/home/akeru/ros2_ws/data/trajectories_{timestamp_str}.csv"
+        default_csv = os.path.join(data_dir, f"trajectories_{timestamp_str}.csv")
         self.declare_parameter('csv_path', default_csv)
         self.csv_path = self.get_parameter('csv_path').value
-        os.makedirs(os.path.dirname(self.csv_path), exist_ok=True)
 
         self.sub_path = self.create_subscription(
             Path,
@@ -149,7 +151,9 @@ def main():
         # Run statistical probability analyzer if flights exist
         if total > 0 and os.path.exists(csv_file):
             import sys
-            sys.path.append("/home/akeru/ros2_ws/src/realsense_dust_cloth/realsense_dust_cloth")
+            curr_dir = os.path.dirname(os.path.abspath(__file__))
+            if curr_dir not in sys.path:
+                sys.path.append(curr_dir)
             try:
                 from trajectory_probability_analyzer import analyze_dataset
                 import pandas as pd
