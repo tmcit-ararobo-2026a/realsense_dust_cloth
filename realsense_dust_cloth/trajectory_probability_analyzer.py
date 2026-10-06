@@ -204,18 +204,27 @@ def analyze_dataset(flights, plot_output=None):
 
 def main():
     rclpy.init()
+    pkg_data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
+    if os.path.exists(pkg_data_dir):
+        default_csv = os.path.join(pkg_data_dir, 'cloth_trajectories_dataset.csv')
+        default_plot = os.path.join(pkg_data_dir, 'most_probable_trajectory.png')
+    else:
+        default_csv = os.path.expanduser('~/ros2_ws/data/cloth_trajectories_dataset.csv')
+        default_plot = os.path.expanduser('~/ros2_ws/data/most_probable_trajectory.png')
+
     parser = argparse.ArgumentParser(description="Cloth Trajectory Probability Analyzer")
-    parser.add_argument('--record', action='store_true', default=True, help="Record incoming trajectories in real-time")
+    parser.add_argument('--record', action='store_true', default=False, help="Record incoming trajectories in real-time")
     parser.add_argument('--analyze', action='store_true', help="Analyze existing recorded trajectories")
-    default_csv = os.path.expanduser('~/ros2_ws/data/cloth_trajectories_dataset.csv')
-    default_plot = os.path.expanduser('~/ros2_ws/data/most_probable_trajectory.png')
-    parser.add_argument('--csv', type=str, default=default_csv)
-    parser.add_argument('--plot', type=str, default=default_plot)
+    parser.add_argument('--csv', type=str, default=default_csv, help="Path to input dataset CSV")
+    parser.add_argument('--plot', nargs='?', const='', default=None, help="Generate plot image (optional output path)")
     args, unknown = parser.parse_known_args()
 
     logger = ClothTrajectoryLogger(args.csv)
-    if args.analyze:
-        analyze_dataset(logger.all_flights, args.plot)
+
+    # If --plot or --analyze is requested, run analysis and exit immediately
+    if args.plot is not None or args.analyze:
+        plot_file = args.plot if (args.plot and len(args.plot) > 0) else default_plot
+        analyze_dataset(logger.all_flights, plot_file)
         rclpy.shutdown()
         return
 
