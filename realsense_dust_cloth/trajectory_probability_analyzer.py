@@ -22,7 +22,11 @@ class ClothTrajectoryLogger(Node):
     def __init__(self, output_csv=None):
         super().__init__('cloth_trajectory_logger')
         if output_csv is None:
-            output_csv = os.path.expanduser('~/ros2_ws/data/cloth_trajectories_dataset.csv')
+            pkg_data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
+            if os.path.exists(pkg_data_dir):
+                output_csv = os.path.join(pkg_data_dir, 'cloth_trajectories_dataset.csv')
+            else:
+                output_csv = os.path.expanduser('~/ros2_ws/data/cloth_trajectories_dataset.csv')
         self.output_csv = output_csv
         os.makedirs(os.path.dirname(output_csv), exist_ok=True)
         

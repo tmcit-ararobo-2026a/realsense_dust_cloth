@@ -84,6 +84,7 @@ install(DIRECTORY
   launch
   config
   rviz
+  data
   DESTINATION share/${PROJECT_NAME}
 )
 

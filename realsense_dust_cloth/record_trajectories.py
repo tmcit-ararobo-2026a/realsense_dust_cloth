@@ -12,12 +12,13 @@ class TrajectoryRecorder(Node):
     def __init__(self):
         super().__init__('trajectory_recorder')
 
-        # Declare output CSV path
-        home_dir = os.path.expanduser('~')
-        data_dir = os.path.join(home_dir, 'ros2_ws', 'data')
-        os.makedirs(data_dir, exist_ok=True)
+        # Declare output CSV path (defaults to git repository's data/ directory)
+        pkg_data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
+        if not os.path.exists(pkg_data_dir):
+            pkg_data_dir = os.path.join(os.path.expanduser('~'), 'ros2_ws', 'data')
+        os.makedirs(pkg_data_dir, exist_ok=True)
         timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
-        default_csv = os.path.join(data_dir, f"trajectories_{timestamp_str}.csv")
+        default_csv = os.path.join(pkg_data_dir, f"trajectories_{timestamp_str}.csv")
         self.declare_parameter('csv_path', default_csv)
         self.csv_path = self.get_parameter('csv_path').value
 
