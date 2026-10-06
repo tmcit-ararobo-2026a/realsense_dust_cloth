@@ -19,8 +19,10 @@ import time
 import argparse
 
 class ClothTrajectoryLogger(Node):
-    def __init__(self, output_csv="/home/akeru/ros2_ws/data/cloth_trajectories_dataset.csv"):
+    def __init__(self, output_csv=None):
         super().__init__('cloth_trajectory_logger')
+        if output_csv is None:
+            output_csv = os.path.expanduser('~/ros2_ws/data/cloth_trajectories_dataset.csv')
         self.output_csv = output_csv
         os.makedirs(os.path.dirname(output_csv), exist_ok=True)
         

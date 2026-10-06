@@ -75,12 +75,76 @@ ros2 launch realsense_dust_cloth cloth_tracker.launch.py \
 ros2 launch realsense_dust_cloth cloth_tracker.launch.py rviz:=true use_sim_time:=true
 
 # ターミナル2: bag 再生
-ros2 bag play ~/ros2_ws/data/test_bag/rosbag2_2026_09_26-09_54_28_0.db3 --loop --clock
+ros2 bag play <記録したbagフォルダ名> --loop --clock
 ```
 
 ---
 
-## 4. 蓄積データの統計解析 & グラフ出力
+## 4. 飛翔データの記録・保存方法（用途別の保存ガイド）
+
+用途（「後から RViz でそのまま再生したい」か「Excel/Python で座標値を分析したい」か）に合わせて以下の保存方法を利用できます。
+
+### 方法1. launch 起動時に自動で rosbag 録画する（一番おすすめ・TF完全保存）
+起動コマンドに `record:=true` を付与するだけで、雑巾の TF 座標軸（`flying_cloth`）や軌跡、圧縮カラー映像が自動で rosbag に記録されます：
+
+```bash
+# 実機で起動しつつ、自動で rosbag 録画も開始
+ros2 launch realsense_dust_cloth cloth_tracker.launch.py use_direct_realsense:=true record:=true
+
+# RViz も同時に開く場合
+ros2 launch realsense_dust_cloth cloth_tracker.launch.py use_direct_realsense:=true rviz:=true record:=true
+```
+
+* **記録される主なトピック**:
+  * `/tf`, `/tf_static`: 雑巾の座標フレーム（`base_link -> flying_cloth`）
+  * `/cloth/position`: 雑巾重心位置（PointStamped）
+  * `/cloth/trajectory_marker`: 3次元飛翔軌跡（Marker）
+  * `/cloth/measured_path`: 計測点列パス（Path）
+  * `/camera/camera/color/image_raw/compressed`: 超軽量 JPEG 圧縮映像（容量を食わずに投擲映像も保存）
+* **停止方法**: 起動した端末で `Ctrl + C` を押すと保存が完了します（実行フォルダに `rosbag2_日時/` が作成されます）。
+* **再生方法**:
+  ```bash
+  ros2 bag play rosbag2_2026_xx_xx-xx_xx_xx
+  ```
+
+---
+
+### 方法2. 手動で別端末から rosbag 録画する
+必要なトピックのみを指定して手動で録画したい場合：
+
+```bash
+ros2 bag record /tf /tf_static /cloth/position /cloth/trajectory_marker /cloth/measured_path
+```
+
+---
+
+### 方法3. 試行ごとに CSV と弾道グラフ（PNG）を自動保存する
+投擲ごとに「何フレーム目でどこを通ってどこに着地したか」を数値 CSV として記録し、終了時に弾道グラフ画像を自動生成したい場合：
+
+```bash
+source ~/ros2_ws/install/setup.bash
+ros2 run realsense_dust_cloth record_trajectories.py
+```
+
+* **保存先**: `~/ros2_ws/data/trajectories_日時.csv`
+* **機能**:
+  * 雑巾が発射されて着地するたびに、1試行（Flight #01, #02...）として自動判定して追記。
+  * 投げ終わって `Ctrl + C` を押すと、全投擲のばらつきを描いた **弾道グラフ画像（PNG）** が自動生成されます。
+
+---
+
+### 方法4. 投擲データセットを CSV に全自動蓄積する（Headless 運用）
+launch 起動時に `enable_analyzer:=true` を指定することで、バックグラウンドで自動的にデータセット CSV へ追記蓄積されます：
+
+```bash
+ros2 launch realsense_dust_cloth cloth_tracker.launch.py enable_analyzer:=true
+```
+
+* **保存先**: `~/ros2_ws/data/cloth_trajectories_dataset.csv`
+
+---
+
+## 5. 蓄積データの統計解析 & グラフ出力
 
 投擲を重ねてデータが CSV（`data/cloth_trajectories_dataset.csv`）に溜まったら、以下のコマンドで解析グラフを出力します：
 
@@ -94,7 +158,7 @@ python3 ~/ros2_ws/src/realsense_dust_cloth/realsense_dust_cloth/trajectory_proba
 
 ---
 
-## 5. 主要パラメータ (`config/tracker_params.yaml`)
+## 6. 主要パラメータ (`config/tracker_params.yaml`)
 
 | パラメータ | 既定値 | 説明 |
 | :--- | :---: | :--- |

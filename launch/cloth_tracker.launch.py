@@ -1,7 +1,7 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, ExecuteProcess
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -46,6 +46,12 @@ def generate_launch_description():
         'rviz',
         default_value='false',
         description='Whether to open RViz2 visualization window'
+    )
+
+    declare_record = DeclareLaunchArgument(
+        'record',
+        default_value='false',
+        description='Record TF, cloth position, and trajectory markers to rosbag automatically'
     )
 
     declare_camera_roll_deg = DeclareLaunchArgument(
@@ -185,6 +191,18 @@ def generate_launch_description():
         ]
     )
 
+    # 4. Automatic rosbag recording (Optional: record:=true)
+    record_process = ExecuteProcess(
+        cmd=['ros2', 'bag', 'record',
+             '/tf', '/tf_static',
+             '/cloth/position',
+             '/cloth/trajectory_marker',
+             '/cloth/measured_path',
+             '/camera/camera/color/image_raw/compressed'],
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('record'))
+    )
+
     return LaunchDescription([
         declare_use_direct_rs,
         declare_publish_debug_cloud,
@@ -192,6 +210,7 @@ def generate_launch_description():
         declare_use_bg_subtraction,
         declare_enable_analyzer,
         declare_rviz,
+        declare_record,
         declare_camera_roll_deg,
         declare_color_rotation_deg,
         declare_camera_pitch_deg,
@@ -208,4 +227,5 @@ def generate_launch_description():
         cuda_tracker_node,
         analyzer_node,
         rviz_node,
+        record_process,
     ])
