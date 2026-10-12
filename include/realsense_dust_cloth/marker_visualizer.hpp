@@ -37,14 +37,15 @@ public:
         double track_vx, double track_vz, double track_speed,
         const ClothTrackingResult& raw_res,
         const CameraPoseConfig& camera_pose,
-        const std::vector<std::pair<double, geometry_msgs::msg::Point>>& trajectory_points)
+        const std::vector<std::pair<double, geometry_msgs::msg::Point>>& trajectory_points,
+        const std::string& frame_id = "base_link")
     {
         visualization_msgs::msg::MarkerArray markers;
 
         // 1. PassThrough ROI Box (Cyan Wireframe Cube)
         visualization_msgs::msg::Marker roi_marker;
         roi_marker.header.stamp = stamp;
-        roi_marker.header.frame_id = "base_link";
+        roi_marker.header.frame_id = frame_id;
         roi_marker.ns = "roi_passthrough";
         roi_marker.id = 0;
         roi_marker.type = visualization_msgs::msg::Marker::CUBE;
@@ -66,7 +67,7 @@ public:
         if (enable_ballistic_filter) {
             visualization_msgs::msg::Marker launch_marker;
             launch_marker.header.stamp = stamp;
-            launch_marker.header.frame_id = "base_link";
+            launch_marker.header.frame_id = frame_id;
             launch_marker.ns = "launch_gate";
             launch_marker.id = 1;
             launch_marker.type = visualization_msgs::msg::Marker::CUBE;
@@ -88,7 +89,7 @@ public:
         // 3. Real-time HUD Dashboard (High-visibility 3D Text positioned clearly above scene)
         visualization_msgs::msg::Marker text_marker;
         text_marker.header.stamp = stamp;
-        text_marker.header.frame_id = "base_link";
+        text_marker.header.frame_id = frame_id;
         text_marker.ns = "tracker_status_hud";
         text_marker.id = 2;
         text_marker.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
@@ -132,7 +133,7 @@ public:
         for (double dist = 1.0; dist <= 3.5; dist += 1.0) {
             visualization_msgs::msg::Marker dist_marker;
             dist_marker.header.stamp = stamp;
-            dist_marker.header.frame_id = "base_link";
+            dist_marker.header.frame_id = frame_id;
             dist_marker.ns = "floor_distance_marks";
             dist_marker.id = static_cast<int>(dist * 10);
             dist_marker.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
@@ -156,7 +157,7 @@ public:
             const auto& last_pt = trajectory_points.back().second;
             visualization_msgs::msg::Marker land_marker;
             land_marker.header.stamp = stamp;
-            land_marker.header.frame_id = "base_link";
+            land_marker.header.frame_id = frame_id;
             land_marker.ns = "landing_point_text";
             land_marker.id = 99;
             land_marker.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
@@ -182,11 +183,12 @@ public:
      * @brief Creates the current cloth tip sphere marker.
      */
     static visualization_msgs::msg::Marker create_cloth_tip_marker(
-        const rclcpp::Time& stamp, double x, double y, double z)
+        const rclcpp::Time& stamp, double x, double y, double z,
+        const std::string& frame_id = "base_link")
     {
         visualization_msgs::msg::Marker ball_marker;
         ball_marker.header.stamp = stamp;
-        ball_marker.header.frame_id = "base_link";
+        ball_marker.header.frame_id = frame_id;
         ball_marker.ns = "cloth_tip_ball";
         ball_marker.id = 1;
         ball_marker.type = visualization_msgs::msg::Marker::SPHERE;
@@ -210,11 +212,12 @@ public:
      */
     static visualization_msgs::msg::Marker create_trajectory_line(
         const rclcpp::Time& stamp,
-        const std::vector<std::pair<double, geometry_msgs::msg::Point>>& points)
+        const std::vector<std::pair<double, geometry_msgs::msg::Point>>& points,
+        const std::string& frame_id = "base_link")
     {
         visualization_msgs::msg::Marker line_marker;
         line_marker.header.stamp = stamp;
-        line_marker.header.frame_id = "base_link";
+        line_marker.header.frame_id = frame_id;
         line_marker.ns = "cloth_cuda_trajectory";
         line_marker.id = 0;
         line_marker.type = visualization_msgs::msg::Marker::LINE_STRIP;
@@ -235,11 +238,12 @@ public:
      */
     static visualization_msgs::msg::Marker create_measured_points(
         const rclcpp::Time& stamp,
-        const std::vector<std::pair<double, geometry_msgs::msg::Point>>& points)
+        const std::vector<std::pair<double, geometry_msgs::msg::Point>>& points,
+        const std::string& frame_id = "base_link")
     {
         visualization_msgs::msg::Marker raw_points_marker;
         raw_points_marker.header.stamp = stamp;
-        raw_points_marker.header.frame_id = "base_link";
+        raw_points_marker.header.frame_id = frame_id;
         raw_points_marker.ns = "cloth_measured_points";
         raw_points_marker.id = 2;
         raw_points_marker.type = visualization_msgs::msg::Marker::SPHERE_LIST;

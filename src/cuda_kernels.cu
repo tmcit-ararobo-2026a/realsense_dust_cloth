@@ -106,21 +106,20 @@ namespace realsense_dust_cloth
             float y_cam = (static_cast<float>(v) - intrin.cy) * z_raw / intrin.fy;
             float z_cam = z_raw;
 
-            // Transform to base_link:
-            // Transform to base_link:
-            // Vertical mounting (upright with upward pitch 20 deg):
             // Physical 3D transformation for vertical mounting (roll ±90 deg) and upward tilt (pitch_deg):
             float pitch_rad = pose.pitch_deg * (3.14159265358979323846f / 180.0f);
             float cos_p = cosf(pitch_rad);
             float sin_p = sinf(pitch_rad);
 
-            // Upright physical coordinate transformation (180 deg flipped from upside-down):
-            // Forward X: z_cam * cos_p - x_cam * sin_p
-            // Lateral Y: y_cam
-            // Vertical Z: height_offset + (z_cam * sin_p + x_cam * cos_p)
-            float x_rob = pose.x_offset_m + (z_cam * cos_p - x_cam * sin_p);
-            float y_rob = y_cam;
-            float z_rob = pose.height_offset_m + (z_cam * sin_p + x_cam * cos_p);
+            // Roll angle sign (+90 deg = clockwise vertical mount / test_bag, -90 / 270 deg = counter-clockwise)
+            float s_roll = (pose.roll_deg < 0.0f || pose.roll_deg > 180.0f) ? -1.0f : 1.0f;
+
+            // Forward X: z_cam * cos_p + s_roll * x_cam * sin_p
+            // Lateral Y: -s_roll * y_cam
+            // Vertical Z: height_offset + (z_cam * sin_p - s_roll * x_cam * cos_p)
+            float x_rob = pose.x_offset_m + (z_cam * cos_p + s_roll * x_cam * sin_p);
+            float y_rob = -s_roll * y_cam;
+            float z_rob = pose.height_offset_m + (z_cam * sin_p - s_roll * x_cam * cos_p);
 
 
             // PassThrough in base_link
@@ -350,14 +349,14 @@ namespace realsense_dust_cloth
                         float dpy = c_cy - pred_pos.y;
                         float dpz = c_cz - pred_pos.z;
                         float dist = sqrtf(dpx * dpx + dpy * dpy + dpz * dpz);
-                        if (dist <= 1.80f)
+                        if (dist <= filter.gate_radius_m)
                         {
-                            // Close to prediction: highest priority
+                            // Close to ballistic prediction: highest priority
                             score = 3000.0f - dist * 1000.0f + static_cast<float>(sz) * 0.1f;
                         }
-                        else if (dist <= 3.50f || c_cx >= pred_pos.x - 0.40f)
+                        else if (dist <= filter.gate_radius_m * 2.0f || c_cx >= pred_pos.x - 0.40f)
                         {
-                            // Extended gate: never drop the cloth even with sudden drag, high arc, or fluttering
+                            // Extended gate: tolerate aerodynamic drag or fluttering
                             score = 1000.0f - dist * 200.0f + static_cast<float>(sz) * 0.05f;
                         }
                         else
@@ -367,16 +366,16 @@ namespace realsense_dust_cloth
                     }
                     else
                     {
-                        // When waiting for launch: prioritize clusters in launcher/throw zone (X: 0.3~2.5m, Y: -1.2~1.2m, Z: 0.2~2.5m)
-                        if (c_cx >= 0.30f && c_cx <= 2.50f &&
-                            c_cy >= -1.20f && c_cy <= 1.20f &&
-                            c_cz >= 0.20f && c_cz <= 2.50f)
+                        // When waiting for launch: prioritize clusters in the configured launch/eject zone
+                        if (c_cx >= filter.launch_min_x && c_cx <= filter.launch_max_x &&
+                            c_cy >= filter.launch_min_y && c_cy <= filter.launch_max_y &&
+                            c_cz >= filter.launch_min_z && c_cz <= filter.launch_max_z)
                         {
                             score = 1000.0f - c_cx * 20.0f + static_cast<float>(sz) * 0.1f;
                         }
                         else
                         {
-                            // Far/floor noise
+                            // Outside launcher zone
                             score = static_cast<float>(sz) * 0.01f;
                         }
                     }

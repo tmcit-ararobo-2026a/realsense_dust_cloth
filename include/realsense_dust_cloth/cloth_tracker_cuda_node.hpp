@@ -17,8 +17,11 @@
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <tf2_ros/transform_broadcaster.h>
+#include <tf2_ros/static_transform_broadcaster.h>
+#include <tf2/LinearMath/Quaternion.h>
 
 #include "realsense_dust_cloth/cuda_kernels.cuh"
+#include "realsense_dust_cloth/ballistic_tracker.hpp"
 #include "realsense_dust_cloth/parabola_fit.hpp"
 #include "realsense_dust_cloth/marker_visualizer.hpp"
 
@@ -36,6 +39,7 @@ public:
 private:
     void declare_parameters();
     void load_parameters();
+    void publish_static_transforms();
 
     void camera_info_callback(const sensor_msgs::msg::CameraInfo::SharedPtr msg);
     void depth_image_callback(const sensor_msgs::msg::Image::SharedPtr msg);
@@ -72,60 +76,14 @@ private:
     bool has_cloth_pose_{false};
 
     // Ballistic State Tracker (Eliminates stationary noise, locks onto flying cloth)
-    enum class TrackerState { IDLE, TRACKING, LANDED };
-    struct BallisticTracker {
-        TrackerState state{TrackerState::IDLE};
-        double x{0.0}, y{0.0}, z{0.0};
-        double vx{0.0}, vy{0.0}, vz{0.0};
-        double last_stamp{0.0};
-        int tracked_count{0};
-        int lost_count{0};
-
-        // Launch velocity detection (prevents stationary noise from triggering)
-        bool has_pending{false};
-        double pending_x{0.0}, pending_y{0.0}, pending_z{0.0};
-        double pending_stamp{0.0};
-        double min_launch_vx{0.30}; // minimum forward velocity (m/s) to confirm launch
-
-        // Parameters
-        double launch_min_x{0.40};
-        double launch_max_x{0.85};
-        double launch_min_y{-0.30};
-        double launch_max_y{0.30};
-        double launch_min_z{0.65};
-        double launch_max_z{1.30};
-        double gate_radius_m{0.80};
-        int max_lost_frames{6};
-        double gravity_m_s2{9.8};
-
-        void reset() {
-            state = TrackerState::IDLE;
-            tracked_count = 0;
-            lost_count = 0;
-            has_pending = false;
-            last_stamp = 0.0;
-            pending_stamp = 0.0;
-        }
-
-        bool get_prediction(double stamp_sec, float& px, float& py, float& pz) const {
-            if (state != TrackerState::TRACKING || last_stamp <= 0.0) {
-                return false;
-            }
-            double dt = stamp_sec - last_stamp;
-            if (dt <= 0.0 || dt > 0.3) {
-                dt = 0.016; // 60fps fallback
-            }
-            px = static_cast<float>(x + vx * dt);
-            py = static_cast<float>(y + vy * dt);
-            pz = static_cast<float>(z + vz * dt - 0.5 * 9.8 * dt * dt);
-            return true;
-        }
-
-        bool update(const ClothTrackingResult& raw, double stamp_sec, ClothTrackingResult& out);
-    } ballistic_tracker_;
+    BallisticTracker ballistic_tracker_;
 
     // ROS 2 Interfaces
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+    std::shared_ptr<tf2_ros::StaticTransformBroadcaster> tf_static_broadcaster_;
+    std::string camera_parent_frame_{"base_link"};
+    std::string camera_frame_{"camera_link"};
+    bool publish_static_tf_{true};
     rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pub_point_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_marker_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_roi_markers_;
@@ -149,6 +107,7 @@ private:
     int jpeg_quality_{65};
     int color_rotation_deg_{180};
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_rotated_color_;
+    TrackerState prev_state_{TrackerState::IDLE};
 
     // Direct RealSense Thread
     std::atomic<bool> is_running_{false};

@@ -49,6 +49,15 @@ namespace realsense_dust_cloth
         int min_cluster_points{10};
         int max_cluster_points{1500};
         float max_cloth_size_m{0.65f};
+
+        // Launch Gate Bounds & Ballistic Prioritization
+        float launch_min_x{0.40f};
+        float launch_max_x{1.80f};
+        float launch_min_y{-0.50f};
+        float launch_max_y{0.50f};
+        float launch_min_z{0.50f};
+        float launch_max_z{2.00f};
+        float gate_radius_m{0.80f};
     };
 
     struct ClothTrackingResult

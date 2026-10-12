@@ -37,6 +37,7 @@ endif()
 # Build C++ / CUDA Tracker Node
 add_executable(cloth_tracker_cuda_node
   src/cloth_tracker_cuda_node.cpp
+  src/ballistic_tracker.cpp
   src/cuda_kernels.cu
 )
 

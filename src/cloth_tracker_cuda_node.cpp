@@ -4,7 +4,9 @@
 
 namespace realsense_dust_cloth {
 
-
+// =============================================================================
+// Section 1: Lifecycle & Node Initialization
+// =============================================================================
 
 ClothTrackerCudaNode::ClothTrackerCudaNode(const rclcpp::NodeOptions& options)
     : Node("cloth_tracker_cuda_node", options) {
@@ -12,6 +14,8 @@ ClothTrackerCudaNode::ClothTrackerCudaNode(const rclcpp::NodeOptions& options)
     load_parameters();
 
     tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
+    tf_static_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
+    publish_static_transforms();
     pub_point_ = this->create_publisher<geometry_msgs::msg::PointStamped>("/cloth/position", 10);
     pub_marker_ = this->create_publisher<visualization_msgs::msg::Marker>("/cloth/trajectory_marker", 10);
     pub_path_ = this->create_publisher<nav_msgs::msg::Path>("/cloth/measured_path", 10);
@@ -80,6 +84,10 @@ ClothTrackerCudaNode::~ClothTrackerCudaNode() {
     destroy_cuda_tracker(cuda_ctx_);
 }
 
+// =============================================================================
+// Section 2: ROS 2 Parameter Declaration & Loading
+// =============================================================================
+
 void ClothTrackerCudaNode::declare_parameters() {
     this->declare_parameter("tracking_mode", "depth");
     this->declare_parameter("points_topic", "/camera/camera/depth/color/points");
@@ -88,6 +96,9 @@ void ClothTrackerCudaNode::declare_parameters() {
     this->declare_parameter("camera_info_topic", "/camera/camera/depth/camera_info");
     this->declare_parameter("color_topic", "/camera/camera/color/image_raw");
 
+    this->declare_parameter("camera_parent_frame", "base_link");
+    this->declare_parameter("camera_frame", "camera_link");
+    this->declare_parameter("publish_static_tf", true);
     this->declare_parameter("camera_width", 848);
     this->declare_parameter("camera_height", 480);
     this->declare_parameter("camera_pitch_deg", 20.0);
@@ -134,10 +145,12 @@ void ClothTrackerCudaNode::declare_parameters() {
     this->declare_parameter("min_launch_vx", 0.10);
 }
 
-
-
 void ClothTrackerCudaNode::load_parameters() {
     use_direct_realsense_ = this->get_parameter("use_direct_realsense").as_bool();
+    camera_parent_frame_ = this->get_parameter("camera_parent_frame").as_string();
+    camera_frame_ = this->get_parameter("camera_frame").as_string();
+    publish_static_tf_ = this->get_parameter("publish_static_tf").as_bool();
+
     camera_intrin_.width = this->get_parameter("camera_width").as_int();
     camera_intrin_.height = this->get_parameter("camera_height").as_int();
 
@@ -182,9 +195,76 @@ void ClothTrackerCudaNode::load_parameters() {
     ballistic_tracker_.gate_radius_m = this->get_parameter("gate_radius_m").as_double();
     ballistic_tracker_.max_lost_frames = this->get_parameter("max_lost_frames").as_int();
     ballistic_tracker_.min_launch_vx = this->get_parameter("min_launch_vx").as_double();
+    ballistic_tracker_.min_cluster_points = filter_cfg_.min_cluster_points;
+
+    // Synchronize CUDA filter launch gate with tracker parameters (No hardcoded values!)
+    filter_cfg_.launch_min_x = static_cast<float>(ballistic_tracker_.launch_min_x);
+    filter_cfg_.launch_max_x = static_cast<float>(ballistic_tracker_.launch_max_x);
+    filter_cfg_.launch_min_y = static_cast<float>(ballistic_tracker_.launch_min_y);
+    filter_cfg_.launch_max_y = static_cast<float>(ballistic_tracker_.launch_max_y);
+    filter_cfg_.launch_min_z = static_cast<float>(ballistic_tracker_.launch_min_z);
+    filter_cfg_.launch_max_z = static_cast<float>(ballistic_tracker_.launch_max_z);
+    filter_cfg_.gate_radius_m = static_cast<float>(ballistic_tracker_.gate_radius_m);
 }
 
+// =============================================================================
+// Section 3: Static Coordinate Frame Broadcasting (base_link -> camera_link)
+// =============================================================================
 
+void ClothTrackerCudaNode::publish_static_transforms() {
+    if (!publish_static_tf_) {
+        return;
+    }
+
+    std::vector<geometry_msgs::msg::TransformStamped> transforms;
+
+    // 1. base_link -> camera_link (Strictly derived from tracker_params.yaml)
+    geometry_msgs::msg::TransformStamped tf_mount;
+    tf_mount.header.stamp = rclcpp::Time(0);
+    tf_mount.header.frame_id = camera_parent_frame_;
+    tf_mount.child_frame_id = camera_frame_;
+    tf_mount.transform.translation.x = camera_pose_.x_offset_m;
+    tf_mount.transform.translation.y = 0.0;
+    tf_mount.transform.translation.z = camera_pose_.height_offset_m;
+
+    tf2::Quaternion q_mount;
+    double roll_rad = camera_pose_.roll_deg * (M_PI / 180.0);
+    double pitch_rad = camera_pose_.pitch_deg * (M_PI / 180.0);
+    q_mount.setRPY(roll_rad, pitch_rad, 0.0);
+    tf_mount.transform.rotation.x = q_mount.x();
+    tf_mount.transform.rotation.y = q_mount.y();
+    tf_mount.transform.rotation.z = q_mount.z();
+    tf_mount.transform.rotation.w = q_mount.w();
+    transforms.push_back(tf_mount);
+
+    // 2. camera_link -> camera_color_optical_frame (Standard ROS optical frame orientation)
+    geometry_msgs::msg::TransformStamped tf_opt;
+    tf_opt.header.stamp = rclcpp::Time(0);
+    tf_opt.header.frame_id = camera_frame_;
+    tf_opt.child_frame_id = "camera_color_optical_frame";
+    tf_opt.transform.translation.x = 0.0;
+    tf_opt.transform.translation.y = 0.0;
+    tf_opt.transform.translation.z = 0.0;
+
+    tf2::Quaternion q_opt;
+    q_opt.setRPY(-M_PI_2, 0.0, -M_PI_2);
+    tf_opt.transform.rotation.x = q_opt.x();
+    tf_opt.transform.rotation.y = q_opt.y();
+    tf_opt.transform.rotation.z = q_opt.z();
+    tf_opt.transform.rotation.w = q_opt.w();
+    transforms.push_back(tf_opt);
+
+    tf_static_broadcaster_->sendTransform(transforms);
+    RCLCPP_INFO(this->get_logger(),
+                "Static TF published directly from config: %s -> %s (x=%.2f, z=%.2f, pitch=%.1f deg, roll=%.1f deg)",
+                camera_parent_frame_.c_str(), camera_frame_.c_str(),
+                camera_pose_.x_offset_m, camera_pose_.height_offset_m,
+                camera_pose_.pitch_deg, camera_pose_.roll_deg);
+}
+
+// =============================================================================
+// Section 4: Sensor Callbacks (CameraInfo, Depth Image, Color Image)
+// =============================================================================
 
 void ClothTrackerCudaNode::camera_info_callback(const sensor_msgs::msg::CameraInfo::SharedPtr msg) {
     if (!intrinsics_ready_) {
@@ -326,115 +406,9 @@ void ClothTrackerCudaNode::color_image_callback(const sensor_msgs::msg::Image::S
     }
 }
 
-bool ClothTrackerCudaNode::BallisticTracker::update(
-    const ClothTrackingResult& raw, double stamp_sec, ClothTrackingResult& out)
-{
-    if (state == TrackerState::IDLE || state == TrackerState::LANDED) {
-        if (!raw.valid) {
-            has_pending = false;
-            return false;
-        }
-
-        // Lock onto genuine newly ejected cloth only (substantial points >= 20 to reject edge noise)
-        if (raw.cx >= launch_min_x && raw.cx <= launch_max_x &&
-            raw.cy >= launch_min_y && raw.cy <= launch_max_y &&
-            raw.cz >= launch_min_z && raw.cz <= launch_max_z &&
-            raw.cluster_points_count >= 20)
-        {
-            state = TrackerState::TRACKING;
-            x = raw.cx;
-            y = raw.cy;
-            z = raw.cz;
-            vx = 2.0;
-            vy = 0.0;
-            vz = 0.5;
-            last_stamp = stamp_sec;
-            tracked_count = 1;
-            lost_count = 0;
-            has_pending = false;
-            out = raw;
-            return true;
-        } else {
-            has_pending = false;
-            return false;
-        }
-    } else { // TRACKING: Persistently follow this single cloth cluster until it touches the ground!
-        double dt = stamp_sec - last_stamp;
-        if (dt <= 0.0 || dt > 0.40) {
-            dt = 0.033;
-        }
-
-        // Ballistic prediction with aerodynamic drag deceleration & gravity acceleration
-        double drag_factor = std::max(0.60, 1.0 - 0.8 * dt);
-        double pred_x = x + vx * dt * drag_factor;
-        double pred_y = y + vy * dt;
-        double pred_z = z + vz * dt - 0.5 * 9.8 * dt * dt;
-        vz -= 9.8 * dt; // Continuously apply gravity
-
-        bool matched = false;
-        if (raw.valid && raw.cluster_points_count >= 6) {
-            double dx_prev = raw.cx - x;
-            double dy_prev = raw.cy - y;
-            double dz_prev = raw.cz - z;
-            double dist_prev = std::sqrt(dx_prev * dx_prev + dy_prev * dy_prev + dz_prev * dz_prev);
-
-            double dx_pred = raw.cx - pred_x;
-            double dy_pred = raw.cy - pred_y;
-            double dz_pred = raw.cz - pred_z;
-            double dist_pred = std::sqrt(dx_pred * dx_pred + dy_pred * dy_pred + dz_pred * dz_pred);
-
-            // Persistently track cloth: within 2.0m of prediction or previous location and advancing
-            if (dist_pred <= 2.00 || (dist_prev <= 2.00 && dx_prev >= -0.30)) {
-                matched = true;
-                double dt_safe = std::clamp(dt, 0.005, 0.100);
-
-                double new_vx = (raw.cx - x) / dt_safe;
-                double new_vy = (raw.cy - y) / dt_safe;
-                double new_vz = (raw.cz - z) / dt_safe;
-
-                vx = 0.6 * vx + 0.4 * new_vx;
-                vy = 0.6 * vy + 0.4 * new_vy;
-                vz = 0.6 * vz + 0.4 * new_vz;
-
-                x = raw.cx;
-                y = raw.cy;
-                z = raw.cz;
-
-                last_stamp = stamp_sec;
-                tracked_count++;
-                lost_count = 0;
-
-                out = raw;
-                out.cx = static_cast<float>(x);
-                out.cy = static_cast<float>(y);
-                out.cz = static_cast<float>(z);
-
-                // Stop tracking ONLY when cloth truly touches the floor plane (Z <= 8cm) or stops
-                if (z <= 0.08 || (z <= 0.15 && vx <= 0.20) || x >= 5.5) {
-                    state = TrackerState::LANDED;
-                }
-                return true;
-            }
-        }
-
-        if (!matched) {
-            lost_count++;
-            if (lost_count > 25 || pred_z <= 0.04 || pred_x >= 5.20) {
-                state = TrackerState::LANDED;
-                return false;
-            }
-
-            // Maintain continuous search gate
-            x = pred_x;
-            y = pred_y;
-            z = std::max(0.04, pred_z);
-            last_stamp = stamp_sec;
-            return false;
-        }
-    }
-    return false;
-}
-
+// =============================================================================
+// Section 5: Real-Time Tracking & Visualization Pipeline
+// =============================================================================
 
 void ClothTrackerCudaNode::publish_roi_markers(const rclcpp::Time& stamp, const ClothTrackingResult& raw_res) {
     if (!pub_roi_markers_) return;
@@ -451,7 +425,8 @@ void ClothTrackerCudaNode::publish_roi_markers(const rclcpp::Time& stamp, const 
         ballistic_tracker_.state == TrackerState::TRACKING,
         ballistic_tracker_.x, ballistic_tracker_.y, ballistic_tracker_.z,
         ballistic_tracker_.vx, ballistic_tracker_.vz, speed,
-        raw_res, camera_pose_, trajectory_points_
+        raw_res, camera_pose_, trajectory_points_,
+        camera_parent_frame_
     );
 
     pub_roi_markers_->publish(markers);
@@ -460,9 +435,10 @@ void ClothTrackerCudaNode::publish_roi_markers(const rclcpp::Time& stamp, const 
 void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const rclcpp::Time& stamp) {
     double now_sec = stamp.seconds();
     if (last_frame_stamp_sec_ > 0.0 && now_sec < last_frame_stamp_sec_ - 0.5) {
-        // Rosbag looped back to the beginning: clear all trajectory history and reset tracker
+        // Rosbag looped back to the beginning: clear all trajectory history, clear background, and reset tracker
         trajectory_points_.clear();
         ballistic_tracker_.reset();
+        reset_background_cuda(cuda_ctx_);
         bg_frames_collected_ = 0;
         has_cloth_pose_ = false;
     }
@@ -492,19 +468,19 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
 
     // Publish Debug Point Clouds & ROI Markers
     if (publish_debug_cloud_) {
-        MarkerVisualizer::publish_point_cloud(pub_filtered_cloud_, debug_filtered_pts, stamp, "base_link");
+        MarkerVisualizer::publish_point_cloud(pub_filtered_cloud_, debug_filtered_pts, stamp, camera_parent_frame_);
         publish_roi_markers(stamp, raw_res);
     }
     
     // Publish cyan cluster ONLY when actively flying; clear it immediately when landed/idle
     if (ballistic_tracker_.state == TrackerState::TRACKING && !debug_cluster_pts.empty())
     {
-        MarkerVisualizer::publish_point_cloud(pub_cluster_cloud_, debug_cluster_pts, stamp, "base_link");
+        MarkerVisualizer::publish_point_cloud(pub_cluster_cloud_, debug_cluster_pts, stamp, camera_parent_frame_);
     }
     else
     {
         std::vector<float3> empty_pts;
-        MarkerVisualizer::publish_point_cloud(pub_cluster_cloud_, empty_pts, stamp, "base_link");
+        MarkerVisualizer::publish_point_cloud(pub_cluster_cloud_, empty_pts, stamp, camera_parent_frame_);
     }
 
     // Diagnostics to console every 1 second
@@ -525,10 +501,19 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
         is_actively_tracked = raw_res.valid;
     }
 
+    if (prev_state_ == TrackerState::TRACKING && ballistic_tracker_.state == TrackerState::LANDED) {
+        RCLCPP_INFO(this->get_logger(),
+                    "========================================================================\n"
+                    "*** CLOTH LANDED at (%.2f, %.2f, %.2f)! Recorded %zu flight points. ***\n"
+                    "========================================================================",
+                    last_cloth_x_, last_cloth_y_, last_cloth_z_, trajectory_points_.size());
+    }
+    prev_state_ = ballistic_tracker_.state;
+
     if (is_actively_tracked) {
-        RCLCPP_DEBUG(this->get_logger(),
-                     "TRACKED CLOTH: points=%d, pos=(%.2f, %.2f, %.2f)",
-                     res.cluster_points_count, res.cx, res.cy, res.cz);
+        RCLCPP_INFO(this->get_logger(),
+                    "[ClothTracker] >>> TRACKED CLOTH: points=%d, pos=(%.2f, %.2f, %.2f) <<<",
+                    res.cluster_points_count, res.cx, res.cy, res.cz);
 
         last_cloth_x_ = res.cx;
         last_cloth_y_ = res.cy;
@@ -537,12 +522,17 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
 
         if (ballistic_tracker_.tracked_count <= 1) {
             trajectory_points_.clear(); // Brand new launch: clear previous trajectory line
+            RCLCPP_INFO(this->get_logger(),
+                        "========================================================================\n"
+                        "*** LAUNCH CONFIRMED at (%.2f, %.2f, %.2f) with %d pts! Tracking locked! ***\n"
+                        "========================================================================",
+                        res.cx, res.cy, res.cz, res.cluster_points_count);
         }
 
         // Publish Centroid Point (Strictly real measured point)
         geometry_msgs::msg::PointStamped pt_msg;
         pt_msg.header.stamp = stamp;
-        pt_msg.header.frame_id = "base_link";
+        pt_msg.header.frame_id = camera_parent_frame_;
         pt_msg.point.x = res.cx;
         pt_msg.point.y = res.cy;
         pt_msg.point.z = res.cz;
@@ -578,7 +568,7 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
     if (has_cloth_pose_) {
         geometry_msgs::msg::TransformStamped tf_msg;
         tf_msg.header.stamp = stamp;
-        tf_msg.header.frame_id = "base_link";
+        tf_msg.header.frame_id = camera_parent_frame_;
         tf_msg.child_frame_id = "flying_cloth";
         tf_msg.transform.translation.x = last_cloth_x_;
         tf_msg.transform.translation.y = last_cloth_y_;
@@ -590,7 +580,7 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
     // 2. Cloth Tip Ball Marker (Red Sphere, diameter 12cm at current or final landing position)
     if (has_cloth_pose_) {
         pub_marker_->publish(MarkerVisualizer::create_cloth_tip_marker(
-            stamp, last_cloth_x_, last_cloth_y_, last_cloth_z_));
+            stamp, last_cloth_x_, last_cloth_y_, last_cloth_z_, camera_parent_frame_));
     }
 
     // 3. PERSISTENT VISUALIZATION: Strictly true measured flight trajectory (NO fake prediction lines!)
@@ -603,15 +593,15 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
         last_static_publish_sec = now_sec;
 
         // 1. Measured Flight Trajectory Line Strip (Bright Gold, strictly connects true camera detections)
-        pub_marker_->publish(MarkerVisualizer::create_trajectory_line(stamp, trajectory_points_));
+        pub_marker_->publish(MarkerVisualizer::create_trajectory_line(stamp, trajectory_points_, camera_parent_frame_));
 
         // 2. True Measured Points Marker (Orange Spheres, exactly where camera detected cloth)
-        pub_marker_->publish(MarkerVisualizer::create_measured_points(stamp, trajectory_points_));
+        pub_marker_->publish(MarkerVisualizer::create_measured_points(stamp, trajectory_points_, camera_parent_frame_));
 
         // Clean up obsolete prediction markers so they never linger in RViz
         visualization_msgs::msg::Marker del_apex;
         del_apex.header.stamp = stamp;
-        del_apex.header.frame_id = "base_link";
+        del_apex.header.frame_id = camera_parent_frame_;
         del_apex.ns = "parabola_apex";
         del_apex.id = 4;
         del_apex.action = visualization_msgs::msg::Marker::DELETE;
@@ -619,7 +609,7 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
 
         visualization_msgs::msg::Marker del_target;
         del_target.header.stamp = stamp;
-        del_target.header.frame_id = "base_link";
+        del_target.header.frame_id = camera_parent_frame_;
         del_target.ns = "parabola_landing_target";
         del_target.id = 5;
         del_target.action = visualization_msgs::msg::Marker::DELETE;
@@ -628,11 +618,11 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
         // 3. Measured Path (True measured points only)
         nav_msgs::msg::Path path_msg;
         path_msg.header.stamp = stamp;
-        path_msg.header.frame_id = "base_link";
+        path_msg.header.frame_id = camera_parent_frame_;
         for (const auto& item : trajectory_points_) {
             geometry_msgs::msg::PoseStamped pose;
             pose.header.stamp = stamp;
-            pose.header.frame_id = "base_link";
+            pose.header.frame_id = camera_parent_frame_;
             pose.pose.position = item.second;
             pose.pose.orientation.w = 1.0;
             path_msg.poses.push_back(pose);
@@ -640,6 +630,10 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
         pub_path_->publish(path_msg);
     }
 }
+
+// =============================================================================
+// Section 6: Native librealsense Hardware Streaming (Native C++ API)
+// =============================================================================
 
 void ClothTrackerCudaNode::run_direct_realsense_loop() {
 #ifdef HAVE_REALSENSE2
@@ -762,6 +756,10 @@ void ClothTrackerCudaNode::run_direct_realsense_loop() {
 }
 
 } // namespace realsense_dust_cloth
+
+// =============================================================================
+// Section 7: ROS 2 Main Entrypoint
+// =============================================================================
 
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);

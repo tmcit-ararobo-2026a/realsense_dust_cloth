@@ -1,0 +1,68 @@
+/**:
+  ros__parameters:
+    # =========================================================================
+    # 【test_bag (実機テストバッグ再生) 専用設定】
+    # 記録データ: 小型台車環境 (2026-09-26 記録)
+    # =========================================================================
+
+    # 【1. カメラ接続・トピック設定】
+    tracking_mode: "depth"
+    points_topic: "/camera/camera/depth/color/points"
+    depth_topic: "/camera/camera/depth/image_rect_raw"
+    camera_info_topic: "/camera/camera/depth/camera_info"
+    color_topic: "/camera/camera/color/image_raw"
+    use_direct_realsense: false                    # bag再生のためROS 2トピック購読
+    publish_debug_cloud: true                      # デバッグ点群(/cloth/debug/...)をパブリッシュ
+
+    # 【2. カメラ取り付け位置・姿勢 (test_bag 記録時キャリブレーション)】
+    publish_static_tf: true                        # ノードから静的TFを直接発行
+    camera_parent_frame: "base_link"
+    camera_frame: "camera_link"
+    camera_x_offset_m: 0.15                        # 台車手前からカメラまでの距離 (m)
+    camera_height_offset_m: 0.35                   # 台車床面からカメラレンズ高さ (m)
+    camera_pitch_deg: 20.0                         # 仰角 (度, 上向き20度)
+    camera_roll_deg: 90.0                          # 縦置きロール角 (度, 時計回り90度設置)
+    camera_width: 640
+    camera_height: 480
+
+    # 【3. 空間ROIフィルタ (探索境界エリア, base_link 基準)】
+    min_x_m: 0.30                                  # 手前境界 (m)
+    max_x_m: 3.50                                  # 着地先境界 (m, 4m以遠の黒シャッターノイズ遮断)
+    min_y_m: -1.00                                 # 左右幅 (m)
+    max_y_m: 1.00
+    min_z_m: 0.05                                  # 床面境界 (m, 床の反射ノイズカット)
+    max_z_m: 2.00                                  # 天井境界 (m, 蛍光灯・梁ノイズ遮断)
+    min_depth_m: 0.30                              # カメラ最短深度 (m)
+    max_depth_m: 3.80                              # カメラ最長深度 (m, 遠方フリッカー遮断)
+
+    # 【4. 発射口検知ゲート (弾道ステートマシン)】
+    enable_ballistic_filter: true
+    launch_min_x: 0.40                             # 発射口エリア X 最小 (m)
+    launch_max_x: 1.80                             # 発射口エリア X 最大 (m)
+    launch_min_y: -0.50                            # 発射口エリア Y 最小 (m)
+    launch_max_y: 0.50                             # 発射口エリア Y 最大 (m)
+    launch_min_z: 0.50                             # 発射口エリア Z 最小 (m)
+    launch_max_z: 1.80                             # 発射口エリア Z 最大 (m)
+    min_launch_vx: 0.10                            # 発射確定最小前進速度 (m/s)
+    gate_radius_m: 0.80                            # 探索ゲート半径 (m)
+    max_lost_frames: 25                            # 見失い許容フレーム数
+
+    # 【5. 背景差分 (静止物除去)】
+    use_bg_subtraction: true                       # 静止した壁・棚・床を完全消去
+    bg_diff_thresh_m: 0.08                         # 8cm手前の動く物体のみ抽出 (RealSenseジッター遮断)
+    bg_target_frames: 10                           # 背景学習フレーム数
+
+    # 【6. 点群クラスタリング & 雑巾抽出】
+    voxel_size_m: 0.02                             # ボクセル間引き (2cm)
+    cluster_eps_m: 0.18                            # クラスタ探索距離 (m)
+    min_cluster_points: 25                         # 雑巾クラスタ最小点数 (微小ノイズ除外)
+    max_cluster_points: 6000
+    max_cloth_size_m: 0.90
+    trajectory_history_sec: 15.0
+
+    # 【7. カラー映像配信設定】
+    enable_color_stream: true
+    color_fps: 30
+    jpeg_quality: 65
+    color_rotation_deg: 90                         # 時計回り90度回転で正立
+

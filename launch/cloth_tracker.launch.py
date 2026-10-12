@@ -1,6 +1,4 @@
 import os
-import math
-import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess
@@ -15,34 +13,14 @@ def generate_launch_description():
     default_config_file = os.path.join(pkg_share, 'config', 'tracker_params.yaml')
     rviz_config = os.path.join(pkg_share, 'rviz', 'cloth_tracker.rviz')
 
-    # Read base parameters from tracker_params.yaml as the single source of truth
-    yaml_params = {}
-    if os.path.exists(default_config_file):
-        try:
-            with open(default_config_file, 'r') as f:
-                loaded = yaml.safe_load(f)
-                yaml_params = loaded.get('/**', {}).get('ros__parameters', {})
-        except Exception:
-            pass
-
-    cam_x = yaml_params.get('camera_x_offset_m', 0.50)
-    cam_z = yaml_params.get('camera_height_offset_m', 1.00)
-    cam_pitch_deg = yaml_params.get('camera_pitch_deg', 20.0)
-    cam_roll_deg = yaml_params.get('camera_roll_deg', 90.0)
-    cam_parent = yaml_params.get('camera_parent_frame', 'base_link')
-    cam_frame = yaml_params.get('camera_frame', 'camera_link')
-
-    cam_pitch_rad = math.radians(cam_pitch_deg)
-    cam_roll_rad = math.radians(cam_roll_deg)
-
     # =========================================================================
     # 実行モード切り替えスイッチ (Runtime Switches)
-    # 調整用パラメータは config/tracker_params.yaml に一本化されています
+    # 調整用パラメータ (TF含む) は config/tracker_params.yaml に一本化されています
     # =========================================================================
     declare_params_file = DeclareLaunchArgument(
         'params_file',
         default_value=default_config_file,
-        description='Path to tracker parameter YAML file'
+        description='Path to tracker parameter YAML file (tracker_params.yaml or test_bag_params.yaml)'
     )
 
     declare_use_direct_rs = DeclareLaunchArgument(
@@ -82,6 +60,7 @@ def generate_launch_description():
     )
 
     # 1. Main CUDA Cloth Tracker Node
+    # (Static TF for base_link -> camera_link is published internally from params_file)
     cuda_tracker_node = Node(
         package='realsense_dust_cloth',
         executable='cloth_tracker_cuda_node',
@@ -100,43 +79,7 @@ def generate_launch_description():
         ]
     )
 
-    # 2. Camera Mounting Transform (base_link -> camera_link)
-    camera_tf_node = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='realsense_mount_tf',
-        output='screen',
-        arguments=[
-            '--x', str(cam_x),
-            '--y', '0.0',
-            '--z', str(cam_z),
-            '--yaw', '0.0',
-            '--pitch', str(cam_pitch_rad),
-            '--roll', str(cam_roll_rad),
-            '--frame-id', cam_parent,
-            '--child-frame-id', cam_frame,
-        ],
-    )
-
-    # 3. Direct Mode Optical Frame Transform (camera_link -> camera_color_optical_frame)
-    # Required for RViz Camera view when using Direct RealSense API
-    direct_optical_tf_node = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='realsense_direct_optical_tf',
-        output='screen',
-        condition=IfCondition(LaunchConfiguration('use_direct_realsense')),
-        arguments=[
-            '--x', '0.0', '--y', '0.0', '--z', '0.0',
-            '--yaw', '-1.57079632679',
-            '--pitch', '0.0',
-            '--roll', '-1.57079632679',
-            '--frame-id', 'camera_link',
-            '--child-frame-id', 'camera_color_optical_frame',
-        ],
-    )
-
-    # 4. Trajectory Probability Analyzer Node (Optional: enable_analyzer:=true)
+    # 2. Trajectory Probability Analyzer Node (Optional: enable_analyzer:=true)
     analyzer_node = Node(
         package='realsense_dust_cloth',
         executable='trajectory_probability_analyzer.py',
@@ -151,7 +94,7 @@ def generate_launch_description():
         ]
     )
 
-    # 5. RViz2 GUI Node (Optional: rviz:=true)
+    # 3. RViz2 GUI Node (Optional: rviz:=true)
     rviz_node = Node(
         package='rviz2',
         executable='rviz2',
@@ -167,7 +110,7 @@ def generate_launch_description():
         ]
     )
 
-    # 6. Automatic Rosbag Recording (Optional: record:=true)
+    # 4. Automatic Rosbag Recording (Optional: record:=true)
     record_process = ExecuteProcess(
         cmd=['ros2', 'bag', 'record',
              '/tf', '/tf_static',
@@ -188,8 +131,6 @@ def generate_launch_description():
         declare_record,
         declare_enable_analyzer,
         cuda_tracker_node,
-        camera_tf_node,
-        direct_optical_tf_node,
         analyzer_node,
         rviz_node,
         record_process,
