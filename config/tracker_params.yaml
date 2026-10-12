@@ -1,61 +1,75 @@
 /**:
   ros__parameters:
-    # 追跡モード: 'pointcloud' または 'depth'
-    tracking_mode: "depth"
-
-    # カメラトピック設定
+    # =========================================================================
+    # 【1. カメラ接続・トピック設定】
+    # =========================================================================
+    tracking_mode: "depth"                          # 追跡モード: 'depth' または 'pointcloud'
     points_topic: "/camera/camera/depth/color/points"
     depth_topic: "/camera/camera/depth/image_rect_raw"
     camera_info_topic: "/camera/camera/depth/camera_info"
     color_topic: "/camera/camera/color/image_raw"
-    
-    # カメラ姿勢・base_link からの固定オフセット (Static TF として自動配信)
-    camera_width: 640
-    camera_height: 480
-    camera_pitch_deg: 20.0       # 仰角 (度)
-    camera_roll_deg: 90.0        # 縦置き (度)
-    camera_height_offset_m: 1.0 # base_link からのカメラ高さ (m)
-    camera_x_offset_m: 0.5      # base_link からの前方位置 (m)
+    use_direct_realsense: true                     # true: librealsense2 C++ API直結, false: ROS 2トピック購読
+    publish_debug_cloud: true                      # デバッグ点群(/cloth/debug/...)をパブリッシュするか
 
-    # CUDA / Direct API 設定
-    use_direct_realsense: true
-    publish_debug_cloud: true    # /cloth/debug/filtered_points & /cloth/debug/cluster_points を配信
+    # =========================================================================
+    # 【2. カメラ取り付け位置・姿勢 (base_link 基準)】
+    # =========================================================================
+    camera_parent_frame: "base_link"
+    camera_frame: "camera_link"
+    camera_x_offset_m: 0.50                        # base_link からの前方オフセット (m)
+    camera_height_offset_m: 1.00                   # base_link からのカメラ高さ (m)
+    camera_pitch_deg: 20.0                         # 仰角 (度, 水平から上向き)
+    camera_roll_deg: 90.0                          # 縦置きロール角 (度, 90.0で縦向き)
+    camera_width: 640                              # 解像度 幅 (px)
+    camera_height: 480                             # 解像度 高さ (px)
 
-    # カラー画像 JPEG 圧縮配信 (rosbag 容量を 98% 削減しつつ投擲映像を記録)
-    enable_color_stream: true
-    color_fps: 30
-    jpeg_quality: 65
+    # =========================================================================
+    # 【3. 空間ROIフィルタ (探索境界エリア, base_link 基準)】
+    # =========================================================================
+    min_x_m: 0.50                                  # 前方 最小 (m, ロボット手前の除外)
+    max_x_m: 5.50                                  # 前方 最大 (m, 着地先境界までカバー)
+    min_y_m: -1.20                                 # 左右幅 左側 (m)
+    max_y_m: 1.20                                  # 左右幅 右側 (m)
+    min_z_m: 0.00                                  # 高さ 最小 (m, 床面境界)
+    max_z_m: 3.30                                  # 高さ 最大 (m, 最高到達点をカバー)
+    min_depth_m: 0.25                              # カメラ最短深度 (m)
+    max_depth_m: 6.00                              # カメラ最長深度 (m)
 
-    # 空間ROIフィルタ（base_link 基準: 縦置きRoll90, 仰角20度）
-    min_x_m: 0.50            # ロボット手前境界 (m)
-    max_x_m: 5.50            # 着地先境界 (m, 5.5m着地までカバー)
-    min_y_m: -1.20           # 左右幅 (m)
-    max_y_m: 1.20
-    min_z_m: 0.00            # 床面境界 (m)
-    max_z_m: 3.30            # 上限 (m, 最高到達点を完全にカバー)
+    # =========================================================================
+    # 【4. 発射口検知ゲート (弾道ステートマシン)】
+    # =========================================================================
+    enable_ballistic_filter: true                  # 弾道フィルタ有効化 (静止ノイズを遮断し飛翔体のみロック)
+    launch_min_x: 0.50                             # 発射口エリア X 最小 (m)
+    launch_max_x: 1.50                             # 発射口エリア X 最大 (m)
+    launch_min_y: -0.40                            # 発射口エリア Y 最小 (m)
+    launch_max_y: 0.40                             # 発射口エリア Y 最大 (m)
+    launch_min_z: 1.00                             # 発射口エリア Z 最小 (m, 床の雑巾を無視)
+    launch_max_z: 2.00                             # 発射口エリア Z 最大 (m)
+    min_launch_vx: 0.10                            # 発射判定 最小前進速度 (m/s)
+    gate_radius_m: 0.80                            # 探索ゲート半径 (m)
+    max_lost_frames: 25                            # 見失い許容フレーム数 (60fps時: 約0.4秒)
 
-    # 背景差分（静止した床・壁・天井・家具を100%消去し、動く雑巾のみ抽出）
-    use_bg_subtraction: true
-    bg_diff_thresh_m: 0.06   # 背景より6cm手前に現れた動く物体のみ抽出
-    bg_target_frames: 10     # 背景学習フレーム数
-    
-    # 弾道ステートマシン（放物線で飛ぶ雑巾のみをロックオン）
-    enable_ballistic_filter: true
-    launch_min_x: 0.50       # 発射口エリア X 最小(m)
-    launch_max_x: 1.50       # 発射口エリア X 最大(m)
-    launch_min_y: -0.40      # 発射口エリア Y 最小(m)
-    launch_max_y: 0.40       # 発射口エリア Y 最大(m)
-    launch_min_z: 1.00       # 発射口エリア Z 最小(m, 床の雑巾を無視)
-    launch_max_z: 2.00       # 発射口エリア Z 最大(m)
-    min_launch_vx: 0.10      # 発射確定最小前進速度(m/s)
-    gate_radius_m: 0.80      # 探索ゲート半径(m)
-    max_lost_frames: 25      # 見失い許容フレーム数
+    # =========================================================================
+    # 【5. 背景差分 (静止物除去)】
+    # =========================================================================
+    use_bg_subtraction: true                       # 静止した床・壁・天井を消去 (移動射撃時はfalse推奨)
+    bg_diff_thresh_m: 0.06                         # 背景より6cm手前に現れた動く物体のみ抽出 (m)
+    bg_target_frames: 10                           # 背景学習フレーム数
 
-    # 点群クラスタリング & 雑巾判定パラメータ
-    voxel_size_m: 0.02       # 2cm ボクセル（遠距離でも点群を密に保持）
-    cluster_eps_m: 0.20      # クラスタ探索距離 (m, 遠距離疎点群を確実に結合)
-    min_cluster_points: 10   # 雑巾最小点群数 (遠距離10点でも確実に捕捉)
-    max_cluster_points: 8000 # 最大点群数
-    max_cloth_size_m: 1.20   # 最大3Dサイズ(m, はためき布を包括)
-    
-    trajectory_history_sec: 15.0 # RViz残像表示秒数
+    # =========================================================================
+    # 【6. 点群クラスタリング & 雑巾抽出】
+    # =========================================================================
+    voxel_size_m: 0.02                             # ボクセル間引きサイズ (m, 2cm)
+    cluster_eps_m: 0.20                            # DBSCANクラスタ探索距離 (m)
+    min_cluster_points: 10                         # 雑巾クラスタ最小点数
+    max_cluster_points: 8000                       # 雑巾クラスタ最大点数
+    max_cloth_size_m: 1.20                         # 雑巾最大3D対角サイズ (m)
+    trajectory_history_sec: 15.0                   # RViz軌跡残像の保持秒数 (s)
+
+    # =========================================================================
+    # 【7. カラー映像配信設定 (Wi-Fi 遠隔監視 / rosbag 軽量記録)】
+    # =========================================================================
+    enable_color_stream: true                      # カラー映像の配信
+    color_fps: 30                                  # カラーフレームレート (fps)
+    jpeg_quality: 65                               # JPEG圧縮品質 (1-100)
+    color_rotation_deg: 180                        # 縦置きカメラ映像の回転角 (0, 90, 180, 270)

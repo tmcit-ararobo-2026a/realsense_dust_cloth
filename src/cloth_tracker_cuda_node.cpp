@@ -4,147 +4,6 @@
 
 namespace realsense_dust_cloth {
 
-namespace {
-geometry_msgs::msg::Point interpolate_catmull_rom(
-    const geometry_msgs::msg::Point& p0,
-    const geometry_msgs::msg::Point& p1,
-    const geometry_msgs::msg::Point& p2,
-    const geometry_msgs::msg::Point& p3,
-    double t)
-{
-    double t2 = t * t;
-    double t3 = t2 * t;
-
-    geometry_msgs::msg::Point pt;
-    pt.x = 0.5 * ((2.0 * p1.x) +
-                  (-p0.x + p2.x) * t +
-                  (2.0 * p0.x - 5.0 * p1.x + 4.0 * p2.x - p3.x) * t2 +
-                  (-p0.x + 3.0 * p1.x - 3.0 * p2.x + p3.x) * t3);
-    pt.y = 0.5 * ((2.0 * p1.y) +
-                  (-p0.y + p2.y) * t +
-                  (2.0 * p0.y - 5.0 * p1.y + 4.0 * p2.y - p3.y) * t2 +
-                  (-p0.y + 3.0 * p1.y - 3.0 * p2.y + p3.y) * t3);
-    pt.z = 0.5 * ((2.0 * p1.z) +
-                  (-p0.z + p2.z) * t +
-                  (2.0 * p0.z - 5.0 * p1.z + 4.0 * p2.z - p3.z) * t2 +
-                  (-p0.z + 3.0 * p1.z - 3.0 * p2.z + p3.z) * t3);
-    return pt;
-}
-
-// ParabolaFit is declared in cloth_tracker_cuda_node.hpp
-
-ParabolaFit compute_most_probable_parabola(
-    const std::vector<std::pair<double, geometry_msgs::msg::Point>>& raw_pts,
-    double target_landing_z = 0.0)
-{
-    ParabolaFit res;
-    if (raw_pts.size() < 5) return res;
-
-    double sx4 = 0.0, sx3 = 0.0, sx2 = 0.0, sx1 = 0.0, s_n = 0.0;
-    double sx2z = 0.0, sxz = 0.0, sz = 0.0;
-    double sxy = 0.0, sy = 0.0;
-    double z_mean_acc = 0.0;
-
-    for (const auto& item : raw_pts) {
-        double x = item.second.x;
-        double y = item.second.y;
-        double z = item.second.z;
-
-        double x2 = x * x;
-        double x3 = x2 * x;
-        double x4 = x3 * x;
-
-        sx4 += x4;
-        sx3 += x3;
-        sx2 += x2;
-        sx1 += x;
-        s_n += 1.0;
-
-        sx2z += x2 * z;
-        sxz += x * z;
-        sz += z;
-
-        sxy += x * y;
-        sy += y;
-        z_mean_acc += z;
-    }
-
-    // Solve 3x3 quadratic system for Z(X) = a*X^2 + b*X + c using Cramer's Rule
-    double D = sx4 * (sx2 * s_n - sx1 * sx1) - sx3 * (sx3 * s_n - sx1 * sx2) + sx2 * (sx3 * sx1 - sx2 * sx2);
-    if (std::abs(D) < 1e-9) return res;
-
-    double Da = sx2z * (sx2 * s_n - sx1 * sx1) - sx3 * (sxz * s_n - sx1 * sz) + sx2 * (sxz * sx1 - sx2 * sz);
-    double Db = sx4 * (sxz * s_n - sx1 * sz) - sx2z * (sx3 * s_n - sx1 * sx2) + sx2 * (sx3 * sz - sxz * sx2);
-    double Dc = sx4 * (sx2 * sz - sxz * sx1) - sx3 * (sx3 * sz - sxz * sx2) + sx2z * (sx3 * sx1 - sx2 * sx2);
-
-    double a = Da / D;
-    double b = Db / D;
-    double c = Dc / D;
-
-    // Check concave downward (a < 0) for ballistic arc
-    if (a >= 0.0) return res;
-
-    // Solve 2x2 linear system for Y(X) = d*X + e
-    double D_line = sx2 * s_n - sx1 * sx1;
-    double d = (std::abs(D_line) > 1e-9) ? ((sxy * s_n - sx1 * sy) / D_line) : 0.0;
-    double e = (std::abs(D_line) > 1e-9) ? ((sx2 * sy - sx1 * sxy) / D_line) : 0.0;
-
-    res.a = a; res.b = b; res.c = c;
-    res.d = d; res.e = e;
-    res.x_start = raw_pts.front().second.x;
-
-    // Apex (最高到達点)
-    res.x_apex = -b / (2.0 * a);
-    res.z_apex = a * res.x_apex * res.x_apex + b * res.x_apex + c;
-
-    // Landing calculation (solve a*X^2 + b*X + (c - target_landing_z) = 0)
-    double disc = b * b - 4.0 * a * (c - target_landing_z);
-    if (disc >= 0.0) {
-        double r1 = (-b + std::sqrt(disc)) / (2.0 * a);
-        double r2 = (-b - std::sqrt(disc)) / (2.0 * a);
-        res.x_land = std::max(r1, r2);
-    } else {
-        res.x_land = raw_pts.back().second.x + 0.3;
-    }
-    res.y_land = d * res.x_land + e;
-    res.z_land = target_landing_z;
-
-    // R^2 Confidence Score
-    double z_mean = z_mean_acc / s_n;
-    double ss_tot = 0.0, ss_res = 0.0;
-    for (const auto& item : raw_pts) {
-        double x = item.second.x;
-        double z = item.second.z;
-        double z_pred = a * x * x + b * x + c;
-        ss_tot += (z - z_mean) * (z - z_mean);
-        ss_res += (z - z_pred) * (z - z_pred);
-    }
-    res.r2 = (ss_tot > 1e-6) ? std::clamp(1.0 - ss_res / ss_tot, 0.0, 1.0) : 0.0;
-
-    // Generate 150 smooth points along the mathematical parabola from launch to landing!
-    double x_min = std::min(res.x_start, 0.35);
-    double x_max = std::max(res.x_land, raw_pts.back().second.x);
-    x_max = std::min(x_max, 6.0);
-    int num_steps = 150;
-    double dx = (x_max - x_min) / static_cast<double>(num_steps);
-
-    for (int i = 0; i <= num_steps; ++i) {
-        double px = x_min + i * dx;
-        double py = d * px + e;
-        double pz = a * px * px + b * px + c;
-        if (pz < 0.0) pz = 0.0;
-        geometry_msgs::msg::Point pt;
-        pt.x = px;
-        pt.y = py;
-        pt.z = pz;
-        res.curve_pts.push_back(pt);
-    }
-
-    res.valid = true;
-    return res;
-}
-} // namespace
-
 
 
 ClothTrackerCudaNode::ClothTrackerCudaNode(const rclcpp::NodeOptions& options)
@@ -580,182 +439,22 @@ bool ClothTrackerCudaNode::BallisticTracker::update(
 void ClothTrackerCudaNode::publish_roi_markers(const rclcpp::Time& stamp, const ClothTrackingResult& raw_res) {
     if (!pub_roi_markers_) return;
 
-    visualization_msgs::msg::MarkerArray markers;
+    double speed = std::sqrt(ballistic_tracker_.vx * ballistic_tracker_.vx +
+                             ballistic_tracker_.vy * ballistic_tracker_.vy +
+                             ballistic_tracker_.vz * ballistic_tracker_.vz);
 
-    // 1. PassThrough ROI Box (Cyan Wireframe Cube)
-    visualization_msgs::msg::Marker roi_marker;
-    roi_marker.header.stamp = stamp;
-    roi_marker.header.frame_id = "base_link";
-    roi_marker.ns = "roi_passthrough";
-    roi_marker.id = 0;
-    roi_marker.type = visualization_msgs::msg::Marker::CUBE;
-    roi_marker.action = visualization_msgs::msg::Marker::ADD;
-    roi_marker.pose.position.x = 0.5 * (filter_cfg_.min_x_m + filter_cfg_.max_x_m);
-    roi_marker.pose.position.y = 0.5 * (filter_cfg_.min_y_m + filter_cfg_.max_y_m);
-    roi_marker.pose.position.z = 0.5 * (filter_cfg_.min_z_m + filter_cfg_.max_z_m);
-    roi_marker.pose.orientation.w = 1.0;
-    roi_marker.scale.x = std::max(0.01f, filter_cfg_.max_x_m - filter_cfg_.min_x_m);
-    roi_marker.scale.y = std::max(0.01f, filter_cfg_.max_y_m - filter_cfg_.min_y_m);
-    roi_marker.scale.z = std::max(0.01f, filter_cfg_.max_z_m - filter_cfg_.min_z_m);
-    roi_marker.color.r = 0.0f;
-    roi_marker.color.g = 0.85f;
-    roi_marker.color.b = 1.0f;
-    roi_marker.color.a = 0.10f;
-    markers.markers.push_back(roi_marker);
-
-    // 2. Launch Gate Box (Yellow Translucent Cube)
-    if (enable_ballistic_filter_) {
-        visualization_msgs::msg::Marker launch_marker;
-        launch_marker.header.stamp = stamp;
-        launch_marker.header.frame_id = "base_link";
-        launch_marker.ns = "launch_gate";
-        launch_marker.id = 1;
-        launch_marker.type = visualization_msgs::msg::Marker::CUBE;
-        launch_marker.action = visualization_msgs::msg::Marker::ADD;
-        launch_marker.pose.position.x = 0.5 * (ballistic_tracker_.launch_min_x + ballistic_tracker_.launch_max_x);
-        launch_marker.pose.position.y = 0.5 * (ballistic_tracker_.launch_min_y + ballistic_tracker_.launch_max_y);
-        launch_marker.pose.position.z = 0.5 * (ballistic_tracker_.launch_min_z + ballistic_tracker_.launch_max_z);
-        launch_marker.pose.orientation.w = 1.0;
-        launch_marker.scale.x = std::max(0.01, ballistic_tracker_.launch_max_x - ballistic_tracker_.launch_min_x);
-        launch_marker.scale.y = std::max(0.01, ballistic_tracker_.launch_max_y - ballistic_tracker_.launch_min_y);
-        launch_marker.scale.z = std::max(0.01, ballistic_tracker_.launch_max_z - ballistic_tracker_.launch_min_z);
-        launch_marker.color.r = 1.0f;
-        launch_marker.color.g = 0.85f;
-        launch_marker.color.b = 0.0f;
-        launch_marker.color.a = 0.20f;
-        markers.markers.push_back(launch_marker);
-    }
-
-    // 3. Real-time HUD Dashboard (High-visibility 3D Text positioned clearly above scene)
-    visualization_msgs::msg::Marker text_marker;
-    text_marker.header.stamp = stamp;
-    text_marker.header.frame_id = "base_link";
-    text_marker.ns = "tracker_status_hud";
-    text_marker.id = 2;
-    text_marker.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
-    text_marker.action = visualization_msgs::msg::Marker::ADD;
-    text_marker.pose.position.x = 1.5;
-    text_marker.pose.position.y = -0.9;
-    text_marker.pose.position.z = 1.8;
-    text_marker.scale.z = 0.16; // Clear large text
-
-    char status_str[512];
-    if (ballistic_tracker_.state == TrackerState::TRACKING) {
-        text_marker.color.r = 0.2f;
-        text_marker.color.g = 1.0f;
-        text_marker.color.b = 0.3f;
-        text_marker.color.a = 1.0f;
-        double speed = std::sqrt(ballistic_tracker_.vx * ballistic_tracker_.vx +
-                                 ballistic_tracker_.vy * ballistic_tracker_.vy +
-                                 ballistic_tracker_.vz * ballistic_tracker_.vz);
-        snprintf(status_str, sizeof(status_str),
-                 "● [TRACKING ACTIVE]\nCloth: (X: %.2fm, Y: %.2fm, Z: %.2fm)\nSpeed: %.2f m/s (Vx: %.2f, Vz: %.2f)\nPoints: %d pts",
-                 ballistic_tracker_.x, ballistic_tracker_.y, ballistic_tracker_.z,
-                 speed, ballistic_tracker_.vx, ballistic_tracker_.vz, raw_res.cluster_points_count);
-    } else {
-        text_marker.color.r = 1.0f;
-        text_marker.color.g = 0.9f;
-        text_marker.color.b = 0.2f;
-        text_marker.color.a = 0.95f;
-        if (raw_res.valid) {
-            snprintf(status_str, sizeof(status_str),
-                     "○ [IDLE: Candidate Detected]\nPos: (X: %.2fm, Y: %.2fm, Z: %.2fm)\nCluster: %d pts\n(Waiting for launch velocity)",
-                     raw_res.cx, raw_res.cy, raw_res.cz, raw_res.cluster_points_count);
-        } else {
-            snprintf(status_str, sizeof(status_str),
-                     "○ [IDLE: Waiting for Throw]\nLaunch Area: X: %.2f~%.2fm, Z: %.2f~%.2fm\nCamera: Pitch %.1f deg, Height %.2fm",
-                     ballistic_tracker_.launch_min_x, ballistic_tracker_.launch_max_x,
-                     ballistic_tracker_.launch_min_z, ballistic_tracker_.launch_max_z,
-                     camera_pose_.pitch_deg, camera_pose_.height_offset_m);
-        }
-    }
-    text_marker.text = status_str;
-    markers.markers.push_back(text_marker);
-
-    // 4. Floor Distance Markers (1.0m, 2.0m, 3.0m, 3.5m)
-    for (double dist = 1.0; dist <= 3.5; dist += 1.0) {
-        visualization_msgs::msg::Marker dist_marker;
-        dist_marker.header.stamp = stamp;
-        dist_marker.header.frame_id = "base_link";
-        dist_marker.ns = "floor_distance_marks";
-        dist_marker.id = static_cast<int>(dist * 10);
-        dist_marker.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
-        dist_marker.action = visualization_msgs::msg::Marker::ADD;
-        dist_marker.pose.position.x = dist;
-        dist_marker.pose.position.y = 0.65;
-        dist_marker.pose.position.z = 0.05;
-        dist_marker.scale.z = 0.12;
-        dist_marker.color.r = 0.7f;
-        dist_marker.color.g = 0.8f;
-        dist_marker.color.b = 1.0f;
-        dist_marker.color.a = 0.85f;
-        char dist_buf[32];
-        snprintf(dist_buf, sizeof(dist_buf), "%.1fm", dist);
-        dist_marker.text = dist_buf;
-        markers.markers.push_back(dist_marker);
-    }
-
-    // 5. Landing point text marker
-    if (!trajectory_points_.empty()) {
-        const auto& last_pt = trajectory_points_.back().second;
-        visualization_msgs::msg::Marker land_marker;
-        land_marker.header.stamp = stamp;
-        land_marker.header.frame_id = "base_link";
-        land_marker.ns = "landing_point_text";
-        land_marker.id = 99;
-        land_marker.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
-        land_marker.action = visualization_msgs::msg::Marker::ADD;
-        land_marker.pose.position.x = last_pt.x;
-        land_marker.pose.position.y = last_pt.y;
-        land_marker.pose.position.z = last_pt.z + 0.18;
-        land_marker.scale.z = 0.13;
-        land_marker.color.r = 1.0f;
-        land_marker.color.g = 0.3f;
-        land_marker.color.b = 0.2f;
-        land_marker.color.a = 1.0f;
-        char land_buf[64];
-        snprintf(land_buf, sizeof(land_buf), "🎯 Landing: %.2fm", last_pt.x);
-        land_marker.text = land_buf;
-        markers.markers.push_back(land_marker);
-    }
+    auto markers = MarkerVisualizer::create_roi_markers(
+        stamp, filter_cfg_, enable_ballistic_filter_,
+        ballistic_tracker_.launch_min_x, ballistic_tracker_.launch_max_x,
+        ballistic_tracker_.launch_min_y, ballistic_tracker_.launch_max_y,
+        ballistic_tracker_.launch_min_z, ballistic_tracker_.launch_max_z,
+        ballistic_tracker_.state == TrackerState::TRACKING,
+        ballistic_tracker_.x, ballistic_tracker_.y, ballistic_tracker_.z,
+        ballistic_tracker_.vx, ballistic_tracker_.vz, speed,
+        raw_res, camera_pose_, trajectory_points_
+    );
 
     pub_roi_markers_->publish(markers);
-}
-
-static void publish_point_cloud(
-    const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr& pub,
-    const std::vector<float3>& pts,
-    const rclcpp::Time& stamp,
-    const std::string& frame_id)
-{
-    if (!pub || pts.empty()) return;
-
-    sensor_msgs::msg::PointCloud2 cloud_msg;
-    cloud_msg.header.stamp = stamp;
-    cloud_msg.header.frame_id = frame_id;
-    cloud_msg.height = 1;
-    cloud_msg.width = static_cast<uint32_t>(pts.size());
-    cloud_msg.is_dense = false;
-    cloud_msg.is_bigendian = false;
-
-    sensor_msgs::PointCloud2Modifier modifier(cloud_msg);
-    modifier.setPointCloud2FieldsByString(1, "xyz");
-    modifier.resize(pts.size());
-
-    sensor_msgs::PointCloud2Iterator<float> iter_x(cloud_msg, "x");
-    sensor_msgs::PointCloud2Iterator<float> iter_y(cloud_msg, "y");
-    sensor_msgs::PointCloud2Iterator<float> iter_z(cloud_msg, "z");
-
-    for (const auto& p : pts) {
-        *iter_x = p.x;
-        *iter_y = p.y;
-        *iter_z = p.z;
-        ++iter_x;
-        ++iter_y;
-        ++iter_z;
-    }
-
-    pub->publish(cloud_msg);
 }
 
 void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const rclcpp::Time& stamp) {
@@ -793,19 +492,19 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
 
     // Publish Debug Point Clouds & ROI Markers
     if (publish_debug_cloud_) {
-        publish_point_cloud(pub_filtered_cloud_, debug_filtered_pts, stamp, "base_link");
+        MarkerVisualizer::publish_point_cloud(pub_filtered_cloud_, debug_filtered_pts, stamp, "base_link");
         publish_roi_markers(stamp, raw_res);
     }
     
     // Publish cyan cluster ONLY when actively flying; clear it immediately when landed/idle
     if (ballistic_tracker_.state == TrackerState::TRACKING && !debug_cluster_pts.empty())
     {
-        publish_point_cloud(pub_cluster_cloud_, debug_cluster_pts, stamp, "base_link");
+        MarkerVisualizer::publish_point_cloud(pub_cluster_cloud_, debug_cluster_pts, stamp, "base_link");
     }
     else
     {
         std::vector<float3> empty_pts;
-        publish_point_cloud(pub_cluster_cloud_, empty_pts, stamp, "base_link");
+        MarkerVisualizer::publish_point_cloud(pub_cluster_cloud_, empty_pts, stamp, "base_link");
     }
 
     // Diagnostics to console every 1 second
@@ -890,25 +589,8 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
 
     // 2. Cloth Tip Ball Marker (Red Sphere, diameter 12cm at current or final landing position)
     if (has_cloth_pose_) {
-        visualization_msgs::msg::Marker ball_marker;
-        ball_marker.header.stamp = stamp;
-        ball_marker.header.frame_id = "base_link";
-        ball_marker.ns = "cloth_tip_ball";
-        ball_marker.id = 1;
-        ball_marker.type = visualization_msgs::msg::Marker::SPHERE;
-        ball_marker.action = visualization_msgs::msg::Marker::ADD;
-        ball_marker.pose.position.x = last_cloth_x_;
-        ball_marker.pose.position.y = last_cloth_y_;
-        ball_marker.pose.position.z = last_cloth_z_;
-        ball_marker.pose.orientation.w = 1.0;
-        ball_marker.scale.x = 0.12;
-        ball_marker.scale.y = 0.12;
-        ball_marker.scale.z = 0.12;
-        ball_marker.color.r = 1.0f;
-        ball_marker.color.g = 0.15f;
-        ball_marker.color.b = 0.15f;
-        ball_marker.color.a = 0.95f;
-        pub_marker_->publish(ball_marker);
+        pub_marker_->publish(MarkerVisualizer::create_cloth_tip_marker(
+            stamp, last_cloth_x_, last_cloth_y_, last_cloth_z_));
     }
 
     // 3. PERSISTENT VISUALIZATION: Strictly true measured flight trajectory (NO fake prediction lines!)
@@ -921,43 +603,10 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
         last_static_publish_sec = now_sec;
 
         // 1. Measured Flight Trajectory Line Strip (Bright Gold, strictly connects true camera detections)
-        visualization_msgs::msg::Marker line_marker;
-        line_marker.header.stamp = stamp;
-        line_marker.header.frame_id = "base_link";
-        line_marker.ns = "cloth_cuda_trajectory";
-        line_marker.id = 0;
-        line_marker.type = visualization_msgs::msg::Marker::LINE_STRIP;
-        line_marker.action = visualization_msgs::msg::Marker::ADD;
-        line_marker.scale.x = 0.040; // 4cm thickness
-        line_marker.color.r = 1.0f;
-        line_marker.color.g = 0.85f;
-        line_marker.color.b = 0.0f;
-        line_marker.color.a = 0.95f;
-
-        for (const auto& item : trajectory_points_) {
-            line_marker.points.push_back(item.second);
-        }
-        pub_marker_->publish(line_marker);
+        pub_marker_->publish(MarkerVisualizer::create_trajectory_line(stamp, trajectory_points_));
 
         // 2. True Measured Points Marker (Orange Spheres, exactly where camera detected cloth)
-        visualization_msgs::msg::Marker raw_points_marker;
-        raw_points_marker.header.stamp = stamp;
-        raw_points_marker.header.frame_id = "base_link";
-        raw_points_marker.ns = "cloth_measured_points";
-        raw_points_marker.id = 2;
-        raw_points_marker.type = visualization_msgs::msg::Marker::SPHERE_LIST;
-        raw_points_marker.action = visualization_msgs::msg::Marker::ADD;
-        raw_points_marker.scale.x = 0.045;
-        raw_points_marker.scale.y = 0.045;
-        raw_points_marker.scale.z = 0.045;
-        raw_points_marker.color.r = 1.0f;
-        raw_points_marker.color.g = 0.40f;
-        raw_points_marker.color.b = 0.0f;
-        raw_points_marker.color.a = 0.95f;
-        for (const auto& item : trajectory_points_) {
-            raw_points_marker.points.push_back(item.second);
-        }
-        pub_marker_->publish(raw_points_marker);
+        pub_marker_->publish(MarkerVisualizer::create_measured_points(stamp, trajectory_points_));
 
         // Clean up obsolete prediction markers so they never linger in RViz
         visualization_msgs::msg::Marker del_apex;

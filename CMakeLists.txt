@@ -80,6 +80,10 @@ install(PROGRAMS
 )
 
 # Install directories
+install(DIRECTORY include/
+  DESTINATION include
+)
+
 install(DIRECTORY
   launch
   config

@@ -29,13 +29,10 @@ Intel RealSense D435 と NVIDIA Jetson (CUDA) を C++ で密結合した、飛�
 * **USB 接続**: Jetson の **USB 3.0 ポート（青色端子 / SSマーク）に直結**。
 * **カメラ設置向き**: **90° ロール回転の縦置き**（垂直視野角を約 90° に拡大し、放物線の最高到達点を見失わない配置）。
 * **取り付け仰角**: 水平から **上向き 20°** (`camera_pitch_deg: 20.0`)。
-* **機体オフセット**: 前方 $0.15\,\text{m}$ (`camera_x_offset_m: 0.15`)、高さ $0.35\,\text{m}$ (`camera_height_offset_m: 0.35`)。
+* **機体オフセット**: 前方 $0.50\,\text{m}$ (`camera_x_offset_m: 0.50`)、高さ $1.00\,\text{m}$ (`camera_height_offset_m: 1.00`)。
 * **Static TF**: `cloth_tracker.launch.py` が `static_transform_publisher` で
-  `base_link -> camera_link` を配信します。`camera_link -> *_optical_frame` は
-  RealSenseドライバが配信するため、二重配信されません。
-* **カメラ姿勢の変更**: `camera_roll_deg`、`camera_pitch_deg`、
-  `camera_x_offset_m`、`camera_height_offset_m`、`camera_parent_frame`、
-  `camera_frame` を launch 引数で変更できます。
+  `base_link -> camera_link` および `camera_link -> camera_color_optical_frame` を配信します。
+* **設定変更**: パラメータは `config/tracker_params.yaml` に一本化されています。ロボットの構造変更や競技場に応じた調整は YAML を編集するだけで反映されます。
 
 ---
 
@@ -165,31 +162,38 @@ python3 ~/ros2_ws/src/realsense_dust_cloth/realsense_dust_cloth/trajectory_proba
 
 ## 6. 主要パラメータ (`config/tracker_params.yaml`)
 
+パラメータはすべて `config/tracker_params.yaml` に集約されています。ロボットの構造変更や競技場の寸法変更に合わせて、このファイルを直接編集してください。
+
 | パラメータ | 既定値 | 説明 |
 | :--- | :---: | :--- |
-| `use_direct_realsense` | `true` | RealSense C++ API 直接ストリーミング（ROSトピック入力時は `use_direct_realsense:=false`） |
-| `use_bg_subtraction` | `true` | 静止背景差分（停止時は `true`、台車走行射撃時は `false`） |
+| `camera_x_offset_m` | `0.50` [m] | ロボット原点 (base_link) からのカメラ前方位置 |
+| `camera_height_offset_m` | `1.00` [m] | ロボット原点 (base_link) からのカメラ搭載高さ |
 | `camera_pitch_deg` | `20.0` [deg] | カメラ仰角（上向き 20°） |
 | `camera_roll_deg` | `90.0` [deg] | カメラ縦置き角度（90° ロール） |
-| `min_x_m` / `max_x_m` | `0.30` / `5.00` [m] | 前後方向の ROI 抽出空間（5m先の着地まで追従） |
-| `min_y_m` / `max_y_m` | `-1.00` / `1.00` [m] | 左右方向の ROI 抽出空間 |
-| `min_z_m` / `max_z_m` | `0.00` / `2.20` [m] | 高さ方向の抽出空間（最高到達点から床面まで完全包含） |
-| `launch_min_x` / `launch_max_x` | `0.30` / `1.80` [m] | 発射口ロックオンエリア X |
-| `launch_min_y` / `launch_max_y` | `-0.80` / `0.20` [m] | 発射口ロックオンエリア Y（発射台位置 Y=-0.41m を包含） |
-| `launch_min_z` / `launch_max_z` | `0.30` / `1.80` [m] | 発射口ロックオンエリア Z |
+| `min_x_m` / `max_x_m` | `0.50` / `5.50` [m] | 前後方向の ROI 抽出空間（5.5m先の着地まで追従） |
+| `min_y_m` / `max_y_m` | `-1.20` / `1.20` [m] | 左右方向の ROI 抽出空間 |
+| `min_z_m` / `max_z_m` | `0.00` / `3.30` [m] | 高さ方向の抽出空間（最高到達点から床面まで完全包含） |
+| `launch_min_x` / `launch_max_x` | `0.50` / `1.50` [m] | 発射口ロックオンエリア X |
+| `launch_min_y` / `launch_max_y` | `-0.40` / `0.40` [m] | 発射口ロックオンエリア Y |
+| `launch_min_z` / `launch_max_z` | `1.00` / `2.00` [m] | 発射口ロックオンエリア Z（床置き雑巾の誤検出を防止） |
+| `min_launch_vx` | `0.10` [m] | 発射確定最小前進速度 |
 | `min_cluster_points` | `10` | 雑巾最小点群数（遠距離でも着地まで捕捉） |
 | `voxel_size_m` | `0.02` [m] | ボクセルダウンサンプリング（高密度点群保持） |
-| `gate_radius_m` | `0.65` [m] | 飛行追跡ゲート半径（急減速・失速落下にも追従） |
+| `cluster_eps_m` | `0.20` [m] | クラスタ探索距離 |
+| `gate_radius_m` | `0.80` [m] | 飛行追跡ゲート半径 |
+| `max_lost_frames` | `25` | 見失い許容フレーム数 |
+| `use_direct_realsense` | `true` | RealSense C++ API 直接ストリーミング |
+| `use_bg_subtraction` | `true` | 静止背景差分（停止時は `true`、台車走行射撃時は `false`） |
 | `enable_color_stream` | `true` | JPEG 圧縮カラー配信（rosbag 記録 & 遠隔監視用） |
 | `jpeg_quality` | `65` | JPEG 圧縮品質（1〜100、65 で帯域 95% 削減） |
-| `color_fps` | `30` | カラー画像配信レート (fps) |
+| `color_rotation_deg` | `180` | 縦置きカメラ映像の回転補正角度 |
 
-`cloth_tracker.launch.py` はこのYAMLを読み込んだうえで、launch引数を
-ROS 2の正しい型（bool / int / float）で上書きします。カメラ姿勢を変更する場合は、
-同名のlaunch引数を指定してください（角度は度数法です）。
+### Launch 起動時のモード切り替えオプション（スイッチ引数）
+`cloth_tracker.launch.py` では、必要に応じて実行モードのみを引数で切り替えられます：
 
-```bash
-ros2 launch realsense_dust_cloth cloth_tracker.launch.py \
-  camera_roll_deg:=0.0 camera_pitch_deg:=20.0 \
-  camera_parent_frame:=base_link camera_frame:=camera_link
-```
+* `use_direct_realsense:=false`: ROS 2 トピック（`/camera/...`）から深度を受け取るモード
+* `use_bg_subtraction:=false`: ロボット走行時の射撃モード（背景差分をOFF）
+* `use_sim_time:=true`: Isaac Sim や rosbag 再生時のシミュレーションクロック同期
+* `rviz:=true`: 手元 PC 等で RViz2 GUI を同時に起動
+* `record:=true`: 主要トピック（TF, 雑巾位置, 軌跡, 圧縮カラー）を自動で rosbag 録画
+* `params_file:=/path/to/custom.yaml`: 別のカスタム YAML ファイルを指定して起動

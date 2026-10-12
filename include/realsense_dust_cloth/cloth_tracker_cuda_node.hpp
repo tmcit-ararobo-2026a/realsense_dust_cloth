@@ -19,23 +19,14 @@
 #include <tf2_ros/transform_broadcaster.h>
 
 #include "realsense_dust_cloth/cuda_kernels.cuh"
+#include "realsense_dust_cloth/parabola_fit.hpp"
+#include "realsense_dust_cloth/marker_visualizer.hpp"
 
 #ifdef HAVE_REALSENSE2
 #include <librealsense2/rs.hpp>
 #endif
 
 namespace realsense_dust_cloth {
-
-struct ParabolaFit {
-    bool valid{false};
-    double a{0.0}, b{0.0}, c{0.0}; // Z(X) = a*X^2 + b*X + c
-    double d{0.0}, e{0.0};          // Y(X) = d*X + e
-    double x_start{0.0};
-    double x_apex{0.0}, z_apex{0.0};
-    double x_land{0.0}, y_land{0.0}, z_land{0.0};
-    double r2{0.0};
-    std::vector<geometry_msgs::msg::Point> curve_pts;
-};
 
 class ClothTrackerCudaNode : public rclcpp::Node {
 public:
