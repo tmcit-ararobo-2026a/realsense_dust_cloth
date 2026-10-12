@@ -53,8 +53,7 @@ public:
     double drag_coeff{0.40};
     double landing_min_z{0.10};
 
-    // Alpha-Beta Ballistic Filter & Physical Velocity Bounds
-    double pos_smoothing_alpha{0.65}; ///< Position measurement blend weight (0..1)
+    // Velocity Smoothing & Physical Velocity Bounds
     double vel_smoothing_beta{0.30};  ///< Velocity measurement blend weight (0..1)
     double max_vx_m_s{6.00};          ///< Maximum physical forward velocity (m/s)
     double max_abs_vy_m_s{2.00};      ///< Maximum physical lateral velocity (m/s)

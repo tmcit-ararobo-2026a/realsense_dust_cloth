@@ -101,6 +101,21 @@ namespace realsense_dust_cloth
                 }
             }
 
+            // 2D Depth Continuity Check: Reject stereo "flying pixels" (edge bleeding at silhouette boundaries)
+            if (u < 2 || u >= intrin.width - 2 || v < 2 || v >= intrin.height - 2)
+                return;
+            float z_up = depth[(v - 2) * intrin.width + u] * intrin.depth_scale;
+            float z_dn = depth[(v + 2) * intrin.width + u] * intrin.depth_scale;
+            float z_lf = depth[v * intrin.width + (u - 2)] * intrin.depth_scale;
+            float z_rt = depth[v * intrin.width + (u + 2)] * intrin.depth_scale;
+            if (fabsf(z_raw - z_up) > filter.bg_diff_thresh_m ||
+                fabsf(z_raw - z_dn) > filter.bg_diff_thresh_m ||
+                fabsf(z_raw - z_lf) > filter.bg_diff_thresh_m ||
+                fabsf(z_raw - z_rt) > filter.bg_diff_thresh_m)
+            {
+                return;
+            }
+
             // Camera optical frame (Z forward, X right, Y down)
             float x_cam = (static_cast<float>(u) - intrin.cx) * z_raw / intrin.fx;
             float y_cam = (static_cast<float>(v) - intrin.cy) * z_raw / intrin.fy;

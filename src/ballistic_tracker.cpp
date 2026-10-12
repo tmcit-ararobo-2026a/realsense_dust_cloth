@@ -125,18 +125,16 @@ bool BallisticTracker::update(
             vy = std::clamp((1.0 - vel_smoothing_beta) * pred_vy + vel_smoothing_beta * new_vy, -max_abs_vy_m_s, max_abs_vy_m_s);
             vz = std::clamp((1.0 - vel_smoothing_beta) * pred_vz + vel_smoothing_beta * new_vz, min_vz_m_s, max_vz_m_s);
 
-            x = (1.0 - pos_smoothing_alpha) * pred_x + pos_smoothing_alpha * raw.cx;
-            y = (1.0 - pos_smoothing_alpha) * pred_y + pos_smoothing_alpha * raw.cy;
-            z = (1.0 - pos_smoothing_alpha) * pred_z + pos_smoothing_alpha * raw.cz;
+            // Strictly use the actual measured cloth cluster position (never blend predicted coordinates into TF)
+            x = raw.cx;
+            y = raw.cy;
+            z = raw.cz;
 
             last_stamp = stamp_sec;
             tracked_count++;
             lost_count = 0;
 
             out = raw;
-            out.cx = static_cast<float>(x);
-            out.cy = static_cast<float>(y);
-            out.cz = static_cast<float>(z);
 
             // Stop tracking when cloth touches the floor plane or loses forward flight speed
             if (z <= landing_min_z || vx <= min_launch_vx) {

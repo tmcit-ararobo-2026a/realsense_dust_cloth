@@ -1,11 +1,36 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
+
+
+def _create_tracker_node(context):
+    params_file = LaunchConfiguration('params_file').perform(context)
+    use_sim_time_str = LaunchConfiguration('use_sim_time').perform(context)
+    use_direct_rs_str = LaunchConfiguration('use_direct_realsense').perform(context)
+    use_bg_sub_str = LaunchConfiguration('use_bg_subtraction').perform(context)
+
+    overrides = {
+        'use_sim_time': use_sim_time_str.lower() == 'true',
+    }
+    if use_direct_rs_str != '':
+        overrides['use_direct_realsense'] = use_direct_rs_str.lower() == 'true'
+    if use_bg_sub_str != '':
+        overrides['use_bg_subtraction'] = use_bg_sub_str.lower() == 'true'
+
+    return [
+        Node(
+            package='realsense_dust_cloth',
+            executable='cloth_tracker_cuda_node',
+            name='cloth_tracker_cuda_node',
+            output='screen',
+            parameters=[params_file, overrides],
+        )
+    ]
 
 
 def generate_launch_description():
@@ -25,8 +50,8 @@ def generate_launch_description():
 
     declare_use_direct_rs = DeclareLaunchArgument(
         'use_direct_realsense',
-        default_value='true',
-        description='Stream directly via librealsense2 C++ API (true) or ROS 2 topics (false)'
+        default_value='',
+        description='Optional override: true (direct librealsense2) or false (ROS 2 topics). Empty uses YAML.'
     )
 
     declare_use_sim_time = DeclareLaunchArgument(
@@ -37,8 +62,8 @@ def generate_launch_description():
 
     declare_use_bg_subtraction = DeclareLaunchArgument(
         'use_bg_subtraction',
-        default_value='true',
-        description='Enable background subtraction (set false for moving robot)'
+        default_value='',
+        description='Optional override: Enable background subtraction. Empty uses YAML.'
     )
 
     declare_rviz = DeclareLaunchArgument(
@@ -61,23 +86,7 @@ def generate_launch_description():
 
     # 1. Main CUDA Cloth Tracker Node
     # (Static TF for base_link -> camera_link is published internally from params_file)
-    cuda_tracker_node = Node(
-        package='realsense_dust_cloth',
-        executable='cloth_tracker_cuda_node',
-        name='cloth_tracker_cuda_node',
-        output='screen',
-        parameters=[
-            LaunchConfiguration('params_file'),
-            {
-                'use_direct_realsense': ParameterValue(
-                    LaunchConfiguration('use_direct_realsense'), value_type=bool),
-                'use_sim_time': ParameterValue(
-                    LaunchConfiguration('use_sim_time'), value_type=bool),
-                'use_bg_subtraction': ParameterValue(
-                    LaunchConfiguration('use_bg_subtraction'), value_type=bool),
-            }
-        ]
-    )
+    cuda_tracker_node = OpaqueFunction(function=_create_tracker_node)
 
     # 2. Trajectory Probability Analyzer Node (Optional: enable_analyzer:=true)
     analyzer_node = Node(

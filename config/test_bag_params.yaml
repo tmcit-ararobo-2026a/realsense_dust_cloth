@@ -19,8 +19,8 @@
     camera_parent_frame: "base_link"
     camera_frame: "camera_link"
     camera_x_offset_m: 0.15                        # 台車手前からカメラまでの距離 (m)
-    camera_height_offset_m: 0.35                   # 台車床面からカメラレンズ高さ (m)
-    camera_pitch_deg: 20.0                         # 仰角 (度, 上向き20度)
+    camera_height_offset_m: 1.15                   # 床面からカメラレンズ高さ (m, 実測床面基準)
+    camera_pitch_deg: 0.0                          # 仰角 (度, 水平設置)
     camera_roll_deg: 90.0                          # 縦置きロール角 (度, 時計回り90度設置)
     camera_width: 640
     camera_height: 480
@@ -31,18 +31,18 @@
     min_y_m: -1.00                                 # 左右幅 (m)
     max_y_m: 1.00
     min_z_m: 0.05                                  # 床面境界 (m, 床の反射ノイズカット)
-    max_z_m: 2.00                                  # 天井境界 (m, 蛍光灯・梁ノイズ遮断)
+    max_z_m: 2.10                                  # 天井境界 (m, 蛍光灯・梁ノイズ遮断)
     min_depth_m: 0.30                              # カメラ最短深度 (m)
     max_depth_m: 3.80                              # カメラ最長深度 (m, 遠方フリッカー遮断)
 
     # 【4. 発射口検知ゲート (弾道ステートマシン)】
     enable_ballistic_filter: true
-    launch_min_x: 0.40                             # 発射口エリア X 最小 (m)
-    launch_max_x: 1.20                             # 発射口エリア X 最大 (m)
+    launch_min_x: 0.80                             # 発射口エリア X 最小 (m)
+    launch_max_x: 1.50                             # 発射口エリア X 最大 (m)
     launch_min_y: -0.25                            # 発射口エリア Y 最小 (m)
     launch_max_y: 0.25                             # 発射口エリア Y 最大 (m)
-    launch_min_z: 0.80                             # 発射口エリア Z 最小 (m)
-    launch_max_z: 1.50                             # 発射口エリア Z 最大 (m)
+    launch_min_z: 1.40                             # 発射口エリア Z 最小 (m)
+    launch_max_z: 2.00                             # 発射口エリア Z 最大 (m)
     min_launch_vx: 0.10                            # 発射確定最小前進速度 (m/s)
     gate_radius_m: 0.50                            # 探索ゲート半径 (m)
     max_lost_frames: 6                             # 見失い許容フレーム数 (着地後の背景誤吸着を防止)
