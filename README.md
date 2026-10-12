@@ -30,7 +30,12 @@ Intel RealSense D435 と NVIDIA Jetson (CUDA) を C++ で密結合した、飛�
 * **カメラ設置向き**: **90° ロール回転の縦置き**（垂直視野角を約 90° に拡大し、放物線の最高到達点を見失わない配置）。
 * **取り付け仰角**: 水平から **上向き 20°** (`camera_pitch_deg: 20.0`)。
 * **機体オフセット**: 前方 $0.15\,\text{m}$ (`camera_x_offset_m: 0.15`)、高さ $0.35\,\text{m}$ (`camera_height_offset_m: 0.35`)。
-* **Static TF**: ノード起動時に `base_link -> camera_link -> camera_depth_optical_frame` が自動配信されます。
+* **Static TF**: `cloth_tracker.launch.py` が `static_transform_publisher` で
+  `base_link -> camera_link` を配信します。`camera_link -> *_optical_frame` は
+  RealSenseドライバが配信するため、二重配信されません。
+* **カメラ姿勢の変更**: `camera_roll_deg`、`camera_pitch_deg`、
+  `camera_x_offset_m`、`camera_height_offset_m`、`camera_parent_frame`、
+  `camera_frame` を launch 引数で変更できます。
 
 ---
 
@@ -162,7 +167,7 @@ python3 ~/ros2_ws/src/realsense_dust_cloth/realsense_dust_cloth/trajectory_proba
 
 | パラメータ | 既定値 | 説明 |
 | :--- | :---: | :--- |
-| `use_direct_realsense` | `false` | RealSense C++ API 直接ストリーミング（実機接続時は `true`） |
+| `use_direct_realsense` | `true` | RealSense C++ API 直接ストリーミング（ROSトピック入力時は `use_direct_realsense:=false`） |
 | `use_bg_subtraction` | `true` | 静止背景差分（停止時は `true`、台車走行射撃時は `false`） |
 | `camera_pitch_deg` | `20.0` [deg] | カメラ仰角（上向き 20°） |
 | `camera_roll_deg` | `90.0` [deg] | カメラ縦置き角度（90° ロール） |
@@ -178,3 +183,13 @@ python3 ~/ros2_ws/src/realsense_dust_cloth/realsense_dust_cloth/trajectory_proba
 | `enable_color_stream` | `true` | JPEG 圧縮カラー配信（rosbag 記録 & 遠隔監視用） |
 | `jpeg_quality` | `65` | JPEG 圧縮品質（1〜100、65 で帯域 95% 削減） |
 | `color_fps` | `30` | カラー画像配信レート (fps) |
+
+`cloth_tracker.launch.py` はこのYAMLを読み込んだうえで、launch引数を
+ROS 2の正しい型（bool / int / float）で上書きします。カメラ姿勢を変更する場合は、
+同名のlaunch引数を指定してください（角度は度数法です）。
+
+```bash
+ros2 launch realsense_dust_cloth cloth_tracker.launch.py \
+  camera_roll_deg:=0.0 camera_pitch_deg:=20.0 \
+  camera_parent_frame:=base_link camera_frame:=camera_link
+```

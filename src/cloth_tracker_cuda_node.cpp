@@ -153,11 +153,6 @@ ClothTrackerCudaNode::ClothTrackerCudaNode(const rclcpp::NodeOptions& options)
     load_parameters();
 
     tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
-    static_tf_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
-
-    // Broadcast RealSense fixed pose (base_link -> camera_link -> camera_depth_optical_frame)
-    publish_static_tf();
-
     pub_point_ = this->create_publisher<geometry_msgs::msg::PointStamped>("/cloth/position", 10);
     pub_marker_ = this->create_publisher<visualization_msgs::msg::Marker>("/cloth/trajectory_marker", 10);
     pub_path_ = this->create_publisher<nav_msgs::msg::Path>("/cloth/measured_path", 10);
@@ -215,7 +210,7 @@ ClothTrackerCudaNode::ClothTrackerCudaNode(const rclcpp::NodeOptions& options)
                     depth_topic.c_str(), color_topic.c_str());
     }
 
-    RCLCPP_INFO(this->get_logger(), "RealSense Cloth CUDA Tracker Node initialized successfully with Static TF (base_link -> camera_link).");
+    RCLCPP_INFO(this->get_logger(), "RealSense Cloth CUDA Tracker Node initialized successfully.");
 }
 
 ClothTrackerCudaNode::~ClothTrackerCudaNode() {
@@ -581,51 +576,6 @@ bool ClothTrackerCudaNode::BallisticTracker::update(
     return false;
 }
 
-
-void ClothTrackerCudaNode::publish_static_tf() {
-    if (!static_tf_broadcaster_) return;
-
-    rclcpp::Time now = this->get_clock()->now();
-
-    // 1. base_link -> camera_link
-    geometry_msgs::msg::TransformStamped tf_cam;
-    tf_cam.header.stamp = now;
-    tf_cam.header.frame_id = "base_link";
-    tf_cam.child_frame_id = "camera_link";
-    tf_cam.transform.translation.x = camera_pose_.x_offset_m;
-    tf_cam.transform.translation.y = 0.0;
-    tf_cam.transform.translation.z = camera_pose_.height_offset_m;
-
-    tf2::Quaternion q;
-    double roll_rad = camera_pose_.roll_deg * (M_PI / 180.0);
-    double pitch_rad = camera_pose_.pitch_deg * (M_PI / 180.0);
-    q.setRPY(roll_rad, pitch_rad, 0.0);
-    tf_cam.transform.rotation.x = q.x();
-    tf_cam.transform.rotation.y = q.y();
-    tf_cam.transform.rotation.z = q.z();
-    tf_cam.transform.rotation.w = q.w();
-
-    // 2. camera_link -> camera_depth_optical_frame
-    geometry_msgs::msg::TransformStamped tf_depth_opt;
-    tf_depth_opt.header.stamp = now;
-    tf_depth_opt.header.frame_id = "camera_link";
-    tf_depth_opt.child_frame_id = "camera_depth_optical_frame";
-    tf_depth_opt.transform.translation.x = 0.0;
-    tf_depth_opt.transform.translation.y = 0.0;
-    tf_depth_opt.transform.translation.z = 0.0;
-    tf2::Quaternion q_depth;
-    q_depth.setRPY(-M_PI / 2.0, 0.0, -M_PI / 2.0);
-    tf_depth_opt.transform.rotation.x = q_depth.x();
-    tf_depth_opt.transform.rotation.y = q_depth.y();
-    tf_depth_opt.transform.rotation.z = q_depth.z();
-    tf_depth_opt.transform.rotation.w = q_depth.w();
-
-    // 3. camera_link -> camera_color_optical_frame
-    geometry_msgs::msg::TransformStamped tf_color_opt = tf_depth_opt;
-    tf_color_opt.child_frame_id = "camera_color_optical_frame";
-
-    static_tf_broadcaster_->sendTransform({tf_cam, tf_depth_opt, tf_color_opt});
-}
 
 void ClothTrackerCudaNode::publish_roi_markers(const rclcpp::Time& stamp, const ClothTrackingResult& raw_res) {
     if (!pub_roi_markers_) return;
@@ -1171,4 +1121,3 @@ int main(int argc, char** argv) {
     rclcpp::shutdown();
     return 0;
 }
-

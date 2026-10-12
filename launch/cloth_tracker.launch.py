@@ -3,8 +3,9 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -14,7 +15,7 @@ def generate_launch_description():
 
     declare_use_direct_rs = DeclareLaunchArgument(
         'use_direct_realsense',
-        default_value='false',
+        default_value='true',
         description='Whether to stream directly from RealSense C++ API instead of ROS 2 topic'
     )
 
@@ -84,6 +85,18 @@ def generate_launch_description():
         description='Camera forward offset from base_link (m)'
     )
 
+    declare_camera_parent_frame = DeclareLaunchArgument(
+        'camera_parent_frame',
+        default_value='base_link',
+        description='Parent frame of the RealSense mounting transform'
+    )
+
+    declare_camera_frame = DeclareLaunchArgument(
+        'camera_frame',
+        default_value='camera_link',
+        description='Child frame of the RealSense mounting transform'
+    )
+
     declare_min_y_m = DeclareLaunchArgument(
         'min_y_m',
         default_value='-1.20',
@@ -141,25 +154,67 @@ def generate_launch_description():
         parameters=[
             config_file,
             {
-                'use_direct_realsense': LaunchConfiguration('use_direct_realsense'),
-                'publish_debug_cloud': LaunchConfiguration('publish_debug_cloud'),
-                'use_sim_time': LaunchConfiguration('use_sim_time'),
-                'use_bg_subtraction': LaunchConfiguration('use_bg_subtraction'),
-                'camera_roll_deg': LaunchConfiguration('camera_roll_deg'),
-                'camera_pitch_deg': LaunchConfiguration('camera_pitch_deg'),
-                'camera_height_offset_m': LaunchConfiguration('camera_height_offset_m'),
-                'camera_x_offset_m': LaunchConfiguration('camera_x_offset_m'),
-                'min_y_m': LaunchConfiguration('min_y_m'),
-                'max_y_m': LaunchConfiguration('max_y_m'),
-                'min_z_m': LaunchConfiguration('min_z_m'),
-                'max_z_m': LaunchConfiguration('max_z_m'),
-                'launch_min_y': LaunchConfiguration('launch_min_y'),
-                'launch_max_y': LaunchConfiguration('launch_max_y'),
-                'launch_min_z': LaunchConfiguration('launch_min_z'),
-                'launch_max_z': LaunchConfiguration('launch_max_z'),
-                'color_rotation_deg': LaunchConfiguration('color_rotation_deg'),
+                'use_direct_realsense': ParameterValue(
+                    LaunchConfiguration('use_direct_realsense'), value_type=bool),
+                'publish_debug_cloud': ParameterValue(
+                    LaunchConfiguration('publish_debug_cloud'), value_type=bool),
+                'use_sim_time': ParameterValue(
+                    LaunchConfiguration('use_sim_time'), value_type=bool),
+                'use_bg_subtraction': ParameterValue(
+                    LaunchConfiguration('use_bg_subtraction'), value_type=bool),
+                'camera_roll_deg': ParameterValue(
+                    LaunchConfiguration('camera_roll_deg'), value_type=float),
+                'camera_pitch_deg': ParameterValue(
+                    LaunchConfiguration('camera_pitch_deg'), value_type=float),
+                'camera_height_offset_m': ParameterValue(
+                    LaunchConfiguration('camera_height_offset_m'), value_type=float),
+                'camera_x_offset_m': ParameterValue(
+                    LaunchConfiguration('camera_x_offset_m'), value_type=float),
+                'min_y_m': ParameterValue(
+                    LaunchConfiguration('min_y_m'), value_type=float),
+                'max_y_m': ParameterValue(
+                    LaunchConfiguration('max_y_m'), value_type=float),
+                'min_z_m': ParameterValue(
+                    LaunchConfiguration('min_z_m'), value_type=float),
+                'max_z_m': ParameterValue(
+                    LaunchConfiguration('max_z_m'), value_type=float),
+                'launch_min_y': ParameterValue(
+                    LaunchConfiguration('launch_min_y'), value_type=float),
+                'launch_max_y': ParameterValue(
+                    LaunchConfiguration('launch_max_y'), value_type=float),
+                'launch_min_z': ParameterValue(
+                    LaunchConfiguration('launch_min_z'), value_type=float),
+                'launch_max_z': ParameterValue(
+                    LaunchConfiguration('launch_max_z'), value_type=float),
+                'color_rotation_deg': ParameterValue(
+                    LaunchConfiguration('color_rotation_deg'), value_type=int),
             }
         ]
+    )
+
+    # The RealSense driver owns camera_link -> *_optical_frame. This transform
+    # is the only mounting transform and is intentionally configurable here.
+    camera_tf_node = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='realsense_mount_tf',
+        output='screen',
+        arguments=[
+            LaunchConfiguration('camera_x_offset_m'),
+            '0',
+            LaunchConfiguration('camera_height_offset_m'),
+            '0',
+            PythonExpression([
+                'float(', LaunchConfiguration('camera_pitch_deg'),
+                ') * 3.141592653589793 / 180.0'
+            ]),
+            PythonExpression([
+                'float(', LaunchConfiguration('camera_roll_deg'),
+                ') * 3.141592653589793 / 180.0'
+            ]),
+            LaunchConfiguration('camera_parent_frame'),
+            LaunchConfiguration('camera_frame'),
+        ],
     )
 
     # 2. Trajectory Probability Analyzer & Master Path Publisher
@@ -171,7 +226,8 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_analyzer')),
         parameters=[
             {
-                'use_sim_time': LaunchConfiguration('use_sim_time'),
+                'use_sim_time': ParameterValue(
+                    LaunchConfiguration('use_sim_time'), value_type=bool),
             }
         ]
     )
@@ -186,7 +242,8 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('rviz')),
         parameters=[
             {
-                'use_sim_time': LaunchConfiguration('use_sim_time'),
+                'use_sim_time': ParameterValue(
+                    LaunchConfiguration('use_sim_time'), value_type=bool),
             }
         ]
     )
@@ -216,6 +273,8 @@ def generate_launch_description():
         declare_camera_pitch_deg,
         declare_camera_height_offset_m,
         declare_camera_x_offset_m,
+        declare_camera_parent_frame,
+        declare_camera_frame,
         declare_min_y_m,
         declare_max_y_m,
         declare_min_z_m,
@@ -225,6 +284,7 @@ def generate_launch_description():
         declare_launch_min_z,
         declare_launch_max_z,
         cuda_tracker_node,
+        camera_tf_node,
         analyzer_node,
         rviz_node,
         record_process,

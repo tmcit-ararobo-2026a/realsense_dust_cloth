@@ -33,13 +33,25 @@ def generate_launch_description():
     )
 
     # 3. Static Transform for world -> base_link
-    tf_node = Node(
+    world_tf_node = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         arguments=['0', '0', '0', '0', '0', '0', 'world', 'base_link']
     )
 
-    # 4. RViz2 GUI
+    # 4. Static mounting transform. RealSense publishes the optical frames.
+    camera_tf_node = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='realsense_mount_tf',
+        arguments=[
+            '0.15', '0', '0.35', '0',
+            '0.3490658504', '1.5707963268',
+            'base_link', 'camera_link'
+        ]
+    )
+
+    # 5. RViz2 GUI
     rviz_node = Node(
         package='rviz2',
         executable='rviz2',
@@ -51,7 +63,7 @@ def generate_launch_description():
     return LaunchDescription([
         sim_node,
         tracker_node,
-        tf_node,
+        world_tf_node,
+        camera_tf_node,
         rviz_node
     ])
-

@@ -17,8 +17,6 @@
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <tf2_ros/transform_broadcaster.h>
-#include <tf2_ros/static_transform_broadcaster.h>
-#include <tf2/LinearMath/Quaternion.h>
 
 #include "realsense_dust_cloth/cuda_kernels.cuh"
 
@@ -137,7 +135,6 @@ private:
 
     // ROS 2 Interfaces
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
-    std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
     rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pub_point_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_marker_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_roi_markers_;
@@ -154,7 +151,6 @@ private:
 
     void color_image_callback(const sensor_msgs::msg::Image::SharedPtr msg);
 
-    void publish_static_tf();
     void publish_roi_markers(const rclcpp::Time& stamp, const ClothTrackingResult& raw_res);
 
     bool enable_color_stream_{true};
@@ -173,4 +169,3 @@ private:
 };
 
 } // namespace realsense_dust_cloth
-
