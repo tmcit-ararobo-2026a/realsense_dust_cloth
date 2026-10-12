@@ -75,13 +75,13 @@ def generate_launch_description():
 
     declare_camera_height_offset_m = DeclareLaunchArgument(
         'camera_height_offset_m',
-        default_value='0.35',
+        default_value='1.0',
         description='Camera height offset from base_link (m)'
     )
 
     declare_camera_x_offset_m = DeclareLaunchArgument(
         'camera_x_offset_m',
-        default_value='0.15',
+        default_value='0.5',
         description='Camera forward offset from base_link (m)'
     )
 
@@ -117,25 +117,25 @@ def generate_launch_description():
 
     declare_max_z_m = DeclareLaunchArgument(
         'max_z_m',
-        default_value='3.50',
+        default_value='3.30',
         description='PassThrough ROI Max Z (m)'
     )
 
     declare_launch_min_y = DeclareLaunchArgument(
         'launch_min_y',
-        default_value='-0.60',
+        default_value='-0.40',
         description='Ballistic launch gate Min Y (m)'
     )
 
     declare_launch_max_y = DeclareLaunchArgument(
         'launch_max_y',
-        default_value='0.60',
+        default_value='0.40',
         description='Ballistic launch gate Max Y (m)'
     )
 
     declare_launch_min_z = DeclareLaunchArgument(
         'launch_min_z',
-        default_value='0.40',
+        default_value='1.00',
         description='Ballistic launch gate Min Z (m)'
     )
 
