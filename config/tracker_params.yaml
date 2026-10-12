@@ -14,8 +14,8 @@
     camera_height: 480
     camera_pitch_deg: 20.0       # 仰角 (度)
     camera_roll_deg: 90.0        # 縦置き (度)
-    camera_height_offset_m: 0.35 # base_link からのカメラ高さ (m)
-    camera_x_offset_m: 0.15      # base_link からの前方位置 (m)
+    camera_height_offset_m: 1.0 # base_link からのカメラ高さ (m)
+    camera_x_offset_m: 0.5      # base_link からの前方位置 (m)
 
     # CUDA / Direct API 設定
     use_direct_realsense: true
@@ -27,12 +27,12 @@
     jpeg_quality: 65
 
     # 空間ROIフィルタ（base_link 基準: 縦置きRoll90, 仰角20度）
-    min_x_m: 0.30            # ロボット手前境界 (m)
+    min_x_m: 0.50            # ロボット手前境界 (m)
     max_x_m: 5.50            # 着地先境界 (m, 5.5m着地までカバー)
     min_y_m: -1.20           # 左右幅 (m)
     max_y_m: 1.20
     min_z_m: 0.00            # 床面境界 (m)
-    max_z_m: 3.50            # 上限 (m, 最高到達点を完全にカバー)
+    max_z_m: 3.30            # 上限 (m, 最高到達点を完全にカバー)
 
     # 背景差分（静止した床・壁・天井・家具を100%消去し、動く雑巾のみ抽出）
     use_bg_subtraction: true
@@ -41,11 +41,11 @@
     
     # 弾道ステートマシン（放物線で飛ぶ雑巾のみをロックオン）
     enable_ballistic_filter: true
-    launch_min_x: 0.40       # 発射口エリア X 最小(m)
+    launch_min_x: 0.50       # 発射口エリア X 最小(m)
     launch_max_x: 1.50       # 発射口エリア X 最大(m)
     launch_min_y: -0.40      # 発射口エリア Y 最小(m)
     launch_max_y: 0.40       # 発射口エリア Y 最大(m)
-    launch_min_z: 0.50       # 発射口エリア Z 最小(m, 床の雑巾を無視)
+    launch_min_z: 1.00       # 発射口エリア Z 最小(m, 床の雑巾を無視)
     launch_max_z: 2.00       # 発射口エリア Z 最大(m)
     min_launch_vx: 0.10      # 発射確定最小前進速度(m/s)
     gate_radius_m: 0.80      # 探索ゲート半径(m)
