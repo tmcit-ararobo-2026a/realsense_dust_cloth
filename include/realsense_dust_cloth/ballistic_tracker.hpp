@@ -48,10 +48,18 @@ public:
     double launch_max_z{1.30};
     double gate_radius_m{0.80};
     int max_lost_frames{15};
-    double gravity_m_s2{9.8};
+    double gravity_m_s2{9.81};
     int min_cluster_points{20};
-    double drag_coeff{0.80};
+    double drag_coeff{0.40};
     double landing_min_z{0.10};
+
+    // Alpha-Beta Ballistic Filter & Physical Velocity Bounds
+    double pos_smoothing_alpha{0.65}; ///< Position measurement blend weight (0..1)
+    double vel_smoothing_beta{0.30};  ///< Velocity measurement blend weight (0..1)
+    double max_vx_m_s{6.00};          ///< Maximum physical forward velocity (m/s)
+    double max_abs_vy_m_s{2.00};      ///< Maximum physical lateral velocity (m/s)
+    double min_vz_m_s{-6.00};         ///< Minimum physical vertical velocity (m/s)
+    double max_vz_m_s{4.00};          ///< Maximum physical vertical velocity (m/s)
 
     /**
      * @brief Reset tracker state machine to IDLE and clear tracking history.

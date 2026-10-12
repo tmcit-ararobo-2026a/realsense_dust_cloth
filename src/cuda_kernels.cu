@@ -349,20 +349,14 @@ namespace realsense_dust_cloth
                         float dpy = c_cy - pred_pos.y;
                         float dpz = c_cz - pred_pos.z;
                         float dist = sqrtf(dpx * dpx + dpy * dpy + dpz * dpz);
-                        if (dist <= filter.gate_radius_m)
-                        {
-                            // Close to ballistic prediction: highest priority
-                            score = 3000.0f - dist * 1000.0f + static_cast<float>(sz) * 0.1f;
-                        }
-                        else if (dist <= filter.gate_radius_m * 2.0f || c_cx >= pred_pos.x - 0.40f)
-                        {
-                            // Extended gate: tolerate aerodynamic drag or fluttering
-                            score = 1000.0f - dist * 200.0f + static_cast<float>(sz) * 0.05f;
-                        }
-                        else
+
+                        if (dist > filter.gate_radius_m)
                         {
                             continue; // Out of tracking gate
                         }
+
+                        // Close to ballistic prediction: highest priority
+                        score = 3000.0f - dist * 1000.0f + static_cast<float>(sz) * 0.1f;
                     }
                     else
                     {

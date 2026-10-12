@@ -38,14 +38,14 @@
     # 【4. 発射口検知ゲート (弾道ステートマシン)】
     enable_ballistic_filter: true
     launch_min_x: 0.40                             # 発射口エリア X 最小 (m)
-    launch_max_x: 1.80                             # 発射口エリア X 最大 (m)
-    launch_min_y: -0.50                            # 発射口エリア Y 最小 (m)
-    launch_max_y: 0.50                             # 発射口エリア Y 最大 (m)
-    launch_min_z: 0.50                             # 発射口エリア Z 最小 (m)
-    launch_max_z: 1.80                             # 発射口エリア Z 最大 (m)
+    launch_max_x: 1.20                             # 発射口エリア X 最大 (m)
+    launch_min_y: -0.25                            # 発射口エリア Y 最小 (m)
+    launch_max_y: 0.25                             # 発射口エリア Y 最大 (m)
+    launch_min_z: 0.80                             # 発射口エリア Z 最小 (m)
+    launch_max_z: 1.50                             # 発射口エリア Z 最大 (m)
     min_launch_vx: 0.10                            # 発射確定最小前進速度 (m/s)
-    gate_radius_m: 0.80                            # 探索ゲート半径 (m)
-    max_lost_frames: 25                            # 見失い許容フレーム数
+    gate_radius_m: 0.50                            # 探索ゲート半径 (m)
+    max_lost_frames: 6                             # 見失い許容フレーム数 (着地後の背景誤吸着を防止)
 
     # 【5. 背景差分 (静止物除去)】
     use_bg_subtraction: true                       # 静止した壁・棚・床を完全消去
@@ -54,10 +54,10 @@
 
     # 【6. 点群クラスタリング & 雑巾抽出】
     voxel_size_m: 0.02                             # ボクセル間引き (2cm)
-    cluster_eps_m: 0.18                            # クラスタ探索距離 (m)
+    cluster_eps_m: 0.14                            # クラスタ探索距離 (m, 遠方背景との結合を防止)
     min_cluster_points: 25                         # 雑巾クラスタ最小点数 (微小ノイズ除外)
     max_cluster_points: 6000
-    max_cloth_size_m: 0.90
+    max_cloth_size_m: 1.25
     trajectory_history_sec: 15.0
 
     # 【7. カラー映像配信設定】

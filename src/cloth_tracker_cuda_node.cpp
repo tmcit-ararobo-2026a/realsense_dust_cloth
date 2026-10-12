@@ -549,13 +549,11 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
         } else {
             const auto& prev_pt = trajectory_points_.back().second;
             double dx = p_geom.x - prev_pt.x;
-            if (dx >= -0.25) {
-                double dy = p_geom.y - prev_pt.y;
-                double dz = p_geom.z - prev_pt.z;
-                double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-                if (dist >= 0.003) { // 3mm resolution: captures EVERY camera frame!
-                    trajectory_points_.emplace_back(now_sec, p_geom);
-                }
+            double dy = p_geom.y - prev_pt.y;
+            double dz = p_geom.z - prev_pt.z;
+            double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+            if (dist >= 0.005) {
+                trajectory_points_.emplace_back(now_sec, p_geom);
             }
         }
 
