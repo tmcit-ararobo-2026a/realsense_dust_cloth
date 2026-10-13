@@ -72,13 +72,29 @@ ros2 launch realsense_dust_cloth cloth_tracker.launch.py \
 
 ### C. 記録済み rosbag を再生してテスト
 
+rosbag 再生時は、実機カメラ直接接続ではなく ROS 2 トピックから画像を読み込むため、**`use_direct_realsense:=false`** を指定してください。
+
 ```bash
-# ターミナル1: トラッカー & RViz
-ros2 launch realsense_dust_cloth cloth_tracker.launch.py rviz:=true use_sim_time:=true
+# ターミナル1: トラッカー & RViz2 起動
+ros2 launch realsense_dust_cloth cloth_tracker.launch.py rviz:=true use_sim_time:=true use_direct_realsense:=false
 
 # ターミナル2: bag 再生
 ros2 bag play <記録したbagフォルダ名> --loop --clock
 ```
+
+#### 💡 過去のテスト rosbag を再生する場合
+水平設置（仰角 0°）で撮影された過去のテスト rosbag を再生する場合は、専用設定ファイル **`test_bag_params.yaml`** を指定してください：
+
+```bash
+# ターミナル1: test_bag 専用設定で起動（ファイル名指定で自動解決されます）
+ros2 launch realsense_dust_cloth cloth_tracker.launch.py \
+  params_file:=test_bag_params.yaml \
+  rviz:=true use_sim_time:=true
+
+# ターミナル2: bag 再生
+ros2 bag play <記録したbagフォルダへのパス> --loop --clock
+```
+* **理由**: デフォルト設定（`tracker_params.yaml`）は本番機体用（上向き 20°、探索範囲 5.5m）です。水平設置で撮影された過去の bag に適用すると、座標が傾いて計算され、着地後に床や奥の壁ノイズを拾って軌道が折れ曲がってしまいます。`test_bag_params.yaml` を指定することで、撮影当時のカメラ角度（仰角 0°）・範囲（3.5m）で綺麗な放物線が再現されます。
 
 ---
 

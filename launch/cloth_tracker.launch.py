@@ -10,6 +10,12 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 def _create_tracker_node(context):
     params_file = LaunchConfiguration('params_file').perform(context)
+    if not os.path.isabs(params_file) and not os.path.exists(params_file):
+        pkg_share = get_package_share_directory('realsense_dust_cloth')
+        candidate = os.path.join(pkg_share, 'config', params_file)
+        if os.path.exists(candidate):
+            params_file = candidate
+
     use_sim_time_str = LaunchConfiguration('use_sim_time').perform(context)
     use_direct_rs_str = LaunchConfiguration('use_direct_realsense').perform(context)
     use_bg_sub_str = LaunchConfiguration('use_bg_subtraction').perform(context)
