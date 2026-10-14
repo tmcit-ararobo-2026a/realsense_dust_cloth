@@ -375,7 +375,7 @@ namespace realsense_dust_cloth
                     }
                     else
                     {
-                        // When waiting for launch: prioritize clusters in the configured launch/eject zone
+                        // When waiting for launch: ONLY accept clusters originating inside the configured launch zone
                         if (c_cx >= filter.launch_min_x && c_cx <= filter.launch_max_x &&
                             c_cy >= filter.launch_min_y && c_cy <= filter.launch_max_y &&
                             c_cz >= filter.launch_min_z && c_cz <= filter.launch_max_z)
@@ -384,8 +384,8 @@ namespace realsense_dust_cloth
                         }
                         else
                         {
-                            // Outside launcher zone
-                            score = static_cast<float>(sz) * 0.01f;
+                            // Strictly reject any clusters outside the launch gate while waiting for launch
+                            continue;
                         }
                     }
 

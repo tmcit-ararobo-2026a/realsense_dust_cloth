@@ -47,7 +47,7 @@
     launch_max_y: 0.40                             # 発射口エリア Y 最大 (m)
     launch_min_z: 1.00                             # 発射口エリア Z 最小 (m, 床の雑巾を無視)
     launch_max_z: 2.00                             # 発射口エリア Z 最大 (m)
-    min_launch_vx: 0.10                            # 発射判定 最小前進速度 (m/s)
+    min_launch_vx: 0.50                            # 発射判定 最小前進速度 (m/s, 発射口からこの速度以上で前進した瞬間のみ追尾開始)
     gate_radius_m: 0.80                            # 探索ゲート半径 (m)
     max_lost_frames: 20                            # 見失い許容フレーム数 (60fps時: 約0.33秒)
     landing_min_z: 0.03                            # 着地確定判定高さ (m, この高さを下回ると着地と判定して追従完了)
