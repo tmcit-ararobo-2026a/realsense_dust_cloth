@@ -198,7 +198,10 @@ python3 ~/ros2_ws/src/realsense_dust_cloth/realsense_dust_cloth/trajectory_proba
 | `voxel_size_m` | `0.02` [m] | ボクセルダウンサンプリング（高密度点群保持） |
 | `cluster_eps_m` | `0.20` [m] | クラスタ探索距離 |
 | `gate_radius_m` | `0.80` [m] | 飛行追跡ゲート半径 |
-| `max_lost_frames` | `25` | 見失い許容フレーム数 |
+| `max_lost_frames` | `20` | 見失い許容フレーム数 |
+| `landing_min_z` | `0.03` [m] | 着地判定高さ（この高さを下回ると追従完了。床すれすれまで追う場合は低く設定） |
+| `drag_coeff` | `0.40` | 空気抵抗減衰係数 |
+| `max_vx_m_s` | `15.0` [m/s] | 飛翔最大前進速度上限 |
 | `use_direct_realsense` | `true` | RealSense C++ API 直接ストリーミング |
 | `use_bg_subtraction` | `true` | 静止背景差分（停止時は `true`、台車走行射撃時は `false`） |
 | `enable_color_stream` | `true` | JPEG 圧縮カラー配信（rosbag 記録 & 遠隔監視用） |

@@ -143,6 +143,10 @@ void ClothTrackerCudaNode::declare_parameters() {
     this->declare_parameter("gate_radius_m", 0.60);
     this->declare_parameter("max_lost_frames", 15);
     this->declare_parameter("min_launch_vx", 0.10);
+    this->declare_parameter("landing_min_z", 0.05);
+    this->declare_parameter("drag_coeff", 0.40);
+    this->declare_parameter("vel_smoothing_beta", 0.30);
+    this->declare_parameter("max_vx_m_s", 15.0);
 }
 
 void ClothTrackerCudaNode::load_parameters() {
@@ -196,6 +200,10 @@ void ClothTrackerCudaNode::load_parameters() {
     ballistic_tracker_.max_lost_frames = this->get_parameter("max_lost_frames").as_int();
     ballistic_tracker_.min_launch_vx = this->get_parameter("min_launch_vx").as_double();
     ballistic_tracker_.min_cluster_points = filter_cfg_.min_cluster_points;
+    ballistic_tracker_.landing_min_z = this->get_parameter("landing_min_z").as_double();
+    ballistic_tracker_.drag_coeff = this->get_parameter("drag_coeff").as_double();
+    ballistic_tracker_.vel_smoothing_beta = this->get_parameter("vel_smoothing_beta").as_double();
+    ballistic_tracker_.max_vx_m_s = this->get_parameter("max_vx_m_s").as_double();
 
     // Synchronize CUDA filter launch gate with tracker parameters (No hardcoded values!)
     filter_cfg_.launch_min_x = static_cast<float>(ballistic_tracker_.launch_min_x);
