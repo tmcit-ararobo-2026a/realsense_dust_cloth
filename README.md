@@ -63,9 +63,10 @@ Isaac Sim で RealSense を配置して疎通・軌道確認を行う場合（�
 source ~/ros2_ws/install/setup.bash
 
 ros2 launch realsense_dust_cloth cloth_tracker.launch.py \
-  rviz:=true \
+  use_direct_realsense:=false \
   use_sim_time:=true \
-  use_bg_subtraction:=false
+  use_bg_subtraction:=false \
+  rviz:=true
 ```
 
 ---
