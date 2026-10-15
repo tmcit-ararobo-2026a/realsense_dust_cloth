@@ -99,45 +99,77 @@ ros2 bag play <記録したbagフォルダへのパス> --loop --clock
 
 ---
 
-## 4. 飛翔データの記録・保存方法（用途別の保存ガイド）
+## 4. 飛翔データの軽量記録・再生手順（rosbag & 圧縮カラー映像）
 
-用途（「後から RViz でそのまま再生したい」か「Excel/Python で座標値を分析したい」か）に合わせて以下の保存方法を利用できます。
-
-### 方法1. launch 起動時に自動で rosbag 録画する（一番おすすめ・TF完全保存）
-起動コマンドに `record:=true` を付与するだけで、雑巾の TF 座標軸（`flying_cloth`）や軌跡、圧縮カラー映像が自動で rosbag に記録されます：
-
-```bash
-# 実機で起動しつつ、自動で rosbag 録画も開始
-ros2 launch realsense_dust_cloth cloth_tracker.launch.py use_direct_realsense:=true record:=true
-
-# RViz も同時に開く場合
-ros2 launch realsense_dust_cloth cloth_tracker.launch.py use_direct_realsense:=true rviz:=true record:=true
-```
-
-* **記録される主なトピック**:
-  * `/tf`, `/tf_static`: 雑巾の座標フレーム（`base_link -> flying_cloth`）
-  * `/cloth/position`: 雑巾重心位置（PointStamped）
-  * `/cloth/trajectory_marker`: 3次元飛翔軌跡（Marker）
-  * `/cloth/measured_path`: 計測点列パス（Path）
-  * `/camera/camera/color/image_raw/compressed`: 超軽量 JPEG 圧縮映像（容量を食わずに投擲映像も保存）
-* **停止方法**: 起動した端末で `Ctrl + C` を押すと保存が完了します（実行フォルダに `rosbag2_日時/` が作成されます）。
-* **再生方法**:
-  ```bash
-  ros2 bag play rosbag2_2026_xx_xx-xx_xx_xx
-  ```
+生画像（RAW）をそのまま記録すると秒間数百MB消費し、Wi-Fi環境ではパケット落ちが発生します。本パッケージでは **JPEG圧縮カラー映像 ＋ TF ＋ 弾道データ** の最小構成で記録（12秒で約12MBの超軽量）することを推奨しています。
 
 ---
 
-### 方法2. 手動で別端末から rosbag 録画する
-必要なトピックのみを指定して手動で録画したい場合：
+### A. 実機での rosbag 記録コマンド
+
+実機（ロボットまたは手元PC）のターミナルで以下を実行します：
 
 ```bash
-ros2 bag record /tf /tf_static /cloth/position /cloth/trajectory_marker /cloth/measured_path
+ros2 bag record \
+  /tf \
+  /tf_static \
+  /cloth/position \
+  /cloth/trajectory_marker \
+  /cloth/measured_path \
+  /camera/camera/color/image_raw/compressed \
+  -o cloth_test_01
 ```
+* **記録される内容**:
+  * `/tf`, `/tf_static`: カメラ設置姿勢および飛翔中の雑巾座標（`flying_cloth`）
+  * `/cloth/position`: 雑巾の3D位置座標（PointStamped: X, Y, Z）
+  * `/cloth/trajectory_marker`: RViz用の赤い球体・弾道マーカー
+  * `/cloth/measured_path`: 計測軌跡のライン（Path）
+  * `/camera/camera/color/image_raw/compressed`: JPEG圧縮カラー映像（30fps・超軽量）
+* **終了**: 投擲が終わったら **`Ctrl + C`** で保存が完了します。
+* ※ 2回目以降は `-o cloth_test_02`, `-o cloth_test_03` のように保存名を変更してください。
+
+> 💡 **launch のオプションで自動録画する場合**:  
+> 実機起動時に `record:=true` を渡すだけでも上記と同じ構成で自動録画されます：  
+> `ros2 launch realsense_dust_cloth cloth_tracker.launch.py record:=true`
 
 ---
 
-### 方法3. 試行ごとに CSV と弾道グラフ（PNG）を自動保存する
+### B. 記録した rosbag の再生・カラー映像の確認
+
+記録した bag を再生し、カラー動画や3D弾道を確認する手順です。用途に合わせて2つの方法が選べます：
+
+#### 方法1. `rqt_image_view` でカラー動画を直接見る（一番手軽・確実）
+追尾ノードや複雑な設定なしで、撮影映像を動画ウィンドウですぐに確認したい場合：
+
+```bash
+# ターミナル1: bag再生（-l でループ再生）
+ros2 bag play cloth_test_01 -l
+
+# ターミナル2: 画像ビューア
+ros2 run rqt_image_view rqt_image_view
+```
+※ ウィンドウ左上のドロップダウンメニューから **`/camera/camera/color/image_raw/compressed`** を選択すると、投擲時のカラー映像が流れます。
+
+---
+
+#### 方法2. RViz2 の画面内で3D軌跡（放物線）と同期して見る
+RVizの3D空間上で、飛行放物線・球体マーカーとカラー映像を同時に再生したい場合：
+
+```bash
+# ターミナル1: bag再生（-l でループ再生）
+ros2 bag play cloth_test_01 -l
+
+# ターミナル2: 圧縮画像の解凍中継スクリプト（RViz用トピックへ変換）
+python3 ~/ros2_ws/src/realsense_dust_cloth/realsense_dust_cloth/decompress_image.py
+
+# ターミナル3: RViz起動
+ros2 run rviz2 rviz2 -d ~/ros2_ws/src/realsense_dust_cloth/rviz/cloth_tracker.rviz
+```
+※ RViz画面左下のカメラビュー枠に、記録されたカラー映像が3D軌跡と完全に同期して表示されます。
+
+---
+
+### C. 試行ごとに CSV と弾道グラフ（PNG）を自動保存する場合
 投擲ごとに「何フレーム目でどこを通ってどこに着地したか」を数値 CSV として記録し、終了時に弾道グラフ画像を自動生成したい場合：
 
 ```bash
@@ -181,32 +213,35 @@ python3 ~/ros2_ws/src/realsense_dust_cloth/realsense_dust_cloth/trajectory_proba
 
 パラメータはすべて `config/tracker_params.yaml` に集約されています。ロボットの構造変更や競技場の寸法変更に合わせて、このファイルを直接編集してください。
 
-| パラメータ | 既定値 | 説明 |
+| パラメータ | 設定値 | 説明 |
 | :--- | :---: | :--- |
 | `camera_x_offset_m` | `0.50` [m] | ロボット原点 (base_link) からのカメラ前方位置 |
 | `camera_height_offset_m` | `1.00` [m] | ロボット原点 (base_link) からのカメラ搭載高さ |
 | `camera_pitch_deg` | `20.0` [deg] | カメラ仰角（上向き 20°） |
-| `camera_roll_deg` | `90.0` [deg] | カメラ縦置き角度（90° ロール） |
-| `min_x_m` / `max_x_m` | `0.50` / `5.50` [m] | 前後方向の ROI 抽出空間（5.5m先の着地まで追従） |
+| `camera_roll_deg` | `90.0` [deg] | カメラ縦置き角度（時計回り 90° ロール） |
+| `min_x_m` / `max_x_m` | `0.20` / `5.50` [m] | 前後方向の ROI 抽出空間（発射口手前20cm〜着地先5.5m） |
 | `min_y_m` / `max_y_m` | `-1.20` / `1.20` [m] | 左右方向の ROI 抽出空間 |
-| `min_z_m` / `max_z_m` | `0.00` / `3.30` [m] | 高さ方向の抽出空間（最高到達点から床面まで完全包含） |
-| `launch_min_x` / `launch_max_x` | `0.50` / `1.50` [m] | 発射口ロックオンエリア X |
-| `launch_min_y` / `launch_max_y` | `-0.40` / `0.40` [m] | 発射口ロックオンエリア Y |
-| `launch_min_z` / `launch_max_z` | `1.00` / `2.00` [m] | 発射口ロックオンエリア Z（床置き雑巾の誤検出を防止） |
-| `min_launch_vx` | `0.10` [m] | 発射確定最小前進速度 |
-| `min_cluster_points` | `10` | 雑巾最小点群数（遠距離でも着地まで捕捉） |
-| `voxel_size_m` | `0.02` [m] | ボクセルダウンサンプリング（高密度点群保持） |
-| `cluster_eps_m` | `0.20` [m] | クラスタ探索距離 |
-| `gate_radius_m` | `0.80` [m] | 飛行追跡ゲート半径 |
+| `min_z_m` / `max_z_m` | `0.08` / `3.30` [m] | 高さ方向の抽出空間（最高到達点から床面まで完全包含） |
+| `launch_min_x` / `launch_max_x` | `0.20` / `2.00` [m] | 発射口ロックオンエリア X（手前20cm〜前方2mまで飛び出しを捕捉） |
+| `launch_min_y` / `launch_max_y` | `-0.50` / `0.50` [m] | 発射口ロックオンエリア Y（左右幅 1m） |
+| `launch_min_z` / `launch_max_z` | `1.10` / `1.80` [m] | 発射口ロックオンエリア Z |
+| `min_launch_vx` | `0.20` [m/s] | 発射確定最小前進速度 |
+| `min_launch_move_m` | `0.04` [m] | 発射確定最小前進移動量（4cm前進でロックオン開始） |
+| `min_cluster_points` | `4` | 雑巾最小点群数（超高速時でも捕捉） |
+| `max_cloth_size_m` | `0.50` [m] | 雑巾最大対角サイズ（200x300mm布に合わせて50cmとし、人間や壁を除外） |
+| `voxel_size_m` | `0.02` [m] | ボクセルダウンサンプリング（2cm） |
+| `cluster_eps_m` | `0.20` [m] | クラスタ探索距離（200x300mm布を1塊に統合） |
+| `gate_radius_m` | `1.20` [m] | 飛行追跡ゲート半径 |
 | `max_lost_frames` | `20` | 見失い許容フレーム数 |
-| `landing_min_z` | `0.03` [m] | 着地判定高さ（この高さを下回ると追従完了。床すれすれまで追う場合は低く設定） |
+| `landing_min_z` | `0.05` [m] | 着地確定判定高さ |
 | `drag_coeff` | `0.40` | 空気抵抗減衰係数 |
 | `max_vx_m_s` | `15.0` [m/s] | 飛翔最大前進速度上限 |
+| `rs_exposure_us` | `4500` [μs] | シャッタースピード（4.5ms固定露出で残像ブレを物理防止） |
 | `use_direct_realsense` | `true` | RealSense C++ API 直接ストリーミング |
 | `use_bg_subtraction` | `true` | 静止背景差分（停止時は `true`、台車走行射撃時は `false`） |
 | `enable_color_stream` | `true` | JPEG 圧縮カラー配信（rosbag 記録 & 遠隔監視用） |
 | `jpeg_quality` | `65` | JPEG 圧縮品質（1〜100、65 で帯域 95% 削減） |
-| `color_rotation_deg` | `180` | 縦置きカメラ映像の回転補正角度 |
+| `color_rotation_deg` | `90` | 縦置きカメラ映像の正立回転角度 |
 
 ### Launch 起動時のモード切り替えオプション（スイッチ引数）
 `cloth_tracker.launch.py` では、必要に応じて実行モードのみを引数で切り替えられます：

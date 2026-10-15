@@ -77,6 +77,7 @@ install(PROGRAMS
   realsense_dust_cloth/trajectory_probability_analyzer.py
   realsense_dust_cloth/record_trajectories.py
   realsense_dust_cloth/sim_cloth_flight.py
+  realsense_dust_cloth/decompress_image.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
