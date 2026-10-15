@@ -44,8 +44,11 @@
     launch_min_z: 1.40                             # 発射口エリア Z 最小 (m)
     launch_max_z: 2.00                             # 発射口エリア Z 最大 (m)
     min_launch_vx: 0.10                            # 発射確定最小前進速度 (m/s)
+    min_launch_move_m: 0.08                        # 発射確定最小移動変位 (m)
+    launch_timeout_sec: 0.20                       # 発射保留タイムアウト時間 (s)
     gate_radius_m: 0.50                            # 探索ゲート半径 (m)
     max_lost_frames: 6                             # 見失い許容フレーム数 (着地後の背景誤吸着を防止)
+    min_track_points_limit: 8                      # 飛翔追跡 最小点数下限
     landing_min_z: 0.05                            # 着地確定判定高さ (m)
     drag_coeff: 0.40                               # 空気抵抗減衰係数
     vel_smoothing_beta: 0.30                       # 速度平滑化ブレンド率
@@ -55,13 +58,18 @@
     use_bg_subtraction: true                       # 静止した壁・棚・床を完全消去
     bg_diff_thresh_m: 0.08                         # 8cm手前の動く物体のみ抽出 (RealSenseジッター遮断)
     bg_target_frames: 10                           # 背景学習フレーム数
+    reject_uncalibrated_bg: false                  # 背景未計測領域の遠方点群を除外するか
+    uncalibrated_bg_max_depth_m: 3.50              # 背景未計測時に許容する最大距離 (m)
 
     # 【6. 点群クラスタリング & 雑巾抽出】
     voxel_size_m: 0.02                             # ボクセル間引き (2cm)
     cluster_eps_m: 0.14                            # クラスタ探索距離 (m, 遠方背景との結合を防止)
     min_cluster_points: 25                         # 雑巾クラスタ最小点数 (微小ノイズ除外)
     max_cluster_points: 6000
-    max_cloth_size_m: 1.25
+    min_cloth_size_m: 0.05                         # 雑巾最小3Dサイズ (m)
+    max_cloth_size_m: 1.25                         # 雑巾最大3D対角サイズ (m)
+    continuity_thresh_m: 0.30                      # 2Dエッジ連続性チェック許容深度差 (m)
+    continuity_min_neighbors: 2                    # 4近傍のうち必要な連続ピクセル数 (0〜4)
     trajectory_history_sec: 15.0
 
     # 【7. カラー映像配信設定】

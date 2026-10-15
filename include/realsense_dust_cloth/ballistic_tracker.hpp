@@ -33,10 +33,13 @@ public:
     int tracked_count{0};
     int lost_count{0};
 
-    // Launch velocity detection (prevents stationary noise from triggering)
+    // Launch tracking and displacement confirmation
     bool has_pending{false};
     double pending_x{0.0}, pending_y{0.0}, pending_z{0.0};
     double pending_stamp{0.0};
+    double launch_x{0.0}, launch_y{0.0}, launch_z{0.0};
+    double launch_stamp{0.0};
+    bool launch_displacement_confirmed{false};
     double min_launch_vx{0.30}; ///< Minimum forward velocity (m/s) to confirm launch
 
     // Configurable Parameters (Loaded via ROS 2 tracker_params.yaml)
@@ -59,6 +62,11 @@ public:
     double max_abs_vy_m_s{2.00};      ///< Maximum physical lateral velocity (m/s)
     double min_vz_m_s{-6.00};         ///< Minimum physical vertical velocity (m/s)
     double max_vz_m_s{4.00};          ///< Maximum physical vertical velocity (m/s)
+
+    // High-speed Launch & Tracking Controls (Loaded via ROS 2 tracker_params.yaml)
+    double min_launch_move_m{0.08};   ///< Minimum forward displacement (m) to confirm launch
+    double launch_timeout_sec{0.20};  ///< Timeout to reset stationary launch pending anchor (s)
+    int min_track_points_limit{8};    ///< Lower bound for in-flight minimum cluster points
 
     /**
      * @brief Reset tracker state machine to IDLE and clear tracking history.

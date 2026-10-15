@@ -48,7 +48,14 @@ namespace realsense_dust_cloth
         float cluster_eps_m{0.15f};
         int min_cluster_points{10};
         int max_cluster_points{1500};
-        float max_cloth_size_m{0.65f};
+        float min_cloth_size_m{0.05f};          // 最小3Dサイズ制限 (m, 微小ノイズ除外)
+        float max_cloth_size_m{0.65f};          // 最大3D対角サイズ制限 (m)
+
+        // 2D Edge Continuity & Background Hole Rejection (Configurable via YAML)
+        float continuity_thresh_m{0.30f};       // エッジ連続性チェックの許容深度差 (m)
+        int continuity_min_neighbors{2};        // 4近傍のうち必要な連続ピクセル数 (0: 無効, 1〜4)
+        bool reject_uncalibrated_bg{false};     // 背景深度0(未計測)の遠方ノイズを遮断するか
+        float uncalibrated_bg_max_depth_m{3.5f};// 背景未計測時に許容する最大距離 (m)
 
         // Launch Gate Bounds & Ballistic Prioritization
         float launch_min_x{0.40f};

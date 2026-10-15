@@ -106,6 +106,9 @@ private:
     int color_fps_{30};
     int jpeg_quality_{65};
     int color_rotation_deg_{180};
+    int depth_fps_{60};
+    double rs_laser_power_{-1.0};
+    int rs_exposure_us_{-1};
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_rotated_color_;
     TrackerState prev_state_{TrackerState::IDLE};
 

@@ -99,21 +99,30 @@ namespace realsense_dust_cloth
                         return; // Part of background (walls, ceiling, floor, furniture)
                     }
                 }
+                else if (filter.reject_uncalibrated_bg && z_raw > filter.uncalibrated_bg_max_depth_m)
+                {
+                    return; // Part of uncalibrated far background
+                }
             }
 
-            // 2D Depth Continuity Check: Reject stereo "flying pixels" (edge bleeding at silhouette boundaries)
-            if (u < 2 || u >= intrin.width - 2 || v < 2 || v >= intrin.height - 2)
-                return;
-            float z_up = depth[(v - 2) * intrin.width + u] * intrin.depth_scale;
-            float z_dn = depth[(v + 2) * intrin.width + u] * intrin.depth_scale;
-            float z_lf = depth[v * intrin.width + (u - 2)] * intrin.depth_scale;
-            float z_rt = depth[v * intrin.width + (u + 2)] * intrin.depth_scale;
-            if (fabsf(z_raw - z_up) > filter.bg_diff_thresh_m ||
-                fabsf(z_raw - z_dn) > filter.bg_diff_thresh_m ||
-                fabsf(z_raw - z_lf) > filter.bg_diff_thresh_m ||
-                fabsf(z_raw - z_rt) > filter.bg_diff_thresh_m)
+            // 2D Depth Continuity Check (Parameterizable via FilterConfig / YAML)
+            if (filter.continuity_min_neighbors > 0)
             {
-                return;
+                if (u < 2 || u >= intrin.width - 2 || v < 2 || v >= intrin.height - 2)
+                    return;
+                float z_up = depth[(v - 2) * intrin.width + u] * intrin.depth_scale;
+                float z_dn = depth[(v + 2) * intrin.width + u] * intrin.depth_scale;
+                float z_lf = depth[v * intrin.width + (u - 2)] * intrin.depth_scale;
+                float z_rt = depth[v * intrin.width + (u + 2)] * intrin.depth_scale;
+                int valid_neighbors = 0;
+                if (z_up > 0.0f && fabsf(z_raw - z_up) <= filter.continuity_thresh_m) valid_neighbors++;
+                if (z_dn > 0.0f && fabsf(z_raw - z_dn) <= filter.continuity_thresh_m) valid_neighbors++;
+                if (z_lf > 0.0f && fabsf(z_raw - z_lf) <= filter.continuity_thresh_m) valid_neighbors++;
+                if (z_rt > 0.0f && fabsf(z_raw - z_rt) <= filter.continuity_thresh_m) valid_neighbors++;
+                if (valid_neighbors < filter.continuity_min_neighbors)
+                {
+                    return;
+                }
             }
 
             // Camera optical frame (Z forward, X right, Y down)
@@ -347,8 +356,10 @@ namespace realsense_dust_cloth
                     float dy = cluster_max[i].y - cluster_min[i].y;
                     float dz = cluster_max[i].z - cluster_min[i].z;
 
-                    // Reject opponent robot or huge noise (> max_cloth_size_m)
-                    if (dx > filter.max_cloth_size_m || dy > filter.max_cloth_size_m || dz > filter.max_cloth_size_m)
+                    // Reject opponent robot or huge noise (> max_cloth_size_m) or tiny speckle noise (< min_cloth_size_m)
+                    float max_dim = fmaxf(dx, fmaxf(dy, dz));
+                    if (dx > filter.max_cloth_size_m || dy > filter.max_cloth_size_m || dz > filter.max_cloth_size_m ||
+                        max_dim < filter.min_cloth_size_m)
                     {
                         continue;
                     }
