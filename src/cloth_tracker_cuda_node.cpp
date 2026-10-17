@@ -160,7 +160,14 @@ void ClothTrackerCudaNode::declare_parameters() {
     this->declare_parameter("landing_min_z", 0.05);
     this->declare_parameter("drag_coeff", 0.40);
     this->declare_parameter("vel_smoothing_beta", 0.30);
+    this->declare_parameter("min_flight_vx_m_s", -0.30);
     this->declare_parameter("max_vx_m_s", 15.0);
+    this->declare_parameter("max_abs_vy_m_s", 2.50);
+    this->declare_parameter("min_vz_m_s", -10.0);
+    this->declare_parameter("max_vz_m_s", 8.0);
+    this->declare_parameter("max_flight_duration_sec", 2.50);
+    this->declare_parameter("min_stationary_move_m", 0.025);
+    this->declare_parameter("max_stationary_frames", 8);
 }
 
 void ClothTrackerCudaNode::load_parameters() {
@@ -239,9 +246,17 @@ void ClothTrackerCudaNode::load_parameters() {
     ballistic_tracker_.landing_min_z = this->get_parameter("landing_min_z").as_double();
     ballistic_tracker_.drag_coeff = this->get_parameter("drag_coeff").as_double();
     ballistic_tracker_.vel_smoothing_beta = this->get_parameter("vel_smoothing_beta").as_double();
+    ballistic_tracker_.min_flight_vx_m_s = this->get_parameter("min_flight_vx_m_s").as_double();
     ballistic_tracker_.max_vx_m_s = this->get_parameter("max_vx_m_s").as_double();
+    ballistic_tracker_.max_abs_vy_m_s = this->get_parameter("max_abs_vy_m_s").as_double();
+    ballistic_tracker_.min_vz_m_s = this->get_parameter("min_vz_m_s").as_double();
+    ballistic_tracker_.max_vz_m_s = this->get_parameter("max_vz_m_s").as_double();
+    ballistic_tracker_.max_flight_duration_sec = this->get_parameter("max_flight_duration_sec").as_double();
+    ballistic_tracker_.min_stationary_move_m = this->get_parameter("min_stationary_move_m").as_double();
+    ballistic_tracker_.max_stationary_frames = this->get_parameter("max_stationary_frames").as_int();
 
-    // Synchronize CUDA filter launch gate with tracker parameters (No hardcoded values!)
+    // Synchronize CUDA filter launch gate & tracking points with tracker parameters (No hardcoded values!)
+    filter_cfg_.min_tracking_points = ballistic_tracker_.min_track_points_limit;
     filter_cfg_.launch_min_x = static_cast<float>(ballistic_tracker_.launch_min_x);
     filter_cfg_.launch_max_x = static_cast<float>(ballistic_tracker_.launch_max_x);
     filter_cfg_.launch_min_y = static_cast<float>(ballistic_tracker_.launch_min_y);
@@ -512,19 +527,26 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
         pred_x, pred_y, pred_z, has_pred
     );
 
-    // Publish Debug Point Clouds & ROI Markers
+    // Phase 2: Ballistic State Tracking (Filter out stationary walls/ceiling & robot shaking)
+    ClothTrackingResult res;
+    bool is_actively_tracked = false;
+    if (enable_ballistic_filter_) {
+        is_actively_tracked = ballistic_tracker_.update(raw_res, stamp.seconds(), res);
+    } else {
+        res = raw_res;
+        is_actively_tracked = raw_res.valid;
+    }
+
+    // Publish Debug Point Clouds & ROI Markers after tracker state update
     if (publish_debug_cloud_) {
         MarkerVisualizer::publish_point_cloud(pub_filtered_cloud_, debug_filtered_pts, stamp, camera_parent_frame_);
         publish_roi_markers(stamp, raw_res);
     }
-    
-    // Publish cyan cluster ONLY when actively flying; clear it immediately when landed/idle
-    if (ballistic_tracker_.state == TrackerState::TRACKING && !debug_cluster_pts.empty())
-    {
+
+    // Publish cyan cluster ONLY when actively tracked in this frame; clear immediately otherwise
+    if (is_actively_tracked && !debug_cluster_pts.empty()) {
         MarkerVisualizer::publish_point_cloud(pub_cluster_cloud_, debug_cluster_pts, stamp, camera_parent_frame_);
-    }
-    else
-    {
+    } else {
         std::vector<float3> empty_pts;
         MarkerVisualizer::publish_point_cloud(pub_cluster_cloud_, empty_pts, stamp, camera_parent_frame_);
     }
@@ -536,16 +558,6 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
         debug_filtered_pts.size(), raw_res.cluster_points_count, raw_res.cx, raw_res.cy, raw_res.cz,
         ballistic_tracker_.state == TrackerState::TRACKING ? "TRACKING" : "IDLE"
     );
-
-    // Phase 2: Ballistic State Tracking (Filter out stationary walls/ceiling & robot shaking)
-    ClothTrackingResult res;
-    bool is_actively_tracked = false;
-    if (enable_ballistic_filter_) {
-        is_actively_tracked = ballistic_tracker_.update(raw_res, stamp.seconds(), res);
-    } else {
-        res = raw_res;
-        is_actively_tracked = raw_res.valid;
-    }
 
     if (prev_state_ == TrackerState::TRACKING && ballistic_tracker_.state == TrackerState::LANDED) {
         RCLCPP_INFO(this->get_logger(),

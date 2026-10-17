@@ -344,10 +344,11 @@ namespace realsense_dust_cloth
                 int best_idx = -1;
                 float best_score = -1e9f;
 
+                int min_pts = has_prediction ? filter.min_tracking_points : filter.min_cluster_points;
                 for (int i = 0; i < count; ++i)
                 {
                     int sz = cluster_sizes[i];
-                    if (sz < filter.min_cluster_points || sz > filter.max_cluster_points)
+                    if (sz < min_pts || sz > filter.max_cluster_points)
                     {
                         continue;
                     }
@@ -479,14 +480,10 @@ namespace realsense_dust_cloth
         if (d > 0)
         {
             uint16_t old = bg_depth[idx];
-            if (old == 0)
+            if (old == 0 || d < old)
             {
+                // Keep minimum valid depth observed during calibration so background jitter never leaks as foreground
                 bg_depth[idx] = d;
-            }
-            else
-            {
-                // Running average for stable background calibration
-                bg_depth[idx] = static_cast<uint16_t>((old * 3 + d + 2) / 4);
             }
         }
     }
@@ -598,7 +595,8 @@ namespace realsense_dust_cloth
         cudaMemcpyAsync(&h_valid_count, ctx.d_valid_count, sizeof(int), cudaMemcpyDeviceToHost, ctx.stream);
         cudaStreamSynchronize(ctx.stream);
 
-        if (h_valid_count < filter.min_cluster_points)
+        int min_pts = has_prediction ? filter.min_tracking_points : filter.min_cluster_points;
+        if (h_valid_count < min_pts)
         {
             return empty_res;
         }
@@ -626,7 +624,7 @@ namespace realsense_dust_cloth
         cudaMemcpyAsync(&h_voxel_count, ctx.d_voxel_count, sizeof(int), cudaMemcpyDeviceToHost, ctx.stream);
         cudaStreamSynchronize(ctx.stream);
 
-        if (h_voxel_count < filter.min_cluster_points)
+        if (h_voxel_count < min_pts)
         {
             return empty_res;
         }

@@ -47,6 +47,7 @@ namespace realsense_dust_cloth
         float voxel_size_m{0.03f};
         float cluster_eps_m{0.15f};
         int min_cluster_points{10};
+        int min_tracking_points{6};
         int max_cluster_points{1500};
         float min_cloth_size_m{0.05f};          // 最小3Dサイズ制限 (m, 微小ノイズ除外)
         float max_cloth_size_m{0.65f};          // 最大3D対角サイズ制限 (m)

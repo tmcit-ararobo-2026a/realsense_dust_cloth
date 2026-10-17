@@ -52,7 +52,14 @@
     landing_min_z: 0.05                            # 着地確定判定高さ (m)
     drag_coeff: 0.40                               # 空気抵抗減衰係数
     vel_smoothing_beta: 0.30                       # 速度平滑化ブレンド率
+    min_flight_vx_m_s: -0.30                       # 飛翔中 最小前進速度下限 (m/s)
     max_vx_m_s: 15.0                               # 飛翔最大前進速度上限 (m/s)
+    max_abs_vy_m_s: 2.50                           # 飛翔中 最大横移動速度上限 (m/s)
+    min_vz_m_s: -10.0                              # 飛翔中 最小落下速度下限 (m/s)
+    max_vz_m_s: 8.0                                # 飛翔中 最大上昇速度上限 (m/s)
+    max_flight_duration_sec: 2.50                  # 最大飛行時間タイムアウト (s)
+    min_stationary_move_m: 0.025                   # 空中静止判定の最小移動距離 (m)
+    max_stationary_frames: 8                       # 空中静止許容フレーム数
 
     # 【5. 背景差分 (静止物除去)】
     use_bg_subtraction: true                       # 静止した壁・棚・床を完全消去
@@ -63,13 +70,13 @@
 
     # 【6. 点群クラスタリング & 雑巾抽出】
     voxel_size_m: 0.02                             # ボクセル間引き (2cm)
-    cluster_eps_m: 0.14                            # クラスタ探索距離 (m, 遠方背景との結合を防止)
+    cluster_eps_m: 0.08                            # クラスタ探索距離 (m, 遠方背景との結合を防止)
     min_cluster_points: 25                         # 雑巾クラスタ最小点数 (微小ノイズ除外)
     max_cluster_points: 6000
     min_cloth_size_m: 0.05                         # 雑巾最小3Dサイズ (m)
-    max_cloth_size_m: 1.25                         # 雑巾最大3D対角サイズ (m)
-    continuity_thresh_m: 0.30                      # 2Dエッジ連続性チェック許容深度差 (m)
-    continuity_min_neighbors: 2                    # 4近傍のうち必要な連続ピクセル数 (0〜4)
+    max_cloth_size_m: 0.45                         # 雑巾最大3D対角サイズ (m, 1m超のノイズ尾を除外)
+    continuity_thresh_m: 0.05                      # 2Dエッジ連続性チェック許容深度差 (m, フライングピクセル遮断)
+    continuity_min_neighbors: 3                    # 4近傍のうち必要な連続ピクセル数 (0〜4)
     trajectory_history_sec: 15.0
 
     # 【7. カラー映像配信設定】

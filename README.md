@@ -105,9 +105,9 @@ ros2 bag play <記録したbagフォルダへのパス> --loop --clock
 
 ---
 
-### A. 実機での rosbag 記録コマンド
+### A. 実機での rosbag 記録コマンド（全検証トピック入り完全版）
 
-実機（ロボットまたは手元PC）のターミナルで以下を実行します：
+実機（ロボットまたは手元PC）のターミナルで以下を実行します（3Dデバッグ点群・着地予測・JPEG圧縮カラー映像を含む全13トピックを記録します）：
 
 ```bash
 ros2 bag record \
@@ -116,20 +116,34 @@ ros2 bag record \
   /cloth/position \
   /cloth/trajectory_marker \
   /cloth/measured_path \
+  /cloth/most_probable_path \
+  /cloth/probability_markers \
+  /cloth/predicted_landing_point \
+  /cloth/debug/roi_markers \
+  /cloth/debug/cluster_points \
+  /cloth/debug/filtered_points \
   /camera/camera/color/image_raw/compressed \
-  -o cloth_test_01
+  /camera/camera/color/camera_info \
+  -o cloth_test_03
 ```
-* **記録される内容**:
+* **記録される全13トピックの内訳**:
   * `/tf`, `/tf_static`: カメラ設置姿勢および飛翔中の雑巾座標（`flying_cloth`）
   * `/cloth/position`: 雑巾の3D位置座標（PointStamped: X, Y, Z）
   * `/cloth/trajectory_marker`: RViz用の赤い球体・弾道マーカー
   * `/cloth/measured_path`: 計測軌跡のライン（Path）
-  * `/camera/camera/color/image_raw/compressed`: JPEG圧縮カラー映像（30fps・超軽量）
+  * `/cloth/most_probable_path`: 最小二乗フィッティングされた放物線軌道
+  * `/cloth/probability_markers`: 放物線の最高到達点・着地予測マーカー
+  * `/cloth/predicted_landing_point`: 算出された地面への着地予測座標
+  * `/cloth/debug/roi_markers`: 空間ROI（緑枠）・発射口ゲート（水色枠）・追尾ゲート球（黄球）
+  * `/cloth/debug/cluster_points`: そのフレームで「雑巾」として抽出された3D点群（追跡途切れの原因特定用）
+  * `/cloth/debug/filtered_points`: 背景差分・ROIを通過した全3D点群（壁ノイズや点群密度の検証用）
+  * `/camera/camera/color/image_raw/compressed`: JPEG圧縮カラー映像（30fps・正立回転済み・超軽量）
+  * `/camera/camera/color/camera_info`: カラーカメラの内部パラメータ情報
 * **終了**: 投擲が終わったら **`Ctrl + C`** で保存が完了します。
-* ※ 2回目以降は `-o cloth_test_02`, `-o cloth_test_03` のように保存名を変更してください。
+* ※ 2回目以降は `-o cloth_test_04`, `-o cloth_test_05` のように保存名を変更してください。
 
 > 💡 **launch のオプションで自動録画する場合**:  
-> 実機起動時に `record:=true` を渡すだけでも上記と同じ構成で自動録画されます：  
+> 実機起動時に `record:=true` を渡すことでも自動録画されます：  
 > `ros2 launch realsense_dust_cloth cloth_tracker.launch.py record:=true`
 
 ---

@@ -132,7 +132,14 @@ def generate_launch_description():
              '/cloth/position',
              '/cloth/trajectory_marker',
              '/cloth/measured_path',
-             '/camera/camera/color/image_raw/compressed'],
+             '/cloth/most_probable_path',
+             '/cloth/probability_markers',
+             '/cloth/predicted_landing_point',
+             '/cloth/debug/roi_markers',
+             '/cloth/debug/cluster_points',
+             '/cloth/debug/filtered_points',
+             '/camera/camera/color/image_raw/compressed',
+             '/camera/camera/color/camera_info'],
         output='screen',
         condition=IfCondition(LaunchConfiguration('record'))
     )
