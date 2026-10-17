@@ -23,10 +23,10 @@ class ClothTrajectoryLogger(Node):
         super().__init__('cloth_trajectory_logger')
         if output_csv is None:
             pkg_data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
-            if os.path.exists(pkg_data_dir):
-                output_csv = os.path.join(pkg_data_dir, 'cloth_trajectories_dataset.csv')
-            else:
-                output_csv = os.path.expanduser('~/ros2_ws/data/cloth_trajectories_dataset.csv')
+            if not os.path.exists(pkg_data_dir):
+                src_data_dir = os.path.expanduser('~/ros2_ws/src/realsense_dust_cloth/data')
+                pkg_data_dir = src_data_dir if os.path.exists(src_data_dir) else os.path.expanduser('~/ros2_ws/data')
+            output_csv = os.path.join(pkg_data_dir, 'cloth_trajectories_dataset.csv')
         self.output_csv = output_csv
         os.makedirs(os.path.dirname(output_csv), exist_ok=True)
         
@@ -137,6 +137,10 @@ def analyze_dataset(flights, plot_output=None):
             parabola_coeffs.append(c)
             interpolated_z.append(np.polyval(c, x_common))
 
+    if len(parabola_coeffs) == 0:
+        print("⚠️ Insufficient valid parabolic spans to fit trajectory.")
+        return
+
     parabola_coeffs = np.array(parabola_coeffs)
     interpolated_z = np.array(interpolated_z)
 
@@ -206,12 +210,11 @@ def analyze_dataset(flights, plot_output=None):
 def main():
     rclpy.init()
     pkg_data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
-    if os.path.exists(pkg_data_dir):
-        default_csv = os.path.join(pkg_data_dir, 'cloth_trajectories_dataset.csv')
-        default_plot = os.path.join(pkg_data_dir, 'most_probable_trajectory.png')
-    else:
-        default_csv = os.path.expanduser('~/ros2_ws/data/cloth_trajectories_dataset.csv')
-        default_plot = os.path.expanduser('~/ros2_ws/data/most_probable_trajectory.png')
+    if not os.path.exists(pkg_data_dir):
+        src_data_dir = os.path.expanduser('~/ros2_ws/src/realsense_dust_cloth/data')
+        pkg_data_dir = src_data_dir if os.path.exists(src_data_dir) else os.path.expanduser('~/ros2_ws/data')
+    default_csv = os.path.join(pkg_data_dir, 'cloth_trajectories_dataset.csv')
+    default_plot = os.path.join(pkg_data_dir, 'most_probable_trajectory.png')
 
     parser = argparse.ArgumentParser(description="Cloth Trajectory Probability Analyzer")
     parser.add_argument('--record', action='store_true', default=False, help="Record incoming trajectories in real-time")

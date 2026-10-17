@@ -130,20 +130,21 @@ namespace realsense_dust_cloth
             float y_cam = (static_cast<float>(v) - intrin.cy) * z_raw / intrin.fy;
             float z_cam = z_raw;
 
-            // Physical 3D transformation for vertical mounting (roll ±90 deg) and upward tilt (pitch_deg):
-            float pitch_rad = pose.pitch_deg * (3.14159265358979323846f / 180.0f);
+            // Right-handed 3D rotation matching Static TF (q_pitch(-pitch) * q_roll(roll) * q_opt)
+            constexpr float DEG_TO_RAD = 3.14159265358979323846f / 180.0f;
+            float pitch_rad = pose.pitch_deg * DEG_TO_RAD;
+            float roll_rad = pose.roll_deg * DEG_TO_RAD;
             float cos_p = cosf(pitch_rad);
             float sin_p = sinf(pitch_rad);
+            float cos_r = cosf(roll_rad);
+            float sin_r = sinf(roll_rad);
 
-            // Roll angle sign (+90 deg = clockwise vertical mount / test_bag, -90 / 270 deg = counter-clockwise)
-            float s_roll = (pose.roll_deg < 0.0f || pose.roll_deg > 180.0f) ? -1.0f : 1.0f;
+            float y_roll = -x_cam * cos_r + y_cam * sin_r;
+            float z_roll = -x_cam * sin_r - y_cam * cos_r;
 
-            // Forward X: z_cam * cos_p + s_roll * x_cam * sin_p
-            // Lateral Y: -s_roll * y_cam
-            // Vertical Z: height_offset + (z_cam * sin_p - s_roll * x_cam * cos_p)
-            float x_rob = pose.x_offset_m + (z_cam * cos_p + s_roll * x_cam * sin_p);
-            float y_rob = -s_roll * y_cam;
-            float z_rob = pose.height_offset_m + (z_cam * sin_p - s_roll * x_cam * cos_p);
+            float x_rob = pose.x_offset_m + (z_cam * cos_p - z_roll * sin_p);
+            float y_rob = y_roll;
+            float z_rob = pose.height_offset_m + (z_cam * sin_p + z_roll * cos_p);
 
 
             // PassThrough in base_link

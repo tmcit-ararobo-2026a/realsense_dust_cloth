@@ -14,7 +14,8 @@ def generate_launch_description():
         package='realsense_dust_cloth',
         executable='sim_cloth_flight.py',
         name='cloth_flight_simulator',
-        output='screen'
+        output='screen',
+        parameters=[config_file]
     )
 
     # 2. CUDA Cloth Tracker Node (with debug cloud enabled for RViz)
@@ -39,24 +40,7 @@ def generate_launch_description():
         arguments=['0', '0', '0', '0', '0', '0', 'world', 'base_link']
     )
 
-    # 4. Static mounting transform (matches real-robot tracker_params.yaml)
-    camera_tf_node = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='realsense_mount_tf',
-        arguments=[
-            '--x', '0.50',
-            '--y', '0.0',
-            '--z', '1.00',
-            '--yaw', '0.0',
-            '--pitch', '0.3490658504',
-            '--roll', '1.5707963268',
-            '--frame-id', 'base_link',
-            '--child-frame-id', 'camera_link'
-        ]
-    )
-
-    # 5. RViz2 GUI
+    # 4. RViz2 GUI
     rviz_node = Node(
         package='rviz2',
         executable='rviz2',
@@ -69,6 +53,5 @@ def generate_launch_description():
         sim_node,
         tracker_node,
         world_tf_node,
-        camera_tf_node,
         rviz_node
     ])

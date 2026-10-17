@@ -41,8 +41,8 @@ private:
     void load_parameters();
     void publish_static_transforms();
 
-    void camera_info_callback(const sensor_msgs::msg::CameraInfo::SharedPtr msg);
-    void depth_image_callback(const sensor_msgs::msg::Image::SharedPtr msg);
+    void camera_info_callback(const sensor_msgs::msg::CameraInfo::ConstSharedPtr msg);
+    void depth_image_callback(const sensor_msgs::msg::Image::ConstSharedPtr msg);
 
     void process_and_publish(const uint16_t* depth_ptr, const rclcpp::Time& stamp);
 
@@ -62,12 +62,9 @@ private:
     int bg_frames_collected_{0};
     int bg_target_frames_{20};
 
-    // Trajectory history & persistent parabola visualization
+    // Trajectory history
     std::vector<std::pair<double, geometry_msgs::msg::Point>> trajectory_points_;
-    ParabolaFit cached_parabola_;
     double last_frame_stamp_sec_{0.0};
-    geometry_msgs::msg::Point last_published_pt_;
-    bool has_last_published_pt_{false};
 
     // Last known cloth position (for continuous TF broadcasting base_link -> flying_cloth)
     double last_cloth_x_{0.0};
@@ -99,8 +96,11 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr sub_camera_info_;
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_depth_image_;
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_color_image_;
+    rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr sub_compressed_color_;
+    bool raw_color_received_{false};
 
-    void color_image_callback(const sensor_msgs::msg::Image::SharedPtr msg);
+    void color_image_callback(const sensor_msgs::msg::Image::ConstSharedPtr msg);
+    void compressed_color_callback(const sensor_msgs::msg::CompressedImage::ConstSharedPtr msg);
 
     void publish_roi_markers(const rclcpp::Time& stamp, const ClothTrackingResult& raw_res);
 

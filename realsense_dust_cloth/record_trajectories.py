@@ -15,7 +15,8 @@ class TrajectoryRecorder(Node):
         # Declare output CSV path (defaults to git repository's data/ directory)
         pkg_data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
         if not os.path.exists(pkg_data_dir):
-            pkg_data_dir = os.path.join(os.path.expanduser('~'), 'ros2_ws', 'data')
+            src_data_dir = os.path.expanduser('~/ros2_ws/src/realsense_dust_cloth/data')
+            pkg_data_dir = src_data_dir if os.path.exists(src_data_dir) else os.path.join(os.path.expanduser('~'), 'ros2_ws', 'data')
         os.makedirs(pkg_data_dir, exist_ok=True)
         timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
         default_csv = os.path.join(pkg_data_dir, f"trajectories_{timestamp_str}.csv")
@@ -53,18 +54,19 @@ class TrajectoryRecorder(Node):
 
     def path_callback(self, msg: Path):
         pts = [(p.pose.position.x, p.pose.position.y, p.pose.position.z) for p in msg.poses]
-        if not pts:
+        if not pts or pts == self.last_flight_points:
             return
 
         now = time.time()
         # If new path is shorter or starts over, it's a new flight!
-        if len(pts) < self.last_path_size or (now - self.last_active_time) > 2.0:
+        if len(pts) < self.last_path_size or (self.is_recording and (now - self.last_active_time) > 2.0):
             if len(self.last_flight_points) >= 15:
                 self.save_flight(self.last_flight_points)
             self.last_flight_points = pts
             self.is_recording = True
         else:
             self.last_flight_points = pts
+            self.is_recording = True
 
         self.last_path_size = len(pts)
         self.last_active_time = now

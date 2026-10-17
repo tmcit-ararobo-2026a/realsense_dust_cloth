@@ -7,10 +7,8 @@ void BallisticTracker::reset() {
     tracked_count = 0;
     lost_count = 0;
     stationary_count = 0;
-    has_pending = false;
     launch_displacement_confirmed = false;
     last_stamp = 0.0;
-    pending_stamp = 0.0;
     launch_stamp = 0.0;
 }
 
@@ -37,7 +35,6 @@ bool BallisticTracker::update(
     // =========================================================================
     if (state == TrackerState::IDLE || state == TrackerState::LANDED) {
         if (!raw.valid) {
-            has_pending = false;
             return false;
         }
 
@@ -47,7 +44,7 @@ bool BallisticTracker::update(
             raw.cz >= launch_min_z && raw.cz <= launch_max_z &&
             raw.cluster_points_count >= min_cluster_points)
         {
-            // Instant 1-frame launch lock-on: Start tracking immediately!
+            // Lock onto candidate for prediction gating; wait for forward displacement to confirm launch
             state = TrackerState::TRACKING;
             x = raw.cx;
             y = raw.cy;
@@ -56,19 +53,20 @@ bool BallisticTracker::update(
             launch_y = raw.cy;
             launch_z = raw.cz;
             launch_stamp = stamp_sec;
-            launch_displacement_confirmed = false;
+            launch_displacement_confirmed = (min_launch_move_m <= 0.0);
             vx = min_launch_vx;
             vy = 0.0;
             vz = 0.0;
             last_stamp = stamp_sec;
-            tracked_count = 1;
+            tracked_count = launch_displacement_confirmed ? 1 : 0;
             lost_count = 0;
             stationary_count = 0;
-            has_pending = false;
-            out = raw;
-            return true;
+            if (launch_displacement_confirmed) {
+                out = raw;
+                return true;
+            }
+            return false;
         } else {
-            has_pending = false;
             return false;
         }
     }
@@ -114,7 +112,7 @@ bool BallisticTracker::update(
             // Confirm displacement from launch point to reject stationary noise inside launch gate
             if (!launch_displacement_confirmed) {
                 double dx_from_launch = raw.cx - launch_x;
-                if (dx_from_launch >= min_launch_move_m) {
+                if (dx_from_launch >= min_launch_move_m && new_vx >= min_launch_vx) {
                     launch_displacement_confirmed = true;
                 } else if (stamp_sec - launch_stamp > launch_timeout_sec) {
                     reset();
@@ -152,9 +150,13 @@ bool BallisticTracker::update(
             z = raw.cz;
 
             last_stamp = stamp_sec;
-            tracked_count++;
             lost_count = 0;
 
+            if (!launch_displacement_confirmed) {
+                return false;
+            }
+
+            tracked_count++;
             out = raw;
 
             // Stop tracking when cloth touches the floor plane (landing_min_z)
@@ -169,8 +171,10 @@ bool BallisticTracker::update(
     // Phase C: Observation Missed / Lost Frame Handling
     // =========================================================================
     if (!matched) {
-        if (!launch_displacement_confirmed && (stamp_sec - launch_stamp) > launch_timeout_sec) {
-            reset();
+        if (!launch_displacement_confirmed) {
+            if ((stamp_sec - launch_stamp) > launch_timeout_sec) {
+                reset();
+            }
             return false;
         }
         lost_count++;

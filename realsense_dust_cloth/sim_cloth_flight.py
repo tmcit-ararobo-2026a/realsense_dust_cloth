@@ -20,12 +20,23 @@ class ClothFlightSimulator(Node):
         self.timer = self.create_timer(1.0 / 30.0, self.update_and_publish) # 30 fps
         self.bridge = CvBridge()
 
+        self.declare_parameter('camera_width', 640)
+        self.declare_parameter('camera_height', 480)
+        self.declare_parameter('camera_pitch_deg', 20.0)
+        self.declare_parameter('camera_roll_deg', 90.0)
+        self.declare_parameter('camera_x_offset_m', 0.50)
+        self.declare_parameter('camera_height_offset_m', 1.00)
+
+        self.width = self.get_parameter('camera_width').value
+        self.height = self.get_parameter('camera_height').value
+        self.pitch_rad = math.radians(float(self.get_parameter('camera_pitch_deg').value))
+        self.roll_rad = math.radians(float(self.get_parameter('camera_roll_deg').value))
+        self.x_off = float(self.get_parameter('camera_x_offset_m').value)
+        self.h_off = float(self.get_parameter('camera_height_offset_m').value)
+
         self.start_time = time.time()
-        self.fx, self.fy = 425.0, 425.0
-        self.cx, self.cy = 424.0, 240.0
-        self.pitch_rad = math.radians(20.0) # 20 deg pitch
-        self.x_off = 0.25
-        self.h_off = 0.35
+        self.fx, self.fy = 385.0, 385.0
+        self.cx, self.cy = self.width * 0.5, self.height * 0.5
 
         self.get_logger().info("Cloth Flight Simulator started! Launching cloth parabolas every 2.5 seconds...")
 
@@ -36,49 +47,52 @@ class ClothFlightSimulator(Node):
         info = CameraInfo()
         info.header.stamp = now_msg
         info.header.frame_id = 'camera_depth_optical_frame'
-        info.width = 848
-        info.height = 480
+        info.width = self.width
+        info.height = self.height
         info.k = [self.fx, 0.0, self.cx, 0.0, self.fy, self.cy, 0.0, 0.0, 1.0]
         self.pub_info.publish(info)
 
-        # 2. Physics of flying cloth (Cycle: 2.5 seconds)
-        t_cycle = (time.time() - self.start_time) % 2.5
+        # 2. Physics of flying cloth (Cycle: 2.5 seconds, wait 1.2s initially for background calibration)
+        elapsed = time.time() - self.start_time
+        t_cycle = (elapsed - 1.2) % 2.5 if elapsed >= 1.2 else 2.0
 
-        depth_img = np.zeros((480, 848), dtype=np.uint16)
+        depth_img = np.zeros((self.height, self.width), dtype=np.uint16)
 
         if t_cycle < 1.0: # Flight duration ~1.0 second
             t = t_cycle
-            # Parabolic trajectory in robot frame (base_link)
-            # Forward speed: ~3.5 m/s, Initial vertical speed: ~3.2 m/s
-            x_rob = self.x_off + 0.15 + 3.5 * t
-            y_rob = 0.05 * math.sin(t * 3.0) # slight lateral wobble
-            z_rob = self.h_off + 0.1 + 3.2 * t - 0.5 * 9.8 * (t ** 2)
+            # Parabolic trajectory in robot frame (base_link) originating inside launch gate
+            x_rob = self.x_off + 0.20 + 2.8 * t
+            y_rob = 0.04 * math.sin(t * 3.0)
+            z_rob = self.h_off + 0.10 + 3.2 * t - 0.5 * 9.81 * (t ** 2)
 
-            if z_rob > 0.1: # Above floor
-                # Transform base_link -> Camera frame
-                # x_rob = x_off + (z_cam*cos(p) - y_cam*sin(p))
-                # y_rob = -x_cam
-                # z_rob = h_off + (z_cam*sin(p) + y_cam*cos(p))
+            if z_rob > 0.15: # Above landing threshold
+                # Inverse transform: base_link -> camera_depth_optical_frame
                 dx = x_rob - self.x_off
+                dy = y_rob
                 dz = z_rob - self.h_off
 
                 cos_p = math.cos(self.pitch_rad)
                 sin_p = math.sin(self.pitch_rad)
+                cos_r = math.cos(self.roll_rad)
+                sin_r = math.sin(self.roll_rad)
 
                 z_cam = dx * cos_p + dz * sin_p
-                y_cam = -dx * sin_p + dz * cos_p
-                x_cam = -y_rob
+                y_roll = dy
+                z_roll = -dx * sin_p + dz * cos_p
+
+                x_cam = -y_roll * cos_r - z_roll * sin_r
+                y_cam = y_roll * sin_r - z_roll * cos_r
 
                 if z_cam > 0.3:
                     u = int(self.cx + (x_cam * self.fx / z_cam))
                     v = int(self.cy + (y_cam * self.fy / z_cam))
 
-                    # Cloth size in pixels (~0.25m x ~0.35m)
-                    half_w = int(max(4, (0.12 * self.fx) / z_cam))
-                    half_h = int(max(4, (0.17 * self.fy) / z_cam))
+                    # Cloth size in pixels (~0.24m x ~0.24m)
+                    half_w = int(max(5, (0.12 * self.fx) / z_cam))
+                    half_h = int(max(5, (0.12 * self.fy) / z_cam))
 
-                    u_min, u_max = max(0, u - half_w), min(848, u + half_w)
-                    v_min, v_max = max(0, v - half_h), min(480, v + half_h)
+                    u_min, u_max = max(0, u - half_w), min(self.width, u + half_w)
+                    v_min, v_max = max(0, v - half_h), min(self.height, v + half_h)
 
                     depth_mm = int(z_cam * 1000.0)
                     depth_img[v_min:v_max, u_min:u_max] = depth_mm

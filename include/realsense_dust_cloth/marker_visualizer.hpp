@@ -270,7 +270,7 @@ public:
         const rclcpp::Time& stamp,
         const std::string& frame_id)
     {
-        if (!pub || pts.empty()) return;
+        if (!pub) return;
 
         sensor_msgs::msg::PointCloud2 cloud_msg;
         cloud_msg.header.stamp = stamp;
@@ -284,17 +284,19 @@ public:
         modifier.setPointCloud2FieldsByString(1, "xyz");
         modifier.resize(pts.size());
 
-        sensor_msgs::PointCloud2Iterator<float> iter_x(cloud_msg, "x");
-        sensor_msgs::PointCloud2Iterator<float> iter_y(cloud_msg, "y");
-        sensor_msgs::PointCloud2Iterator<float> iter_z(cloud_msg, "z");
+        if (!pts.empty()) {
+            sensor_msgs::PointCloud2Iterator<float> iter_x(cloud_msg, "x");
+            sensor_msgs::PointCloud2Iterator<float> iter_y(cloud_msg, "y");
+            sensor_msgs::PointCloud2Iterator<float> iter_z(cloud_msg, "z");
 
-        for (const auto& p : pts) {
-            *iter_x = p.x;
-            *iter_y = p.y;
-            *iter_z = p.z;
-            ++iter_x;
-            ++iter_y;
-            ++iter_z;
+            for (const auto& p : pts) {
+                *iter_x = p.x;
+                *iter_y = p.y;
+                *iter_z = p.z;
+                ++iter_x;
+                ++iter_y;
+                ++iter_z;
+            }
         }
 
         pub->publish(cloud_msg);

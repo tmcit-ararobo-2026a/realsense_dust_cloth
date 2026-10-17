@@ -32,35 +32,18 @@ def generate_launch_description():
         arguments=['0', '0', '0', '0', '0', '0', 'world', 'base_link']
     )
 
-    # 3. Static mounting transform (matches real-robot tracker_params.yaml)
-    camera_tf_node = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='realsense_mount_tf',
-        arguments=[
-            '--x', '0.50',
-            '--y', '0.0',
-            '--z', '1.00',
-            '--yaw', '0.0',
-            '--pitch', '0.3490658504',
-            '--roll', '1.5707963268',
-            '--frame-id', 'base_link',
-            '--child-frame-id', 'camera_link'
-        ]
-    )
-
-    # 4. RViz2 GUI
+    # 3. RViz2 GUI
     rviz_node = Node(
         package='rviz2',
         executable='rviz2',
         name='rviz2',
         arguments=['-d', rviz_config],
-        output='screen'
+        output='screen',
+        parameters=[{'use_sim_time': True}]
     )
 
     return LaunchDescription([
         tracker_node,
         world_tf_node,
-        camera_tf_node,
         rviz_node
     ])

@@ -35,9 +35,6 @@ public:
     int stationary_count{0};
 
     // Launch tracking and displacement confirmation
-    bool has_pending{false};
-    double pending_x{0.0}, pending_y{0.0}, pending_z{0.0};
-    double pending_stamp{0.0};
     double launch_x{0.0}, launch_y{0.0}, launch_z{0.0};
     double launch_stamp{0.0};
     bool launch_displacement_confirmed{false};

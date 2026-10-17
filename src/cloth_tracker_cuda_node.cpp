@@ -4,6 +4,18 @@
 
 namespace realsense_dust_cloth {
 
+namespace {
+constexpr float DEFAULT_DEPTH_FOCAL_LENGTH_PX = 425.0f;
+constexpr double DEFAULT_COLOR_FOCAL_LENGTH_PX = 600.0;
+constexpr float METERS_TO_MM = 1000.0f;
+constexpr float MAX_UINT16_DEPTH_MM = 65535.0f;
+constexpr double BAG_LOOP_RESET_TOLERANCE_SEC = 0.5;
+constexpr double MIN_TRAJECTORY_STEP_M = 0.005;
+constexpr size_t MAX_TRAJECTORY_POINTS = 1000;
+constexpr double STATIC_MARKER_PUBLISH_INTERVAL_SEC = 0.10;
+constexpr unsigned int RS_WAIT_TIMEOUT_MS = 1000;
+} // namespace
+
 // =============================================================================
 // Section 1: Lifecycle & Node Initialization
 // =============================================================================
@@ -72,7 +84,12 @@ ClothTrackerCudaNode::ClothTrackerCudaNode(const rclcpp::NodeOptions& options)
             std::bind(&ClothTrackerCudaNode::color_image_callback, this, std::placeholders::_1)
         );
 
-        RCLCPP_INFO(this->get_logger(), "Listening on Depth Image topic: %s, Color Image topic: %s",
+        sub_compressed_color_ = this->create_subscription<sensor_msgs::msg::CompressedImage>(
+            color_topic + "/compressed", qos,
+            std::bind(&ClothTrackerCudaNode::compressed_color_callback, this, std::placeholders::_1)
+        );
+
+        RCLCPP_INFO(this->get_logger(), "Listening on Depth Image topic: %s, Color Image topic: %s (+/compressed)",
                     depth_topic.c_str(), color_topic.c_str());
     }
 
@@ -289,22 +306,23 @@ void ClothTrackerCudaNode::publish_static_transforms() {
     tf_mount.transform.rotation.w = q_mount.w();
     transforms.push_back(tf_mount);
 
-    // 2. camera_link -> camera_color_optical_frame (Standard ROS optical frame orientation)
-    geometry_msgs::msg::TransformStamped tf_opt;
-    tf_opt.header.stamp = rclcpp::Time(0);
-    tf_opt.header.frame_id = camera_frame_;
-    tf_opt.child_frame_id = "camera_color_optical_frame";
-    tf_opt.transform.translation.x = 0.0;
-    tf_opt.transform.translation.y = 0.0;
-    tf_opt.transform.translation.z = 0.0;
-
+    // 2. camera_link -> camera_color_optical_frame & camera_depth_optical_frame (Standard ROS optical frame orientation)
     tf2::Quaternion q_opt;
     q_opt.setRPY(-M_PI_2, 0.0, -M_PI_2);
-    tf_opt.transform.rotation.x = q_opt.x();
-    tf_opt.transform.rotation.y = q_opt.y();
-    tf_opt.transform.rotation.z = q_opt.z();
-    tf_opt.transform.rotation.w = q_opt.w();
-    transforms.push_back(tf_opt);
+
+    geometry_msgs::msg::TransformStamped tf_color_opt;
+    tf_color_opt.header.stamp = rclcpp::Time(0);
+    tf_color_opt.header.frame_id = camera_frame_;
+    tf_color_opt.child_frame_id = "camera_color_optical_frame";
+    tf_color_opt.transform.rotation.x = q_opt.x();
+    tf_color_opt.transform.rotation.y = q_opt.y();
+    tf_color_opt.transform.rotation.z = q_opt.z();
+    tf_color_opt.transform.rotation.w = q_opt.w();
+    transforms.push_back(tf_color_opt);
+
+    geometry_msgs::msg::TransformStamped tf_depth_opt = tf_color_opt;
+    tf_depth_opt.child_frame_id = "camera_depth_optical_frame";
+    transforms.push_back(tf_depth_opt);
 
     tf_static_broadcaster_->sendTransform(transforms);
     RCLCPP_INFO(this->get_logger(),
@@ -318,7 +336,7 @@ void ClothTrackerCudaNode::publish_static_transforms() {
 // Section 4: Sensor Callbacks (CameraInfo, Depth Image, Color Image)
 // =============================================================================
 
-void ClothTrackerCudaNode::camera_info_callback(const sensor_msgs::msg::CameraInfo::SharedPtr msg) {
+void ClothTrackerCudaNode::camera_info_callback(const sensor_msgs::msg::CameraInfo::ConstSharedPtr msg) {
     if (!intrinsics_ready_) {
         camera_intrin_.fx = static_cast<float>(msg->k[0]);
         camera_intrin_.fy = static_cast<float>(msg->k[4]);
@@ -333,13 +351,13 @@ void ClothTrackerCudaNode::camera_info_callback(const sensor_msgs::msg::CameraIn
     }
 }
 
-void ClothTrackerCudaNode::depth_image_callback(const sensor_msgs::msg::Image::SharedPtr msg) {
+void ClothTrackerCudaNode::depth_image_callback(const sensor_msgs::msg::Image::ConstSharedPtr msg) {
+    camera_intrin_.width = msg->width;
+    camera_intrin_.height = msg->height;
     if (!intrinsics_ready_) {
         // Fallback default intrinsics if CameraInfo has not arrived yet
-        camera_intrin_.width = msg->width;
-        camera_intrin_.height = msg->height;
-        camera_intrin_.fx = 425.0f; // Approx for D435 848x480
-        camera_intrin_.fy = 425.0f;
+        camera_intrin_.fx = DEFAULT_DEPTH_FOCAL_LENGTH_PX;
+        camera_intrin_.fy = DEFAULT_DEPTH_FOCAL_LENGTH_PX;
         camera_intrin_.cx = msg->width * 0.5f;
         camera_intrin_.cy = msg->height * 0.5f;
     }
@@ -366,8 +384,8 @@ void ClothTrackerCudaNode::depth_image_callback(const sensor_msgs::msg::Image::S
             if (std::isnan(d_m) || std::isinf(d_m) || d_m <= 0.0f) {
                 depth_u16_buf[i] = 0;
             } else {
-                float d_mm = d_m * 1000.0f;
-                depth_u16_buf[i] = (d_mm > 65535.0f) ? 65535 : static_cast<uint16_t>(d_mm);
+                float d_mm = d_m * METERS_TO_MM;
+                depth_u16_buf[i] = (d_mm > MAX_UINT16_DEPTH_MM) ? static_cast<uint16_t>(MAX_UINT16_DEPTH_MM) : static_cast<uint16_t>(d_mm);
             }
         }
         depth_ptr = depth_u16_buf.data();
@@ -385,8 +403,9 @@ void ClothTrackerCudaNode::depth_image_callback(const sensor_msgs::msg::Image::S
     process_and_publish(depth_ptr, stamp);
 }
 
-void ClothTrackerCudaNode::color_image_callback(const sensor_msgs::msg::Image::SharedPtr msg) {
+void ClothTrackerCudaNode::color_image_callback(const sensor_msgs::msg::Image::ConstSharedPtr msg) {
     if (!pub_compressed_color_) return;
+    raw_color_received_ = true;
 
     try {
         cv::Mat frame;
@@ -441,9 +460,9 @@ void ClothTrackerCudaNode::color_image_callback(const sensor_msgs::msg::Image::S
             cinfo.height = msg->height;
             cinfo.distortion_model = "plumb_bob";
             cinfo.d.resize(5, 0.0);
-            cinfo.k[0] = (camera_intrin_.fx > 0.0f) ? camera_intrin_.fx : 600.0;
+            cinfo.k[0] = (camera_intrin_.fx > 0.0f) ? camera_intrin_.fx : DEFAULT_COLOR_FOCAL_LENGTH_PX;
             cinfo.k[2] = msg->width * 0.5;
-            cinfo.k[4] = (camera_intrin_.fy > 0.0f) ? camera_intrin_.fy : 600.0;
+            cinfo.k[4] = (camera_intrin_.fy > 0.0f) ? camera_intrin_.fy : DEFAULT_COLOR_FOCAL_LENGTH_PX;
             cinfo.k[5] = msg->height * 0.5;
             cinfo.k[8] = 1.0;
             cinfo.r[0] = 1.0; cinfo.r[4] = 1.0; cinfo.r[8] = 1.0;
@@ -455,6 +474,35 @@ void ClothTrackerCudaNode::color_image_callback(const sensor_msgs::msg::Image::S
     } catch (const std::exception& e) {
         RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
                              "Color compression relay error: %s", e.what());
+    }
+}
+
+void ClothTrackerCudaNode::compressed_color_callback(const sensor_msgs::msg::CompressedImage::ConstSharedPtr msg) {
+    // When replaying a rosbag that only recorded /camera/camera/color/image_raw/compressed,
+    // decode the upright JPEG directly into /cloth/camera_view for RViz visualization.
+    if (raw_color_received_ || !pub_rotated_color_ || msg->data.empty()) {
+        return;
+    }
+
+    try {
+        cv::Mat decoded = cv::imdecode(msg->data, cv::IMREAD_COLOR);
+        if (decoded.empty()) {
+            return;
+        }
+        sensor_msgs::msg::Image out_img;
+        out_img.header = msg->header;
+        out_img.height = decoded.rows;
+        out_img.width = decoded.cols;
+        out_img.encoding = "bgr8";
+        out_img.is_bigendian = false;
+        out_img.step = static_cast<sensor_msgs::msg::Image::_step_type>(decoded.step);
+        size_t size = decoded.step * decoded.rows;
+        out_img.data.resize(size);
+        std::memcpy(out_img.data.data(), decoded.data, size);
+        pub_rotated_color_->publish(out_img);
+    } catch (const std::exception& e) {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                             "Compressed color decode error: %s", e.what());
     }
 }
 
@@ -486,7 +534,7 @@ void ClothTrackerCudaNode::publish_roi_markers(const rclcpp::Time& stamp, const 
 
 void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const rclcpp::Time& stamp) {
     double now_sec = stamp.seconds();
-    if (last_frame_stamp_sec_ > 0.0 && now_sec < last_frame_stamp_sec_ - 0.5) {
+    if (last_frame_stamp_sec_ > 0.0 && now_sec < last_frame_stamp_sec_ - BAG_LOOP_RESET_TOLERANCE_SEC) {
         // Rosbag looped back to the beginning: clear all trajectory history, clear background, and reset tracker
         trajectory_points_.clear();
         ballistic_tracker_.reset();
@@ -571,6 +619,13 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
 
         if (ballistic_tracker_.tracked_count <= 1) {
             trajectory_points_.clear(); // Brand new launch: clear previous trajectory line
+            if (enable_ballistic_filter_) {
+                geometry_msgs::msg::Point launch_pt;
+                launch_pt.x = ballistic_tracker_.launch_x;
+                launch_pt.y = ballistic_tracker_.launch_y;
+                launch_pt.z = ballistic_tracker_.launch_z;
+                trajectory_points_.emplace_back(ballistic_tracker_.launch_stamp, launch_pt);
+            }
             RCLCPP_INFO(this->get_logger(),
                         "========================================================================\n"
                         "*** LAUNCH CONFIRMED at (%.2f, %.2f, %.2f) with %d pts! Tracking locked! ***\n"
@@ -601,12 +656,17 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
             double dy = p_geom.y - prev_pt.y;
             double dz = p_geom.z - prev_pt.z;
             double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-            if (dist >= 0.005) {
+            if (dist >= MIN_TRAJECTORY_STEP_M) {
                 trajectory_points_.emplace_back(now_sec, p_geom);
             }
         }
 
-        if (trajectory_points_.size() > 1000) {
+        while (trajectory_history_sec_ > 0.0 &&
+               trajectory_points_.size() > 1 &&
+               (now_sec - trajectory_points_.front().first) > trajectory_history_sec_) {
+            trajectory_points_.erase(trajectory_points_.begin());
+        }
+        if (trajectory_points_.size() > MAX_TRAJECTORY_POINTS) {
             trajectory_points_.erase(trajectory_points_.begin());
         }
     }
@@ -634,7 +694,7 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
     // When actively tracking: publish every frame.
     // When landed/idle: publish at 10Hz so the line and markers stay solidly on RViz screen without disappearing.
     static double last_static_publish_sec = 0.0;
-    bool should_publish_markers = is_actively_tracked || (std::abs(now_sec - last_static_publish_sec) >= 0.10);
+    bool should_publish_markers = is_actively_tracked || (std::abs(now_sec - last_static_publish_sec) >= STATIC_MARKER_PUBLISH_INTERVAL_SEC);
 
     if (should_publish_markers && !trajectory_points_.empty()) {
         last_static_publish_sec = now_sec;
@@ -688,7 +748,7 @@ void ClothTrackerCudaNode::run_direct_realsense_loop() {
         rs2::config cfg;
         cfg.enable_stream(RS2_STREAM_DEPTH, camera_intrin_.width, camera_intrin_.height, RS2_FORMAT_Z16, depth_fps_);
         if (enable_color_stream_) {
-            cfg.enable_stream(RS2_STREAM_COLOR, 640, 480, RS2_FORMAT_BGR8, color_fps_);
+            cfg.enable_stream(RS2_STREAM_COLOR, camera_intrin_.width, camera_intrin_.height, RS2_FORMAT_BGR8, color_fps_);
         }
 
         rs_pipe_ = std::make_unique<rs2::pipeline>();
@@ -737,6 +797,12 @@ void ClothTrackerCudaNode::run_direct_realsense_loop() {
         camera_intrin_.height = intrin.height;
         intrinsics_ready_ = true;
 
+        int stream_pixels = intrin.width * intrin.height;
+        if (stream_pixels > cuda_ctx_.max_pixels) {
+            destroy_cuda_tracker(cuda_ctx_);
+            init_cuda_tracker(cuda_ctx_, intrin.width, intrin.height);
+        }
+
         sensor_msgs::msg::CameraInfo color_info_msg;
         if (enable_color_stream_) {
             try {
@@ -766,25 +832,24 @@ void ClothTrackerCudaNode::run_direct_realsense_loop() {
                 color_info_msg.p[10] = 1.0;
             } catch (const std::exception& e) {
                 RCLCPP_WARN(this->get_logger(), "Failed to extract color intrinsics: %s", e.what());
-                color_info_msg.width = 640;
-                color_info_msg.height = 480;
+                color_info_msg.width = camera_intrin_.width;
+                color_info_msg.height = camera_intrin_.height;
                 color_info_msg.distortion_model = "plumb_bob";
                 color_info_msg.d.resize(5, 0.0);
-                color_info_msg.k[0] = 600.0;
-                color_info_msg.k[2] = 320.0;
-                color_info_msg.k[4] = 600.0;
-                color_info_msg.k[5] = 240.0;
+                color_info_msg.k[0] = DEFAULT_COLOR_FOCAL_LENGTH_PX;
+                color_info_msg.k[2] = camera_intrin_.width * 0.5;
+                color_info_msg.k[4] = DEFAULT_COLOR_FOCAL_LENGTH_PX;
+                color_info_msg.k[5] = camera_intrin_.height * 0.5;
                 color_info_msg.k[8] = 1.0;
                 color_info_msg.r[0] = 1.0; color_info_msg.r[4] = 1.0; color_info_msg.r[8] = 1.0;
-                color_info_msg.p[0] = 600.0; color_info_msg.p[2] = 320.0;
-                color_info_msg.p[5] = 600.0; color_info_msg.p[6] = 240.0;
+                color_info_msg.p[0] = DEFAULT_COLOR_FOCAL_LENGTH_PX; color_info_msg.p[2] = camera_intrin_.width * 0.5;
+                color_info_msg.p[5] = DEFAULT_COLOR_FOCAL_LENGTH_PX; color_info_msg.p[6] = camera_intrin_.height * 0.5;
                 color_info_msg.p[10] = 1.0;
             }
         }
 
-        RCLCPP_INFO(this->get_logger(), "RealSense Hardware Pipeline streaming: Depth %dx%d @ %dfps%s",
-                    intrin.width, intrin.height, depth_fps_,
-                    enable_color_stream_ ? ", Color 640x480 (Upright /cloth/camera_view + JPEG compressed)" : "");
+        RCLCPP_INFO(this->get_logger(), "RealSense Hardware Pipeline streaming: Depth %dx%d @ %dfps (Color enabled=%d)",
+                    intrin.width, intrin.height, depth_fps_, static_cast<int>(enable_color_stream_));
 
         // Pre-build depth CameraInfo msg
         sensor_msgs::msg::CameraInfo depth_info_msg;
@@ -811,7 +876,7 @@ void ClothTrackerCudaNode::run_direct_realsense_loop() {
         std::vector<uint8_t> compressed_buf;
 
         while (rclcpp::ok() && is_running_) {
-            rs2::frameset frames = rs_pipe_->wait_for_frames(1000);
+            rs2::frameset frames = rs_pipe_->wait_for_frames(RS_WAIT_TIMEOUT_MS);
             rclcpp::Time now = this->get_clock()->now();
 
             // 1. Process Depth for CUDA cloth tracking (native GPU)
@@ -821,7 +886,9 @@ void ClothTrackerCudaNode::run_direct_realsense_loop() {
                 process_and_publish(depth_ptr, now);
 
                 // Publish raw depth & camera_info ONLY when subscribed (e.g. ros2 bag record) to ensure ZERO overhead normally
-                if (pub_raw_depth_ && pub_raw_depth_->get_subscription_count() > 0) {
+                bool depth_subscribed = (pub_raw_depth_ && pub_raw_depth_->get_subscription_count() > 0) ||
+                                        (pub_depth_info_ && pub_depth_info_->get_subscription_count() > 0);
+                if (depth_subscribed && pub_raw_depth_) {
                     sensor_msgs::msg::Image depth_img;
                     depth_img.header.stamp = now;
                     depth_img.header.frame_id = "camera_depth_optical_frame";
