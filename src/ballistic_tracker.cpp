@@ -109,6 +109,17 @@ bool BallisticTracker::update(
         {
             matched = true;
 
+            // Confirm displacement from launch point to reject stationary noise inside launch gate
+            if (!launch_displacement_confirmed) {
+                double dx_from_launch = raw.cx - launch_x;
+                if (dx_from_launch >= min_launch_move_m) {
+                    launch_displacement_confirmed = true;
+                } else if (stamp_sec - launch_stamp > launch_timeout_sec) {
+                    reset();
+                    return false;
+                }
+            }
+
             // Reject mid-air stationary noise (even if background depth jitters back and forth around a fixed point)
             double ref_dx = raw.cx - stationary_ref_x;
             double ref_dy = raw.cy - stationary_ref_y;
