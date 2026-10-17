@@ -37,6 +37,7 @@ public:
     // Launch tracking and displacement confirmation
     double launch_x{0.0}, launch_y{0.0}, launch_z{0.0};
     double launch_stamp{0.0};
+    double stationary_ref_x{0.0}, stationary_ref_y{0.0}, stationary_ref_z{0.0};
     bool launch_displacement_confirmed{false};
     double min_launch_vx{0.30}; ///< Minimum forward velocity (m/s) to confirm launch
 
@@ -56,7 +57,7 @@ public:
 
     // Velocity Smoothing & Physical Velocity Bounds (Loaded via ROS 2 tracker_params.yaml)
     double vel_smoothing_beta{0.30};      ///< Velocity measurement blend weight (0..1)
-    double min_flight_vx_m_s{-0.30};      ///< Minimum allowed forward velocity in flight (m/s)
+    double min_flight_vx_m_s{-1.50};      ///< Minimum allowed forward velocity in flight (m/s)
     double max_vx_m_s{15.00};             ///< Maximum physical forward velocity (m/s)
     double max_abs_vy_m_s{2.50};          ///< Maximum physical lateral velocity (m/s)
     double min_vz_m_s{-10.00};            ///< Minimum physical vertical velocity (m/s)
@@ -66,7 +67,7 @@ public:
     double min_launch_move_m{0.08};       ///< Minimum forward displacement (m) to confirm launch
     double launch_timeout_sec{0.20};      ///< Timeout to reset stationary launch pending anchor (s)
     double max_flight_duration_sec{2.50}; ///< Maximum possible flight duration before auto-reset (s)
-    double min_stationary_move_m{0.025};  ///< Minimum 3D frame-to-frame movement to not count as stationary (m)
+    double min_stationary_move_m{0.10};   ///< Minimum 3D net movement from anchor to not count as stationary (m)
     int max_stationary_frames{8};         ///< Consecutive stationary frames in mid-air before auto-reset
     int min_track_points_limit{8};        ///< Lower bound for in-flight minimum cluster points
 

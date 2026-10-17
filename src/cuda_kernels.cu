@@ -393,7 +393,8 @@ namespace realsense_dust_cloth
                             c_cy >= filter.launch_min_y && c_cy <= filter.launch_max_y &&
                             c_cz >= filter.launch_min_z && c_cz <= filter.launch_max_z)
                         {
-                            score = 1000.0f - c_cx * 20.0f + static_cast<float>(sz) * 0.1f;
+                            // Favor the most forward cluster (away from hand/launcher); size is only a tiebreaker so a large hand cannot outrank the cloth
+                            score = 1000.0f + c_cx * 50.0f + static_cast<float>(sz) * 0.1f;
                         }
                         else
                         {
@@ -481,10 +482,14 @@ namespace realsense_dust_cloth
         if (d > 0)
         {
             uint16_t old = bg_depth[idx];
-            if (old == 0 || d < old)
+            if (old == 0)
             {
-                // Keep minimum valid depth observed during calibration so background jitter never leaks as foreground
                 bg_depth[idx] = d;
+            }
+            else
+            {
+                // Running average for stable background calibration
+                bg_depth[idx] = static_cast<uint16_t>((old * 3 + d + 2) / 4);
             }
         }
     }

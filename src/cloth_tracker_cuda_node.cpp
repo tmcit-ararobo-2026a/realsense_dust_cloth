@@ -178,13 +178,13 @@ void ClothTrackerCudaNode::declare_parameters() {
     this->declare_parameter("landing_min_z", 0.05);
     this->declare_parameter("drag_coeff", 0.40);
     this->declare_parameter("vel_smoothing_beta", 0.30);
-    this->declare_parameter("min_flight_vx_m_s", -0.30);
+    this->declare_parameter("min_flight_vx_m_s", -1.50);
     this->declare_parameter("max_vx_m_s", 15.0);
     this->declare_parameter("max_abs_vy_m_s", 2.50);
     this->declare_parameter("min_vz_m_s", -10.0);
     this->declare_parameter("max_vz_m_s", 8.0);
     this->declare_parameter("max_flight_duration_sec", 2.50);
-    this->declare_parameter("min_stationary_move_m", 0.025);
+    this->declare_parameter("min_stationary_move_m", 0.10);
     this->declare_parameter("max_stationary_frames", 8);
 }
 

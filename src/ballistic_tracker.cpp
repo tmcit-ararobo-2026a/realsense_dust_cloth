@@ -18,7 +18,7 @@ bool BallisticTracker::get_prediction(double stamp_sec, float& px, float& py, fl
     }
     double dt = stamp_sec - last_stamp;
     if (dt <= 0.0 || (max_flight_duration_sec > 0.0 && dt > max_flight_duration_sec)) {
-        dt = 0.0;
+        dt = 0.016;
     }
     double drag_factor = std::clamp(1.0 - drag_coeff * dt, 0.0, 1.0);
     px = static_cast<float>(x + vx * dt * drag_factor);
@@ -44,7 +44,6 @@ bool BallisticTracker::update(
             raw.cz >= launch_min_z && raw.cz <= launch_max_z &&
             raw.cluster_points_count >= min_cluster_points)
         {
-            // Lock onto candidate for prediction gating; wait for forward displacement to confirm launch
             state = TrackerState::TRACKING;
             x = raw.cx;
             y = raw.cy;
@@ -53,19 +52,19 @@ bool BallisticTracker::update(
             launch_y = raw.cy;
             launch_z = raw.cz;
             launch_stamp = stamp_sec;
-            launch_displacement_confirmed = (min_launch_move_m <= 0.0);
-            vx = min_launch_vx;
+            stationary_ref_x = raw.cx;
+            stationary_ref_y = raw.cy;
+            stationary_ref_z = raw.cz;
+            launch_displacement_confirmed = false;
+            vx = std::max(min_launch_vx, 2.0); // Initial forward velocity estimate from b7115cb
             vy = 0.0;
             vz = 0.0;
             last_stamp = stamp_sec;
-            tracked_count = launch_displacement_confirmed ? 1 : 0;
+            tracked_count = 1;
             lost_count = 0;
             stationary_count = 0;
-            if (launch_displacement_confirmed) {
-                out = raw;
-                return true;
-            }
-            return false;
+            out = raw;
+            return true;
         } else {
             return false;
         }
@@ -78,6 +77,7 @@ bool BallisticTracker::update(
         reset();
         return false;
     }
+
 
     float pred_xf = 0.0f, pred_yf = 0.0f, pred_zf = 0.0f;
     get_prediction(stamp_sec, pred_xf, pred_yf, pred_zf);
@@ -109,29 +109,21 @@ bool BallisticTracker::update(
         {
             matched = true;
 
-            // Confirm displacement from launch point to reject stationary noise inside launch gate
-            if (!launch_displacement_confirmed) {
-                double dx_from_launch = raw.cx - launch_x;
-                if (dx_from_launch >= min_launch_move_m && new_vx >= min_launch_vx) {
-                    launch_displacement_confirmed = true;
-                } else if (stamp_sec - launch_stamp > launch_timeout_sec) {
-                    reset();
-                    return false;
-                }
-            }
-
-            // Reject mid-air stationary noise (e.g. static ceiling or back wall flicker)
-            double step_dx = raw.cx - x;
-            double step_dy = raw.cy - y;
-            double step_dz = raw.cz - z;
-            double step_move = std::sqrt(step_dx * step_dx + step_dy * step_dy + step_dz * step_dz);
-            if (step_move < min_stationary_move_m) {
+            // Reject mid-air stationary noise (even if background depth jitters back and forth around a fixed point)
+            double ref_dx = raw.cx - stationary_ref_x;
+            double ref_dy = raw.cy - stationary_ref_y;
+            double ref_dz = raw.cz - stationary_ref_z;
+            double dist_from_ref = std::sqrt(ref_dx * ref_dx + ref_dy * ref_dy + ref_dz * ref_dz);
+            if (dist_from_ref < min_stationary_move_m) {
                 stationary_count++;
                 if (max_stationary_frames > 0 && stationary_count >= max_stationary_frames) {
                     reset();
                     return false;
                 }
             } else {
+                stationary_ref_x = raw.cx;
+                stationary_ref_y = raw.cy;
+                stationary_ref_z = raw.cz;
                 stationary_count = 0;
             }
 
@@ -151,17 +143,14 @@ bool BallisticTracker::update(
 
             last_stamp = stamp_sec;
             lost_count = 0;
-
-            if (!launch_displacement_confirmed) {
-                return false;
-            }
-
             tracked_count++;
             out = raw;
 
             // Stop tracking when cloth touches the floor plane (landing_min_z)
             if (z <= landing_min_z) {
                 state = TrackerState::LANDED;
+                lost_count = 0;
+                stationary_count = 0;
             }
             return true;
         }
@@ -180,6 +169,8 @@ bool BallisticTracker::update(
         lost_count++;
         if (lost_count > max_lost_frames || pred_z <= landing_min_z) {
             state = TrackerState::LANDED;
+            lost_count = 0;
+            stationary_count = 0;
             return false;
         }
         return false;
