@@ -105,9 +105,9 @@ ros2 bag play <記録したbagフォルダへのパス> --loop --clock
 
 ---
 
-### A. 実機での rosbag 記録コマンド（全検証トピック入り完全版）
+### A. 実機での rosbag 記録コマンド（生Depth・カラー・弾道データ完全版）
 
-実機（ロボットまたは手元PC）のターミナルで以下を実行します（3Dデバッグ点群・着地予測・JPEG圧縮カラー映像を含む全13トピックを記録します）：
+実機（ロボットまたは手元PC）のターミナルで以下を実行します。**生Depth画像とカメラ内部パラメータ（CameraInfo）を含めることで、持ち帰ったPC上で何度でも追尾ノードを再実行・パラメータ最適化が可能**になります（全15トピック）：
 
 ```bash
 ros2 bag record \
@@ -122,11 +122,16 @@ ros2 bag record \
   /cloth/debug/roi_markers \
   /cloth/debug/cluster_points \
   /cloth/debug/filtered_points \
+  /camera/camera/depth/image_rect_raw \
+  /camera/camera/depth/camera_info \
   /camera/camera/color/image_raw/compressed \
   /camera/camera/color/camera_info \
-  -o cloth_test_03
+  -o cloth_test_04
 ```
-* **記録される全13トピックの内訳**:
+* **記録される主要トピックの内訳**:
+  * `/camera/camera/depth/image_rect_raw`, `/camera/camera/depth/camera_info`: **生Depth画像とカメラ情報**（`use_direct_realsense: true` 実機直結時でも録画時のみ自動配信。オフライン再解析・アルゴリズム検証に必須）
+  * `/camera/camera/color/image_raw/compressed`: JPEG圧縮カラー映像（30fps・正立回転済み・超軽量）
+  * `/camera/camera/color/camera_info`: カラーカメラの内部パラメータ情報
   * `/tf`, `/tf_static`: カメラ設置姿勢および飛翔中の雑巾座標（`flying_cloth`）
   * `/cloth/position`: 雑巾の3D位置座標（PointStamped: X, Y, Z）
   * `/cloth/trajectory_marker`: RViz用の赤い球体・弾道マーカー
@@ -137,13 +142,14 @@ ros2 bag record \
   * `/cloth/debug/roi_markers`: 空間ROI（緑枠）・発射口ゲート（水色枠）・追尾ゲート球（黄球）
   * `/cloth/debug/cluster_points`: そのフレームで「雑巾」として抽出された3D点群（追跡途切れの原因特定用）
   * `/cloth/debug/filtered_points`: 背景差分・ROIを通過した全3D点群（壁ノイズや点群密度の検証用）
-  * `/camera/camera/color/image_raw/compressed`: JPEG圧縮カラー映像（30fps・正立回転済み・超軽量）
-  * `/camera/camera/color/camera_info`: カラーカメラの内部パラメータ情報
 * **終了**: 投擲が終わったら **`Ctrl + C`** で保存が完了します。
-* ※ 2回目以降は `-o cloth_test_04`, `-o cloth_test_05` のように保存名を変更してください。
+* ※ 2回目以降は `-o cloth_test_05`, `-o cloth_test_06` のように保存名を変更してください。
+
+> 💡 **容量を極力抑えたい場合（超軽量モード）**:  
+> Depth画像が不要で投擲結果と動画だけを残したい場合は、上記のリストから `/camera/camera/depth/...` の2行を抜くことで、1投擲あたり約10MBの超軽量で保存できます。
 
 > 💡 **launch のオプションで自動録画する場合**:  
-> 実機起動時に `record:=true` を渡すことでも自動録画されます：  
+> 実機起動時に `record:=true` を渡すことでも、生Depthを含む全トピックが自動録画されます：  
 > `ros2 launch realsense_dust_cloth cloth_tracker.launch.py record:=true`
 
 ---
@@ -233,24 +239,25 @@ python3 ~/ros2_ws/src/realsense_dust_cloth/realsense_dust_cloth/trajectory_proba
 | `camera_height_offset_m` | `1.00` [m] | ロボット原点 (base_link) からのカメラ搭載高さ |
 | `camera_pitch_deg` | `20.0` [deg] | カメラ仰角（上向き 20°） |
 | `camera_roll_deg` | `90.0` [deg] | カメラ縦置き角度（時計回り 90° ロール） |
-| `min_x_m` / `max_x_m` | `0.20` / `5.50` [m] | 前後方向の ROI 抽出空間（発射口手前20cm〜着地先5.5m） |
-| `min_y_m` / `max_y_m` | `-1.20` / `1.20` [m] | 左右方向の ROI 抽出空間 |
-| `min_z_m` / `max_z_m` | `0.08` / `3.30` [m] | 高さ方向の抽出空間（最高到達点から床面まで完全包含） |
-| `launch_min_x` / `launch_max_x` | `0.20` / `2.00` [m] | 発射口ロックオンエリア X（手前20cm〜前方2mまで飛び出しを捕捉） |
-| `launch_min_y` / `launch_max_y` | `-0.50` / `0.50` [m] | 発射口ロックオンエリア Y（左右幅 1m） |
-| `launch_min_z` / `launch_max_z` | `1.10` / `1.80` [m] | 発射口ロックオンエリア Z |
-| `min_launch_vx` | `0.20` [m/s] | 発射確定最小前進速度 |
-| `min_launch_move_m` | `0.04` [m] | 発射確定最小前進移動量（4cm前進でロックオン開始） |
-| `min_cluster_points` | `4` | 雑巾最小点群数（超高速時でも捕捉） |
-| `max_cloth_size_m` | `0.50` [m] | 雑巾最大対角サイズ（200x300mm布に合わせて50cmとし、人間や壁を除外） |
+| `min_x_m` / `max_x_m` | `0.35` / `3.50` [m] | 前後方向の ROI 抽出空間（発射直後からシャッター壁手前3.5m） |
+| `min_y_m` / `max_y_m` | `-0.60` / `0.60` [m] | 左右方向の ROI 抽出空間 |
+| `min_z_m` / `max_z_m` | `0.05` / `2.40` [m] | 高さ方向の抽出空間（天井梁ノイズを遮断） |
+| `launch_min_x` / `launch_max_x` | `0.35` / `1.80` [m] | 発射口ロックオンエリア X（飛び出しを即時捕捉） |
+| `launch_min_y` / `launch_max_y` | `-0.45` / `0.45` [m] | 発射口ロックオンエリア Y |
+| `launch_min_z` / `launch_max_z` | `0.80` / `2.10` [m] | 発射口ロックオンエリア Z |
+| `min_launch_vx` | `0.30` [m/s] | 発射確定最小前進速度 |
+| `min_launch_move_m` | `0.05` [m] | 発射確定最小前進移動量（静止ノイズ誤認識防止） |
+| `min_cluster_points` | `6` | 雑巾最小点群数（高速飛翔で薄くなっても捕捉） |
+| `max_cloth_size_m` | `0.45` [m] | 雑巾最大対角サイズ（フライングピクセルや奥の尾を除外） |
 | `voxel_size_m` | `0.02` [m] | ボクセルダウンサンプリング（2cm） |
-| `cluster_eps_m` | `0.20` [m] | クラスタ探索距離（200x300mm布を1塊に統合） |
-| `gate_radius_m` | `1.20` [m] | 飛行追跡ゲート半径 |
-| `max_lost_frames` | `20` | 見失い許容フレーム数 |
-| `landing_min_z` | `0.05` [m] | 着地確定判定高さ |
+| `cluster_eps_m` | `0.08` [m] | クラスタ探索距離（遠方ノイズとの鎖状結合を遮断） |
+| `continuity_thresh_m` | `0.05` [m] | 輪郭連続性閾値（5cm以上の奥行き急変をフライングピクセルとして遮断） |
+| `continuity_min_neighbors` | `3` | 有効近傍ピクセル数（密集した塊のみ抽出） |
+| `gate_radius_m` | `0.65` [m] | 飛行追跡ゲート半径（壁・天井へのワープ乗り移り防止） |
+| `max_lost_frames` | `12` | 見失い許容フレーム数 |
+| `landing_min_z` | `0.15` [m] | 着地確定判定高さ（カゴ・床面到達でLANDEDへ遷移） |
 | `drag_coeff` | `0.40` | 空気抵抗減衰係数 |
 | `max_vx_m_s` | `15.0` [m/s] | 飛翔最大前進速度上限 |
-| `rs_exposure_us` | `4500` [μs] | シャッタースピード（4.5ms固定露出で残像ブレを物理防止） |
 | `use_direct_realsense` | `true` | RealSense C++ API 直接ストリーミング |
 | `use_bg_subtraction` | `true` | 静止背景差分（停止時は `true`、台車走行射撃時は `false`） |
 | `enable_color_stream` | `true` | JPEG 圧縮カラー配信（rosbag 記録 & 遠隔監視用） |
