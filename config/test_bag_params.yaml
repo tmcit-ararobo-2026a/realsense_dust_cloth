@@ -45,10 +45,10 @@
     launch_max_z: 2.00                             # 発射口エリア Z 最大 (m)
     min_launch_vx: 0.10                            # 発射確定最小前進速度 (m/s)
     min_launch_move_m: 0.08                        # 発射確定最小移動変位 (m)
-    launch_timeout_sec: 0.20                       # 発射保留タイムアウト時間 (s)
+    pending_reset_sec: 0.20                        # 発射保留タイムアウト時間 (s)
     gate_radius_m: 0.50                            # 探索ゲート半径 (m)
     max_lost_frames: 6                             # 見失い許容フレーム数 (着地後の背景誤吸着を防止)
-    min_track_points_limit: 8                      # 飛翔追跡 最小点数下限
+    min_tracking_points: 8                         # 飛翔追跡 最小点数下限
     landing_min_z: 0.05                            # 着地確定判定高さ (m)
     drag_coeff: 0.40                               # 空気抵抗減衰係数
     vel_smoothing_beta: 0.30                       # 速度平滑化ブレンド率

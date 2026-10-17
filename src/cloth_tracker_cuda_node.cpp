@@ -19,9 +19,6 @@ ClothTrackerCudaNode::ClothTrackerCudaNode(const rclcpp::NodeOptions& options)
     pub_point_ = this->create_publisher<geometry_msgs::msg::PointStamped>("/cloth/position", 10);
     pub_marker_ = this->create_publisher<visualization_msgs::msg::Marker>("/cloth/trajectory_marker", 10);
     pub_path_ = this->create_publisher<nav_msgs::msg::Path>("/cloth/measured_path", 10);
-    pub_raw_depth_ = this->create_publisher<sensor_msgs::msg::Image>("/camera/camera/depth/image_rect_raw", 10);
-    pub_depth_info_ = this->create_publisher<sensor_msgs::msg::CameraInfo>("/camera/camera/depth/camera_info", 10);
-    pub_raw_color_ = this->create_publisher<sensor_msgs::msg::Image>("/camera/camera/color/image_raw", 10);
     pub_compressed_color_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("/camera/camera/color/image_raw/compressed", 10);
     pub_color_info_ = this->create_publisher<sensor_msgs::msg::CameraInfo>("/camera/camera/color/camera_info", 10);
     pub_rotated_color_ = this->create_publisher<sensor_msgs::msg::Image>("/cloth/camera_view", 10);
@@ -37,8 +34,16 @@ ClothTrackerCudaNode::ClothTrackerCudaNode(const rclcpp::NodeOptions& options)
         return;
     }
 
+    const std::string depth_topic = this->get_parameter("depth_topic").as_string();
+    const std::string camera_info_topic = this->get_parameter("camera_info_topic").as_string();
+    const std::string color_topic = this->get_parameter("color_topic").as_string();
+
     if (use_direct_realsense_) {
 #ifdef HAVE_REALSENSE2
+        pub_raw_depth_ = this->create_publisher<sensor_msgs::msg::Image>(depth_topic, 10);
+        pub_depth_info_ = this->create_publisher<sensor_msgs::msg::CameraInfo>(camera_info_topic, 10);
+        pub_raw_color_ = this->create_publisher<sensor_msgs::msg::Image>(color_topic, 10);
+
         RCLCPP_INFO(this->get_logger(), "Starting Direct librealsense2 C++ API loop (Hardware Native)...");
         is_running_ = true;
         realsense_thread_ = std::thread(&ClothTrackerCudaNode::run_direct_realsense_loop, this);
@@ -49,10 +54,6 @@ ClothTrackerCudaNode::ClothTrackerCudaNode(const rclcpp::NodeOptions& options)
     }
 
     if (!use_direct_realsense_) {
-        std::string depth_topic = this->get_parameter("depth_topic").as_string();
-        std::string camera_info_topic = this->get_parameter("camera_info_topic").as_string();
-        std::string color_topic = this->get_parameter("color_topic").as_string();
-
         rclcpp::QoS qos(120);
         qos.best_effort();
 
@@ -152,9 +153,7 @@ void ClothTrackerCudaNode::declare_parameters() {
     this->declare_parameter("max_lost_frames", 15);
     this->declare_parameter("min_launch_vx", 0.10);
     this->declare_parameter("min_launch_move_m", 0.08);
-    this->declare_parameter("launch_timeout_sec", 0.20);
     this->declare_parameter("pending_reset_sec", 0.20);
-    this->declare_parameter("min_track_points_limit", 8);
     this->declare_parameter("min_tracking_points", 8);
     this->declare_parameter("depth_fps", 60);
     this->declare_parameter("rs_laser_power", -1.0);
@@ -232,18 +231,8 @@ void ClothTrackerCudaNode::load_parameters() {
     ballistic_tracker_.max_lost_frames = this->get_parameter("max_lost_frames").as_int();
     ballistic_tracker_.min_launch_vx = this->get_parameter("min_launch_vx").as_double();
     ballistic_tracker_.min_launch_move_m = this->get_parameter("min_launch_move_m").as_double();
-
-    if (this->has_parameter("pending_reset_sec")) {
-        ballistic_tracker_.launch_timeout_sec = this->get_parameter("pending_reset_sec").as_double();
-    } else {
-        ballistic_tracker_.launch_timeout_sec = this->get_parameter("launch_timeout_sec").as_double();
-    }
-
-    if (this->has_parameter("min_tracking_points")) {
-        ballistic_tracker_.min_track_points_limit = this->get_parameter("min_tracking_points").as_int();
-    } else {
-        ballistic_tracker_.min_track_points_limit = this->get_parameter("min_track_points_limit").as_int();
-    }
+    ballistic_tracker_.launch_timeout_sec = this->get_parameter("pending_reset_sec").as_double();
+    ballistic_tracker_.min_track_points_limit = this->get_parameter("min_tracking_points").as_int();
     ballistic_tracker_.min_cluster_points = filter_cfg_.min_cluster_points;
     ballistic_tracker_.landing_min_z = this->get_parameter("landing_min_z").as_double();
     ballistic_tracker_.drag_coeff = this->get_parameter("drag_coeff").as_double();
@@ -645,7 +634,7 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
     // When actively tracking: publish every frame.
     // When landed/idle: publish at 10Hz so the line and markers stay solidly on RViz screen without disappearing.
     static double last_static_publish_sec = 0.0;
-    bool should_publish_markers = is_actively_tracked || (now_sec - last_static_publish_sec >= 0.10);
+    bool should_publish_markers = is_actively_tracked || (std::abs(now_sec - last_static_publish_sec) >= 0.10);
 
     if (should_publish_markers && !trajectory_points_.empty()) {
         last_static_publish_sec = now_sec;

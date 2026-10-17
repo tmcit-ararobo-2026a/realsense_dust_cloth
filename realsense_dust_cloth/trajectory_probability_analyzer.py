@@ -53,9 +53,10 @@ class ClothTrajectoryLogger(Node):
                 # New launch detected! Save previous flight
                 self.save_flight(self.current_flight_raw)
                 self.current_flight_raw = pts
-            else:
+                self.last_msg_time = time.time()
+            elif pts != self.current_flight_raw:
                 self.current_flight_raw = pts
-            self.last_msg_time = time.time()
+                self.last_msg_time = time.time()
         elif msg.id == 0 and len(msg.points) > len(self.current_flight_raw):
             # Fallback to LINE_STRIP if SPHERE_LIST is not available
             pts = [(p.x, p.y, p.z) for p in msg.points]
