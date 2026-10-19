@@ -5,6 +5,9 @@
 #include <vector>
 #include <thread>
 #include <atomic>
+#include <mutex>
+#include <condition_variable>
+#include <opencv2/opencv.hpp>
 
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
@@ -65,6 +68,7 @@ private:
     // Trajectory history
     std::vector<std::pair<double, geometry_msgs::msg::Point>> trajectory_points_;
     double last_frame_stamp_sec_{0.0};
+    double last_static_publish_sec_{0.0};
 
     // Last known cloth position (for continuous TF broadcasting base_link -> flying_cloth)
     double last_cloth_x_{0.0};
@@ -121,6 +125,22 @@ private:
 #ifdef HAVE_REALSENSE2
     std::unique_ptr<rs2::pipeline> rs_pipe_;
 #endif
+
+    // Asynchronous Color Worker Thread
+    struct ColorTask {
+        cv::Mat bgr_frame;
+        rclcpp::Time stamp;
+        sensor_msgs::msg::CameraInfo color_info;
+        bool has_color_info{false};
+        bool has_new_frame{false};
+    };
+    std::thread color_worker_thread_;
+    std::condition_variable color_cv_;
+    std::mutex color_mutex_;
+    std::atomic<bool> color_worker_running_{false};
+    ColorTask latest_color_task_;
+    void color_worker_loop();
+    void push_color_frame(const cv::Mat& bgr_mat, const rclcpp::Time& stamp, const sensor_msgs::msg::CameraInfo* info = nullptr);
 };
 
 } // namespace realsense_dust_cloth
