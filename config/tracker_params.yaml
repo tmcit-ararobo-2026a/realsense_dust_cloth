@@ -41,9 +41,9 @@
     enable_ballistic_filter: true                  # 弾道フィルタ有効化 (静止ノイズを遮断し飛翔体のみロック)
     launch_min_x: 0.60                             # 発射口エリア X 最小 (m, カメラ位置0.50mの直前から)
     launch_max_x: 1.80                             # 発射口エリア X 最大 (m, 高速射出で1フレーム目に1m先へ飛んでも捕捉)
-    launch_min_y: -0.45                            # 発射口エリア Y 最小 (m)
-    launch_max_y: 0.45                             # 発射口エリア Y 最大 (m)
-    launch_min_z: 0.80                             # 発射口エリア Z 最小 (m)
+    launch_min_y: -0.25                            # 発射口エリア Y 最小 (m)
+    launch_max_y: 0.25                             # 発射口エリア Y 最大 (m)
+    launch_min_z: 0.95                             # 発射口エリア Z 最小 (m)
     launch_max_z: 2.10                             # 発射口エリア Z 最大 (m, 上部からの射出をカバー)
     min_launch_vx: 0.30                            # 発射判定 最小前進速度 (m/s)
     min_launch_move_m: 0.05                        # 静止ノイズの揺れを無視するための前進距離 (m)
@@ -76,13 +76,13 @@
     # 【6. 点群クラスタリング & 雑巾抽出】
     # =========================================================================
     voxel_size_m: 0.02                             # ボクセル間引きサイズ (m, 2cm)
-    cluster_eps_m: 0.15                            # DBSCANクラスタ探索距離 (m, 高速飛翔時の疎な点群を繋ぎつつ背景結合を防止)
-    min_cluster_points: 6                          # 雑巾クラスタ最小点数 (高速飛翔で点群が薄くなっても確実に拾う)
+    cluster_eps_m: 0.10                            # DBSCANクラスタ探索距離 (m, 離れたノイズ点の結合を抑制)
+    min_cluster_points: 25                         # 雑巾クラスタ最小点数 (小さなノイズ塊を除外)
     max_cluster_points: 8000                       # 雑巾クラスタ最大点数
-    min_cloth_size_m: 0.03                         # 雑巾の最小3Dサイズ (m, これ未満の微小ゴミ塊を除外)
+    min_cloth_size_m: 0.05                         # 雑巾の最小3Dサイズ (m, これ未満の微小ゴミ塊を除外)
     max_cloth_size_m: 0.60                         # 雑巾最大3D対角サイズ (m, 巨大ノイズや奥へ伸びる尾を除外)
-    continuity_thresh_m: 0.15                      # 隣り合うピクセルとの許容深度差 (m, フライングピクセルを遮断)
-    continuity_min_neighbors: 2                    # 4方向のうち繋がっているべき最小方向数 (0〜4)
+    continuity_thresh_m: 0.08                      # 隣り合うピクセルとの許容深度差 (m, フライングピクセルを遮断)
+    continuity_min_neighbors: 3                    # 4方向のうち繋がっているべき最小方向数 (0〜4)
     trajectory_history_sec: 15.0                   # RViz軌跡残像の保持秒数 (s)
 
     # =========================================================================
