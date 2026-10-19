@@ -6,8 +6,6 @@
     # =========================================================================
 
     # 【1. カメラ接続・トピック設定】
-    tracking_mode: "depth"
-    points_topic: "/camera/camera/depth/color/points"
     depth_topic: "/camera/camera/depth/image_rect_raw"
     camera_info_topic: "/camera/camera/depth/camera_info"
     color_topic: "/camera/camera/color/image_raw"
