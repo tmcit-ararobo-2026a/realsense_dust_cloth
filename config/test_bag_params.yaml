@@ -12,52 +12,52 @@
     use_direct_realsense: false                    # bag再生のためROS 2トピック購読
     publish_debug_cloud: true                      # デバッグ点群(/cloth/debug/...)をパブリッシュ
 
-    # 【2. カメラ取り付け位置・姿勢 (test_bag 記録時キャリブレーション)】
+    # 【2. カメラ取り付け位置・姿勢 (tracker_params.yamlと同期)】
     publish_static_tf: true                        # ノードから静的TFを直接発行
     camera_parent_frame: "base_link"
     camera_frame: "camera_link"
-    camera_x_offset_m: 0.15                        # 台車手前からカメラまでの距離 (m)
-    camera_height_offset_m: 1.15                   # 床面からカメラレンズ高さ (m, 実測床面基準)
-    camera_pitch_deg: 0.0                          # 仰角 (度, 水平設置)
+    camera_x_offset_m: 0.50                        # base_link からの前方オフセット (m)
+    camera_height_offset_m: 1.00                   # base_link からのカメラ高さ (m)
+    camera_pitch_deg: 20.0                         # 仰角 (度, 水平から上向き20度)
     camera_roll_deg: 90.0                          # 縦置きロール角 (度, 時計回り90度設置)
     camera_width: 640
     camera_height: 480
 
     # 【3. 空間ROIフィルタ (探索境界エリア, base_link 基準)】
-    min_x_m: 0.30                                  # 手前境界 (m)
-    max_x_m: 3.50                                  # 着地先境界 (m, 4m以遠の黒シャッターノイズ遮断)
-    min_y_m: -1.00                                 # 左右幅 (m)
-    max_y_m: 1.00
-    min_z_m: 0.05                                  # 床面境界 (m, 床の反射ノイズカット)
-    max_z_m: 2.10                                  # 天井境界 (m, 蛍光灯・梁ノイズ遮断)
-    min_depth_m: 0.30                              # カメラ最短深度 (m)
-    max_depth_m: 3.80                              # カメラ最長深度 (m, 遠方フリッカー遮断)
+    min_x_m: 0.60                                  # 前方 最小 (m, カメラ位置0.50m + 最短深度手前から検知)
+    max_x_m: 3.50                                  # 前方 最大 (m, 奥のシャッター壁 X=3.66〜4.16m への誤ロックを遮断)
+    min_y_m: -0.60                                 # 左右幅 左側 (m)
+    max_y_m: 0.60                                  # 左右幅 右側 (m)
+    min_z_m: 0.05                                  # 高さ 最小 (m, 床面のカゴ着地までカバー)
+    max_z_m: 2.60                                  # 高さ 最大 (m, 放物線頂点 Z=2.45m を切らずに通し、天井 Z>=2.65m を遮断)
+    min_depth_m: 0.25                              # カメラ最短深度 (m)
+    max_depth_m: 3.20                              # カメラ最長深度 (m, 奥のシャッター壁・遠方ノイズを遮断)
 
     # 【4. 発射口検知ゲート (弾道ステートマシン)】
-    enable_ballistic_filter: true
-    launch_min_x: 0.80                             # 発射口エリア X 最小 (m)
-    launch_max_x: 1.50                             # 発射口エリア X 最大 (m)
-    launch_min_y: -0.25                            # 発射口エリア Y 最小 (m)
-    launch_max_y: 0.25                             # 発射口エリア Y 最大 (m)
-    launch_min_z: 1.40                             # 発射口エリア Z 最小 (m)
-    launch_max_z: 2.00                             # 発射口エリア Z 最大 (m)
-    min_launch_vx: 0.10                            # 発射確定最小前進速度 (m/s)
-    min_launch_move_m: 0.08                        # 発射確定最小移動変位 (m)
-    pending_reset_sec: 0.20                        # 発射保留タイムアウト時間 (s)
-    gate_radius_m: 0.50                            # 探索ゲート半径 (m)
-    max_lost_frames: 6                             # 見失い許容フレーム数 (着地後の背景誤吸着を防止)
-    min_tracking_points: 8                         # 飛翔追跡 最小点数下限
-    landing_min_z: 0.05                            # 着地確定判定高さ (m)
+    enable_ballistic_filter: true                  # 弾道フィルタ有効化
+    launch_min_x: 0.70                             # 発射口エリア X 最小 (m, 0.70mから検知)
+    launch_max_x: 1.60                             # 発射口エリア X 最大 (m)
+    launch_min_y: -0.35                            # 発射口エリア Y 最小 (m)
+    launch_max_y: 0.55                             # 発射口エリア Y 最大 (m, 実機の右ブレ射出Y=0.48mをカバー)
+    launch_min_z: 1.30                             # 発射口エリア Z 最小 (m)
+    launch_max_z: 2.15                             # 発射口エリア Z 最大 (m, 上部からの射出をカバー)
+    min_launch_vx: 0.30                            # 発射判定 最小前進速度 (m/s, tracker_params.yaml準拠で緩やかな射出も確実に捕捉)
+    min_launch_move_m: 0.05                        # 静止ノイズの揺れを無視するための前進距離 (m)
+    pending_reset_sec: 0.25                        # 発射保留タイムアウト時間 (s)
+    gate_radius_m: 0.55                            # 探索ゲート半径 (m, 遠方固定棚・壁への飛び移りを遮断)
+    max_lost_frames: 10                            # 見失い許容フレーム数
+    min_tracking_points: 4                         # 飛翔追跡 最小点数下限 (遠方・斜め姿勢追従)
+    landing_min_z: 0.10                            # 着地確定判定高さ (m, 床面接触で確実にLANDEDへ移行)
     drag_coeff: 0.40                               # 空気抵抗減衰係数
-    vel_smoothing_beta: 0.30                       # 速度平滑化ブレンド率
-    min_flight_vx_m_s: -0.30                       # 飛翔中 最小前進速度下限 (m/s)
-    max_vx_m_s: 15.0                               # 飛翔最大前進速度上限 (m/s)
-    max_abs_vy_m_s: 2.50                           # 飛翔中 最大横移動速度上限 (m/s)
-    min_vz_m_s: -10.0                              # 飛翔中 最小落下速度下限 (m/s)
-    max_vz_m_s: 8.0                                # 飛翔中 最大上昇速度上限 (m/s)
+    vel_smoothing_beta: 0.50                       # 速度平滑化ブレンド率
+    min_flight_vx_m_s: -0.15                       # 飛翔中 最小前進速度下限 (m/s, 後退逆走を完全遮断)
+    max_vx_m_s: 12.0                               # 飛翔最大前進速度上限 (m/s)
+    max_abs_vy_m_s: 2.00                           # 飛翔中 最大横移動速度上限 (m/s)
+    min_vz_m_s: -8.0                               # 飛翔中 最小落下速度下限 (m/s)
+    max_vz_m_s: 6.00                               # 飛翔中 最大上昇速度上限 (m/s, 仰角20度射出初速+5m/sを許容)
     max_flight_duration_sec: 2.50                  # 最大飛行時間タイムアウト (s)
-    min_stationary_move_m: 0.025                   # 空中静止判定の最小移動距離 (m)
-    max_stationary_frames: 8                       # 空中静止許容フレーム数
+    min_stationary_move_m: 0.06                    # 空中静止判定の最小移動距離 (m)
+    max_stationary_frames: 4                       # 空中静止許容フレーム数 (着地停滞を早期検知)
 
     # 【5. 背景差分 (静止物除去)】
     use_bg_subtraction: true                       # 静止した壁・棚・床を完全消去
@@ -68,14 +68,14 @@
 
     # 【6. 点群クラスタリング & 雑巾抽出】
     voxel_size_m: 0.02                             # ボクセル間引き (2cm)
-    cluster_eps_m: 0.08                            # クラスタ探索距離 (m, 遠方背景との結合を防止)
-    min_cluster_points: 25                         # 雑巾クラスタ最小点数 (微小ノイズ除外)
-    max_cluster_points: 6000
+    cluster_eps_m: 0.10                            # クラスタ探索距離 (m, はためき時の分割防止)
+    min_cluster_points: 40                         # 雑巾クラスタ最小点数 (手元の微小ノイズ15〜36点を遮断し本番射出を捕捉)
+    max_cluster_points: 12000                      # 雑巾クラスタ最大点数 (近距離全開時の9300点を確実に許容)
     min_cloth_size_m: 0.05                         # 雑巾最小3Dサイズ (m)
-    max_cloth_size_m: 0.45                         # 雑巾最大3D対角サイズ (m, 1m超のノイズ尾を除外)
-    continuity_thresh_m: 0.05                      # 2Dエッジ連続性チェック許容深度差 (m, フライングピクセル遮断)
-    continuity_min_neighbors: 3                    # 4近傍のうち必要な連続ピクセル数 (0〜4)
-    trajectory_history_sec: 15.0
+    max_cloth_size_m: 1.10                         # 雑巾最大3D対角サイズ (m, 空中で全開時の対角1.05mを完全にカバー)
+    continuity_thresh_m: 0.08                      # 2Dエッジ連続性チェック許容深度差 (m, D435ノイズ耐性)
+    continuity_min_neighbors: 2                    # 4近傍のうち必要な連続ピクセル数 (はためきエッジ保護)
+    trajectory_history_sec: 2.5                    # 軌跡保持時間 (s, 飛翔中の軌跡のみを保持し着地後の不要な結線を防止)
 
     # 【7. カラー映像配信設定】
     enable_color_stream: true

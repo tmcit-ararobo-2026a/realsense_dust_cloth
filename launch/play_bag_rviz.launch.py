@@ -1,13 +1,36 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, ExecuteProcess
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
 
 def generate_launch_description():
     pkg_share = get_package_share_directory('realsense_dust_cloth')
-    config_file = os.path.join(pkg_share, 'config', 'tracker_params.yaml')
+    default_config = os.path.join(pkg_share, 'config', 'test_bag_params.yaml')
     rviz_config = os.path.join(pkg_share, 'rviz', 'cloth_tracker.rviz')
+    default_bag = '/home/akeru/rosbag/trimmed/camera_only/cloth_all_throws_digest'
+
+    # Launch Arguments
+    params_file_arg = DeclareLaunchArgument(
+        'params_file',
+        default_value=default_config,
+        description='Path to ROS 2 parameter file'
+    )
+
+    bag_path_arg = DeclareLaunchArgument(
+        'bag_path',
+        default_value=default_bag,
+        description='Path to rosbag directory to play (empty string to disable bag play)'
+    )
+
+    rate_arg = DeclareLaunchArgument(
+        'rate',
+        default_value='1.0',
+        description='Playback rate multiplier for rosbag'
+    )
 
     # 1. CUDA Cloth Tracker Node
     tracker_node = Node(
@@ -16,7 +39,7 @@ def generate_launch_description():
         name='cloth_tracker_cuda_node',
         output='screen',
         parameters=[
-            config_file,
+            LaunchConfiguration('params_file'),
             {
                 'publish_debug_cloud': True,
                 'use_direct_realsense': False,
@@ -42,8 +65,20 @@ def generate_launch_description():
         parameters=[{'use_sim_time': True}]
     )
 
+    # 4. Automatic Looping Bag Playback
+    bag_play_proc = ExecuteProcess(
+        cmd=['ros2', 'bag', 'play', LaunchConfiguration('bag_path'), '--clock', '-l', '-r', LaunchConfiguration('rate')],
+        name='rosbag_play',
+        output='screen',
+        condition=IfCondition(PythonExpression(["'", LaunchConfiguration('bag_path'), "' != ''"]))
+    )
+
     return LaunchDescription([
+        params_file_arg,
+        bag_path_arg,
+        rate_arg,
         tracker_node,
         world_tf_node,
-        rviz_node
+        rviz_node,
+        bag_play_proc
     ])
