@@ -79,9 +79,17 @@ rosbag 再生時は、実機カメラ直接接続ではなく ROS 2 トピック
 # ターミナル1: トラッカー & RViz2 起動
 ros2 launch realsense_dust_cloth cloth_tracker.launch.py rviz:=true use_sim_time:=true use_direct_realsense:=false
 
-# ターミナル2: bag 再生
-ros2 bag play <記録したbagフォルダ名> --loop --clock
+# ターミナル2: bag 再生（カメラ・Depthトピックのみに限定して再生）
+ros2 bag play <記録したbagフォルダ名> --loop --clock --topics \
+  /camera/camera/depth/image_rect_raw \
+  /camera/camera/depth/camera_info \
+  /camera/camera/color/image_raw/compressed \
+  /camera/camera/color/camera_info
 ```
+
+> 💡 **なぜ `--topics` を指定するのか？**  
+> rosbag に過去の軌道トピック（`/cloth/*`）や TF（`/tf`）が記録されている場合、オプションなしで再生すると過去の古い弾道表示が混入し、現在起動中のノードの追尾計算と競合してしまいます。  
+> `--topics` でカメラ映像と生Depthのみに限定して再生することで、純粋なセンサ入力だけを流し、**現在起動中のノードに新規で追尾・弾道計算を行わせる実験**が可能になります（過去の失敗原因などを当時の軌道のまま確認したい場合は `--topics` を外して全トピック再生してください）。
 
 #### 💡 過去のテスト rosbag を再生する場合
 水平設置（仰角 0°）で撮影された過去のテスト rosbag を再生する場合は、専用設定ファイル **`test_bag_params.yaml`** を指定してください：
@@ -92,8 +100,12 @@ ros2 launch realsense_dust_cloth cloth_tracker.launch.py \
   params_file:=test_bag_params.yaml \
   rviz:=true use_sim_time:=true
 
-# ターミナル2: bag 再生
-ros2 bag play <記録したbagフォルダへのパス> --loop --clock
+# ターミナル2: bag 再生（カメラ・Depthトピックのみ限定）
+ros2 bag play <記録したbagフォルダへのパス> --loop --clock --topics \
+  /camera/camera/depth/image_rect_raw \
+  /camera/camera/depth/camera_info \
+  /camera/camera/color/image_raw/compressed \
+  /camera/camera/color/camera_info
 ```
 * **理由**: デフォルト設定（`tracker_params.yaml`）は本番機体用（上向き 20°、探索範囲 5.5m）です。水平設置で撮影された過去の bag に適用すると、座標が傾いて計算され、着地後に床や奥の壁ノイズを拾って軌道が折れ曲がってしまいます。`test_bag_params.yaml` を指定することで、撮影当時のカメラ角度（仰角 0°）・範囲（3.5m）で綺麗な放物線が再現されます。
 
@@ -172,8 +184,8 @@ ros2 run rqt_image_view rqt_image_view
 
 ---
 
-#### 方法2. RViz2 の画面内で3D軌跡（放物線）と同期して見る
-RVizの3D空間上で、飛行放物線・球体マーカーとカラー映像を同時に再生したい場合：
+#### 方法2. RViz2 の画面内で3D軌跡（放物線）と同期して見る（記録当時の軌道レビュー）
+当時の飛行放物線・球体マーカーとカラー映像をそのまま再生したい場合（全トピックをそのまま出力）：
 
 ```bash
 # ターミナル1: bag再生（-l でループ再生）
@@ -186,6 +198,26 @@ python3 ~/ros2_ws/src/realsense_dust_cloth/realsense_dust_cloth/decompress_image
 ros2 run rviz2 rviz2 -d ~/ros2_ws/src/realsense_dust_cloth/rviz/cloth_tracker.rviz
 ```
 ※ RViz画面左下のカメラビュー枠に、記録されたカラー映像が3D軌跡と完全に同期して表示されます。
+
+---
+
+#### 方法3. 追尾アルゴリズムの再実験・パラメータ検証（カメラ・Depthのみフィルタ再生）
+bag 内に記録されている前回の軌道マーカー（`/cloth/*`）や TF を遮断し、純粋なセンサ入力のみを流して新パラメータで追尾し直したい場合：
+
+```bash
+# ターミナル1: トラッカー & RViz2 起動
+ros2 launch realsense_dust_cloth cloth_tracker.launch.py \
+  params_file:=test_bag_params.yaml \
+  rviz:=true use_sim_time:=true
+
+# ターミナル2: カメラ・Depthトピックのみに限定して再生（--topics）
+ros2 bag play cloth_test_01 --loop --clock --topics \
+  /camera/camera/depth/image_rect_raw \
+  /camera/camera/depth/camera_info \
+  /camera/camera/color/image_raw/compressed \
+  /camera/camera/color/camera_info
+```
+※ 前回の古い弾道や座標軸が混ざることなく、現在のノードが1フレームずつ新パラメータで追尾した結果のみを観察できます。
 
 ---
 
