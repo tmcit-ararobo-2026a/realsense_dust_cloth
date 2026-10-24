@@ -44,13 +44,13 @@ Intel RealSense D435 と NVIDIA Jetson (CUDA) を C++ で密結合した、飛�
 source ~/ros2_ws/install/setup.bash
 
 # 1. 実機単体運用（Direct RealSense API / 停止射撃モード）
-ros2 launch realsense_dust_cloth cloth_tracker.launch.py use_direct_realsense:=true
+ros2 launch realsense_dust_cloth cloth_tracker.launch.py
 
 # 2. RViz2 GUI も一緒に起動して弾道を確認する場合
-ros2 launch realsense_dust_cloth cloth_tracker.launch.py use_direct_realsense:=true rviz:=true
+ros2 launch realsense_dust_cloth cloth_tracker.launch.py rviz:=true
 
 # 3. ロボットが走行しながら撃つ場合（移動射撃モード・背景差分OFF）
-ros2 launch realsense_dust_cloth cloth_tracker.launch.py use_direct_realsense:=true use_bg_subtraction:=false
+ros2 launch realsense_dust_cloth cloth_tracker.launch.py use_bg_subtraction:=false
 ```
 
 ---
@@ -299,7 +299,7 @@ python3 ~/ros2_ws/src/realsense_dust_cloth/realsense_dust_cloth/trajectory_proba
 ### Launch 起動時のモード切り替えオプション（スイッチ引数）
 `cloth_tracker.launch.py` では、必要に応じて実行モードのみを引数で切り替えられます：
 
-* `use_direct_realsense:=false`: ROS 2 トピック（`/camera/...`）から深度を受け取るモード
+* `use_direct_realsense:=false`: ROS 2 トピック（`/camera/...`）から深度を受け取るモード（実機ではデフォルトで `true`）
 * `use_bg_subtraction:=false`: ロボット走行時の射撃モード（背景差分をOFF）
 * `use_sim_time:=true`: Isaac Sim や rosbag 再生時のシミュレーションクロック同期
 * `rviz:=true`: 手元 PC 等で RViz2 GUI を同時に起動

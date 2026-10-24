@@ -56,8 +56,8 @@ def generate_launch_description():
 
     declare_use_direct_rs = DeclareLaunchArgument(
         'use_direct_realsense',
-        default_value='',
-        description='Optional override: true (direct librealsense2) or false (ROS 2 topics). Empty uses YAML.'
+        default_value='true',
+        description='Optional override: true (direct librealsense2) or false (ROS 2 topics). Defaults to true for real robot.'
     )
 
     declare_use_sim_time = DeclareLaunchArgument(
