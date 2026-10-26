@@ -68,6 +68,8 @@ namespace realsense_dust_cloth
             CameraIntrinsics intrin,
             CameraPoseConfig pose,
             FilterConfig filter,
+            float3 pred_pos,
+            bool has_prediction,
             float3 *__restrict__ valid_points,
             int *__restrict__ valid_count,
             int max_valid_points)
@@ -153,6 +155,32 @@ namespace realsense_dust_cloth
                 z_rob < filter.min_z_m || z_rob > filter.max_z_m)
             {
                 return;
+            }
+
+            // Restrict points to the active 3D gate (padded by max_cloth_size_m so large objects
+            // crossing the gate boundary are not artificially sliced into small cloth-sized clusters,
+            // while far background/wall noise cannot overflow the voxel buffer or chain-merge).
+            constexpr float HALF_CLOTH_EXTENT_RATIO = 0.5f;
+            if (has_prediction)
+            {
+                float dx = x_rob - pred_pos.x;
+                float dy = y_rob - pred_pos.y;
+                float dz = z_rob - pred_pos.z;
+                float max_gate_r = filter.gate_radius_m + (use_bg_sub ? filter.max_cloth_size_m : (filter.max_cloth_size_m * HALF_CLOTH_EXTENT_RATIO));
+                if (dx * dx + dy * dy + dz * dz > max_gate_r * max_gate_r)
+                {
+                    return;
+                }
+            }
+            else
+            {
+                float pad = use_bg_sub ? filter.max_cloth_size_m : (filter.max_cloth_size_m * HALF_CLOTH_EXTENT_RATIO);
+                if (x_rob < filter.launch_min_x - pad || x_rob > filter.launch_max_x + pad ||
+                    y_rob < filter.launch_min_y - pad || y_rob > filter.launch_max_y + pad ||
+                    z_rob < filter.launch_min_z - pad || z_rob > filter.launch_max_z + pad)
+                {
+                    return;
+                }
             }
 
             int out_idx = atomicAdd(valid_count, 1);
@@ -384,7 +412,10 @@ namespace realsense_dust_cloth
                         }
 
                         // Close to ballistic prediction: highest priority
-                        score = 3000.0f - dist * 1000.0f + static_cast<float>(sz) * 0.1f;
+                        constexpr float PRED_BASE_SCORE = 3000.0f;
+                        constexpr float PRED_DIST_PENALTY = 1000.0f;
+                        constexpr float CLUSTER_SIZE_WEIGHT = 0.1f;
+                        score = PRED_BASE_SCORE - dist * PRED_DIST_PENALTY + static_cast<float>(sz) * CLUSTER_SIZE_WEIGHT;
                     }
                     else
                     {
@@ -394,7 +425,10 @@ namespace realsense_dust_cloth
                             c_cz >= filter.launch_min_z && c_cz <= filter.launch_max_z)
                         {
                             // Favor the most forward cluster (away from hand/launcher); size is only a tiebreaker so a large hand cannot outrank the cloth
-                            score = 1000.0f + c_cx * 50.0f + static_cast<float>(sz) * 0.1f;
+                            constexpr float LAUNCH_BASE_SCORE = 1000.0f;
+                            constexpr float LAUNCH_FORWARD_WEIGHT = 50.0f;
+                            constexpr float CLUSTER_SIZE_WEIGHT = 0.1f;
+                            score = LAUNCH_BASE_SCORE + c_cx * LAUNCH_FORWARD_WEIGHT + static_cast<float>(sz) * CLUSTER_SIZE_WEIGHT;
                         }
                         else
                         {
@@ -482,14 +516,11 @@ namespace realsense_dust_cloth
         if (d > 0)
         {
             uint16_t old = bg_depth[idx];
-            if (old == 0)
+            if (old == 0 || d < old)
             {
+                // Record minimum static depth across calibration frames so stereo edge flicker
+                // on poles/banners/walls never protrudes in front of the calibrated background
                 bg_depth[idx] = d;
-            }
-            else
-            {
-                // Running average for stable background calibration
-                bg_depth[idx] = static_cast<uint16_t>((old * 3 + d + 2) / 4);
             }
         }
     }
@@ -592,6 +623,8 @@ namespace realsense_dust_cloth
             intrin,
             pose,
             filter,
+            make_float3(pred_x, pred_y, pred_z),
+            has_prediction,
             ctx.d_valid_points,
             ctx.d_valid_count,
             ctx.max_pixels);

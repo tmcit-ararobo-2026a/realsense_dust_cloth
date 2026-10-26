@@ -97,6 +97,8 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr pub_compressed_color_;
     rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr pub_color_info_;
 
+    rclcpp::CallbackGroup::SharedPtr depth_cb_group_;
+    rclcpp::CallbackGroup::SharedPtr color_cb_group_;
     rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr sub_camera_info_;
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_depth_image_;
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_color_image_;
@@ -129,8 +131,11 @@ private:
     // Asynchronous Color Worker Thread
     struct ColorTask {
         cv::Mat bgr_frame;
+        std::vector<uint8_t> compressed_data;
+        std::string frame_id;
         rclcpp::Time stamp;
         sensor_msgs::msg::CameraInfo color_info;
+        bool is_compressed{false};
         bool has_color_info{false};
         bool has_new_frame{false};
     };

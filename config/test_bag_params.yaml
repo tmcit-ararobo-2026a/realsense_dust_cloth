@@ -36,28 +36,28 @@
     # 【4. 発射口検知ゲート (弾道ステートマシン)】
     enable_ballistic_filter: true                  # 弾道フィルタ有効化
     launch_min_x: 0.80                             # 発射口エリア X 最小 (m, 射出はX=0.89m〜)
-    launch_max_x: 1.50                             # 発射口エリア X 最大 (m, 初速の速い射出も確実に捕捉)
-    launch_min_y: -0.35                            # 発射口エリア Y 最小 (m)
-    launch_max_y: 0.45                             # 発射口エリア Y 最大 (m, 右方向の射出ブレY=0.30〜0.35mを余裕でカバー)
+    launch_max_x: 1.35                             # 発射口エリア X 最大 (m, 初速の速い射出も確実に捕捉)
+    launch_min_y: -0.25                            # 発射口エリア Y 最小 (m)
+    launch_max_y: 0.18                             # 発射口エリア Y 最大 (m, 左側からの回収棒・人物Y>=0.19mを遮断)
     launch_min_z: 1.45                             # 発射口エリア Z 最小 (m, 人間の回収・手作業Z=0.7〜1.35mを完全遮断)
     launch_max_z: 2.10                             # 発射口エリア Z 最大 (m, 上部からの射出をカバー)
     min_launch_vx: 0.30                            # 発射判定 最小前進速度 (m/s)
     min_launch_move_m: 0.05                        # 静止ノイズの揺れを無視するための前進距離 (m)
     pending_reset_sec: 0.25                        # 発射保留タイムアウト時間 (s)
-    gate_radius_m: 0.55                            # 探索ゲート半径 (m, 遠方固定棚・壁への飛び移りを遮断)
+    gate_radius_m: 0.70                            # 探索ゲート半径 (m, 高速射出フレームおよびポール下降を確実に捕捉)
     max_lost_frames: 12                            # 見失い許容フレーム数 (一時的な深度欠損を許容)
-    min_tracking_points: 4                         # 飛翔追跡 最小点数下限 (遠方・斜め姿勢追従)
+    min_tracking_points: 12                        # 飛翔追跡 最小点数下限 (4〜9点のポール深度ジッター誤吸着を遮断)
     landing_min_z: 0.15                            # 着地確定判定高さ (m, 床面・カゴ到達で確実にLANDEDへ移行)
     drag_coeff: 0.40                               # 空気抵抗減衰係数
     vel_smoothing_beta: 0.50                       # 速度平滑化ブレンド率
-    min_flight_vx_m_s: -0.15                       # 飛翔中 最小前進速度下限 (m/s, 後退逆走を完全遮断)
+    min_flight_vx_m_s: -1.50                       # 飛翔中 最小前進速度下限 (m/s, 幕・ポール接触後の垂直落下時の深度ブレを許容)
     max_vx_m_s: 15.0                               # 飛翔最大前進速度上限 (m/s)
-    max_abs_vy_m_s: 2.50                           # 飛翔中 最大横移動速度上限 (m/s)
+    max_abs_vy_m_s: 3.50                           # 飛翔中 最大横移動速度上限 (m/s)
     min_vz_m_s: -10.0                              # 飛翔中 最小落下速度下限 (m/s)
-    max_vz_m_s: 6.00                               # 飛翔中 最大上昇速度上限 (m/s, 仰角20度射出初速+5m/sを許容)
+    max_vz_m_s: 12.0                               # 飛翔中 最大上昇速度上限 (m/s, 短周期フレーム間での高速射出初速+11m/sを許容)
     max_flight_duration_sec: 2.50                  # 最大飛行時間タイムアウト (s)
-    min_stationary_move_m: 0.10                    # 空中静止判定の最小移動距離 (m)
-    max_stationary_frames: 8                       # 空中静止許容フレーム数
+    min_stationary_move_m: 0.12                    # 空中静止判定の最小移動距離 (m, ポール引っ掛かり時の揺れを吸収し静止判定)
+    max_stationary_frames: 5                       # 空中静止許容フレーム数 (ポール引っ掛かり・カゴ着地静止で即座にLANDED確定)
 
     # 【5. 背景差分 (静止物除去)】
     use_bg_subtraction: true                       # 静止した壁・棚・床を完全消去
@@ -69,13 +69,13 @@
     # 【6. 点群クラスタリング & 雑巾抽出】
     voxel_size_m: 0.02                             # ボクセル間引き (2cm)
     cluster_eps_m: 0.10                            # クラスタ探索距離 (m, はためき時の分割防止)
-    min_cluster_points: 35                         # 雑巾クラスタ最小点数 (手元の微小ノイズを遮断し本番射出を捕捉)
+    min_cluster_points: 45                         # 雑巾クラスタ最小点数 (35〜39点の手元・棒ノイズを遮断し106点以上の本番射出を捕捉)
     max_cluster_points: 12000                      # 雑巾クラスタ最大点数 (近距離全開時の9300点を確実に許容)
     min_cloth_size_m: 0.05                         # 雑巾最小3Dサイズ (m)
     max_cloth_size_m: 0.80                         # 雑巾最大3D対角サイズ (m, 射出機本体構造物を遮断し空中の布をカバー)
     continuity_thresh_m: 0.08                      # 2Dエッジ連続性チェック許容深度差 (m, D435ノイズ耐性)
     continuity_min_neighbors: 3                    # 4近傍のうち必要な連続ピクセル数 (tracker_params.yamlと同期)
-    trajectory_history_sec: 2.5                    # 軌跡保持時間 (s, 飛翔中の軌跡のみを保持し着地後の不要な結線を防止)
+    trajectory_history_sec: 15.0                   # 軌跡保持時間 (s, 次の投擲まで飛翔軌跡を保持)
 
     # 【7. カラー映像配信設定】
     enable_color_stream: true

@@ -15,7 +15,7 @@ constexpr double STATIC_MARKER_PUBLISH_INTERVAL_SEC = 0.10;
 constexpr unsigned int RS_WAIT_TIMEOUT_MS = 1000;
 
 constexpr size_t DEFAULT_QOS_DEPTH = 10;
-constexpr size_t SENSOR_QOS_DEPTH = 120;
+constexpr size_t SENSOR_QOS_DEPTH = 250;
 constexpr int WARN_THROTTLE_MS = 5000;
 constexpr int STATUS_LOG_THROTTLE_MS = 1000;
 
@@ -28,9 +28,6 @@ constexpr size_t PLUMB_BOB_COEFF_COUNT = 5;
 constexpr const char* COLOR_OPTICAL_FRAME = "camera_color_optical_frame";
 constexpr const char* DEPTH_OPTICAL_FRAME = "camera_depth_optical_frame";
 constexpr const char* CLOTH_TF_FRAME = "flying_cloth";
-
-constexpr int MARKER_ID_APEX = 4;
-constexpr int MARKER_ID_LANDING_TARGET = 5;
 
 sensor_msgs::msg::Image mat_to_image_msg(const cv::Mat& mat, const rclcpp::Time& stamp, const std::string& frame_id) {
     sensor_msgs::msg::Image img;
@@ -93,8 +90,6 @@ ClothTrackerCudaNode::ClothTrackerCudaNode(const rclcpp::NodeOptions& options)
     pub_point_ = this->create_publisher<geometry_msgs::msg::PointStamped>("/cloth/position", DEFAULT_QOS_DEPTH);
     pub_marker_ = this->create_publisher<visualization_msgs::msg::Marker>("/cloth/trajectory_marker", DEFAULT_QOS_DEPTH);
     pub_path_ = this->create_publisher<nav_msgs::msg::Path>("/cloth/measured_path", DEFAULT_QOS_DEPTH);
-    pub_compressed_color_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("/camera/camera/color/image_raw/compressed", DEFAULT_QOS_DEPTH);
-    pub_color_info_ = this->create_publisher<sensor_msgs::msg::CameraInfo>("/camera/camera/color/camera_info", DEFAULT_QOS_DEPTH);
     pub_rotated_color_ = this->create_publisher<sensor_msgs::msg::Image>("/cloth/camera_view", DEFAULT_QOS_DEPTH);
 
     // Debug publishers (always available for RViz visualization & verification)
@@ -117,6 +112,8 @@ ClothTrackerCudaNode::ClothTrackerCudaNode(const rclcpp::NodeOptions& options)
         pub_raw_depth_ = this->create_publisher<sensor_msgs::msg::Image>(depth_topic, DEFAULT_QOS_DEPTH);
         pub_depth_info_ = this->create_publisher<sensor_msgs::msg::CameraInfo>(camera_info_topic, DEFAULT_QOS_DEPTH);
         pub_raw_color_ = this->create_publisher<sensor_msgs::msg::Image>(color_topic, DEFAULT_QOS_DEPTH);
+        pub_compressed_color_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("/camera/camera/color/image_raw/compressed", DEFAULT_QOS_DEPTH);
+        pub_color_info_ = this->create_publisher<sensor_msgs::msg::CameraInfo>("/camera/camera/color/camera_info", DEFAULT_QOS_DEPTH);
 
         RCLCPP_INFO(this->get_logger(), "Starting Direct librealsense2 C++ API loop (Hardware Native)...");
         is_running_ = true;
@@ -128,8 +125,20 @@ ClothTrackerCudaNode::ClothTrackerCudaNode(const rclcpp::NodeOptions& options)
     }
 
     if (!use_direct_realsense_) {
-        rclcpp::QoS qos(SENSOR_QOS_DEPTH);
-        qos.best_effort();
+        rclcpp::QoS depth_qos(SENSOR_QOS_DEPTH);
+        depth_qos.reliable();
+
+        rclcpp::QoS color_qos(SENSOR_QOS_DEPTH);
+        color_qos.best_effort();
+
+        depth_cb_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+        color_cb_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+
+        rclcpp::SubscriptionOptions depth_sub_opts;
+        depth_sub_opts.callback_group = depth_cb_group_;
+
+        rclcpp::SubscriptionOptions color_sub_opts;
+        color_sub_opts.callback_group = color_cb_group_;
 
         sub_camera_info_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
             camera_info_topic, DEFAULT_QOS_DEPTH,
@@ -137,18 +146,21 @@ ClothTrackerCudaNode::ClothTrackerCudaNode(const rclcpp::NodeOptions& options)
         );
 
         sub_depth_image_ = this->create_subscription<sensor_msgs::msg::Image>(
-            depth_topic, qos,
-            std::bind(&ClothTrackerCudaNode::depth_image_callback, this, std::placeholders::_1)
+            depth_topic, depth_qos,
+            std::bind(&ClothTrackerCudaNode::depth_image_callback, this, std::placeholders::_1),
+            depth_sub_opts
         );
 
         sub_color_image_ = this->create_subscription<sensor_msgs::msg::Image>(
-            color_topic, qos,
-            std::bind(&ClothTrackerCudaNode::color_image_callback, this, std::placeholders::_1)
+            color_topic, color_qos,
+            std::bind(&ClothTrackerCudaNode::color_image_callback, this, std::placeholders::_1),
+            color_sub_opts
         );
 
         sub_compressed_color_ = this->create_subscription<sensor_msgs::msg::CompressedImage>(
-            color_topic + "/compressed", qos,
-            std::bind(&ClothTrackerCudaNode::compressed_color_callback, this, std::placeholders::_1)
+            color_topic + "/compressed", color_qos,
+            std::bind(&ClothTrackerCudaNode::compressed_color_callback, this, std::placeholders::_1),
+            color_sub_opts
         );
 
         RCLCPP_INFO(this->get_logger(), "Listening on Depth Image topic: %s, Color Image topic: %s (+/compressed)",
@@ -480,6 +492,7 @@ void ClothTrackerCudaNode::push_color_frame(const cv::Mat& bgr_mat, const rclcpp
         std::lock_guard<std::mutex> lock(color_mutex_);
         bgr_mat.copyTo(latest_color_task_.bgr_frame);
         latest_color_task_.stamp = stamp;
+        latest_color_task_.is_compressed = false;
         if (info) {
             latest_color_task_.color_info = *info;
             latest_color_task_.has_color_info = true;
@@ -508,6 +521,17 @@ void ClothTrackerCudaNode::color_worker_loop() {
         }
 
         try {
+            if (task.is_compressed) {
+                if (task.compressed_data.empty() || !pub_rotated_color_ || pub_rotated_color_->get_subscription_count() == 0) {
+                    continue;
+                }
+                cv::Mat decoded = cv::imdecode(task.compressed_data, cv::IMREAD_COLOR);
+                if (!decoded.empty()) {
+                    pub_rotated_color_->publish(mat_to_image_msg(decoded, task.stamp, task.frame_id));
+                }
+                continue;
+            }
+
             if (task.bgr_frame.empty()) continue;
 
             // 1. Raw color publication if requested
@@ -599,21 +623,20 @@ void ClothTrackerCudaNode::color_image_callback(const sensor_msgs::msg::Image::C
 
 void ClothTrackerCudaNode::compressed_color_callback(const sensor_msgs::msg::CompressedImage::ConstSharedPtr msg) {
     // When replaying a rosbag that only recorded /camera/camera/color/image_raw/compressed,
-    // decode the upright JPEG directly into /cloth/camera_view for RViz visualization.
-    if (raw_color_received_ || !pub_rotated_color_ || msg->data.empty()) {
+    // offload JPEG decoding to the asynchronous color worker thread so depth tracking never stalls.
+    if (raw_color_received_ || !pub_rotated_color_ || pub_rotated_color_->get_subscription_count() == 0 || msg->data.empty()) {
         return;
     }
 
-    try {
-        cv::Mat decoded = cv::imdecode(msg->data, cv::IMREAD_COLOR);
-        if (decoded.empty()) {
-            return;
-        }
-        pub_rotated_color_->publish(mat_to_image_msg(decoded, rclcpp::Time(msg->header.stamp), msg->header.frame_id));
-    } catch (const std::exception& e) {
-        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), WARN_THROTTLE_MS,
-                             "Compressed color decode error: %s", e.what());
+    {
+        std::lock_guard<std::mutex> lock(color_mutex_);
+        latest_color_task_.compressed_data = msg->data;
+        latest_color_task_.frame_id = msg->header.frame_id;
+        latest_color_task_.stamp = rclcpp::Time(msg->header.stamp);
+        latest_color_task_.is_compressed = true;
+        latest_color_task_.has_new_frame = true;
     }
+    color_cv_.notify_one();
 }
 
 // =============================================================================
@@ -814,23 +837,6 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
         // 2. True Measured Points Marker (Orange Spheres, exactly where camera detected cloth)
         pub_marker_->publish(MarkerVisualizer::create_measured_points(stamp, trajectory_points_, camera_parent_frame_));
 
-        // Clean up obsolete prediction markers so they never linger in RViz
-        visualization_msgs::msg::Marker del_apex;
-        del_apex.header.stamp = stamp;
-        del_apex.header.frame_id = camera_parent_frame_;
-        del_apex.ns = "parabola_apex";
-        del_apex.id = MARKER_ID_APEX;
-        del_apex.action = visualization_msgs::msg::Marker::DELETE;
-        pub_marker_->publish(del_apex);
-
-        visualization_msgs::msg::Marker del_target;
-        del_target.header.stamp = stamp;
-        del_target.header.frame_id = camera_parent_frame_;
-        del_target.ns = "parabola_landing_target";
-        del_target.id = MARKER_ID_LANDING_TARGET;
-        del_target.action = visualization_msgs::msg::Marker::DELETE;
-        pub_marker_->publish(del_target);
-
         // 3. Measured Path (True measured points only)
         nav_msgs::msg::Path path_msg;
         path_msg.header.stamp = stamp;
@@ -1003,7 +1009,9 @@ void ClothTrackerCudaNode::run_direct_realsense_loop() {
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<realsense_dust_cloth::ClothTrackerCudaNode>();
-    rclcpp::spin(node);
+    rclcpp::executors::MultiThreadedExecutor executor;
+    executor.add_node(node);
+    executor.spin();
     rclcpp::shutdown();
     return 0;
 }

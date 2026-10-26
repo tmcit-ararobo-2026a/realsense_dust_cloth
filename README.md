@@ -57,23 +57,41 @@ ros2 launch realsense_dust_cloth cloth_tracker.launch.py use_bg_subtraction:=fal
 
 ### B. Isaac Sim（シミュレータ）での動作確認
 
-Isaac Sim で RealSense を配置して疎通・軌道確認を行う場合（共通コード・共通 launch で動作）：
+Isaac Sim や Gazebo 等のシミュレータ上で動作確認を行う場合、以下の最小 3 オプションで実機同様に起動できます：
 
 ```bash
 source ~/ros2_ws/install/setup.bash
 
 ros2 launch realsense_dust_cloth cloth_tracker.launch.py \
-  use_direct_realsense:=false \
   use_sim_time:=true \
-  use_bg_subtraction:=false \
+  use_direct_realsense:=false \
   rviz:=true
 ```
+* **オプションの役割**:
+  * `use_sim_time:=true`: シミュレータのクロック（`/clock`）に同期。
+  * `use_direct_realsense:=false`: 実機 USB ではなくシミュレータの ROS 2 画像トピックを購読。
+  * `rviz:=true`: 弾道確認用の RViz2 画面を表示。
+  * ※ 背景差分（`use_bg_subtraction`）は実機同様デフォルトで有効（`true`）となるため、シミュレータ内の静止した床や壁も自動で消去されます。Isaac Sim 固有の `32FC1`（float深度）もノード側で自動判別・変換されます。
 
 ---
 
-### C. 記録済み rosbag を再生してテスト
+### C. 記録済み rosbag を再生してテスト（1コマンド自動再生）
 
-rosbag 再生時は、実機カメラ直接接続ではなく ROS 2 トピックから画像を読み込むため、**`use_direct_realsense:=false`** を指定してください。
+付属の `play_bag_rviz.launch.py` を使うと、バッグ再生・TF 発行・ノード起動・RViz 画面表示がワンコマンドで自動実行されます：
+
+```bash
+source ~/ros2_ws/install/setup.bash
+
+# デフォルト（テストバッグ cloth_test_11_camera_only をループ再生）
+ros2 launch realsense_dust_cloth play_bag_rviz.launch.py
+
+# 任意の bag フォルダを指定する場合
+ros2 launch realsense_dust_cloth play_bag_rviz.launch.py bag_path:=<bagフォルダへのパス>
+```
+
+#### （参考）ターミナルを分けて手動再生する場合
+
+実機カメラ直接接続ではなく ROS 2 トピックから画像を読み込むため、**`use_direct_realsense:=false`** を指定してください。
 
 ```bash
 # ターミナル1: トラッカー & RViz2 起動
