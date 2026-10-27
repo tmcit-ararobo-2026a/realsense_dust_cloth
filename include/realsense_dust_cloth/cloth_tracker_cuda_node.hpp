@@ -16,6 +16,7 @@
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
+#include <geometry_msgs/msg/twist.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <nav_msgs/msg/path.hpp>
@@ -86,6 +87,7 @@ private:
     std::string camera_frame_{"camera_link"};
     bool publish_static_tf_{true};
     rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pub_point_;
+    rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pub_landing_pos_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_marker_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_roi_markers_;
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_path_;
@@ -119,6 +121,27 @@ private:
     int rs_exposure_us_{-1};
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_rotated_color_;
     TrackerState prev_state_{TrackerState::IDLE};
+
+    // Robot Motion Monitoring & Stop-and-Shoot Fast Background Relearn
+    bool enable_cmd_vel_watch_{false};
+    std::string cmd_vel_topic_{"/robot/operation/cmd_vel"};
+    std::string landing_position_topic_{"/cloth/landing_position"};
+    double cmd_vel_deadband_linear_{0.02};
+    double cmd_vel_deadband_angular_{0.02};
+    double cmd_vel_timeout_sec_{0.25};
+    double stop_settle_sec_{0.10};
+    int bg_relearn_frames_{5};
+
+    bool is_robot_moving_{false};
+    bool needs_bg_relearn_{false};
+    int bg_relearn_counter_{0};
+    rclcpp::Time last_cmd_vel_time_{0, 0, RCL_ROS_TIME};
+    rclcpp::Time stop_detected_time_{0, 0, RCL_ROS_TIME};
+
+    rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_cmd_vel_;
+
+    void cmd_vel_callback(const geometry_msgs::msg::Twist::SharedPtr msg);
+    void check_robot_motion_state(const rclcpp::Time& current_time);
 
     // Direct RealSense Thread
     std::atomic<bool> is_running_{false};

@@ -49,7 +49,7 @@
     min_launch_move_m: 0.05                        # 静止ノイズの揺れを無視するための前進距離 (m)
     pending_reset_sec: 0.25                        # 発射ゲート内の基準点リセット時間 (s)
     gate_radius_m: 0.70                            # 探索ゲート半径 (m, 高速射出フレームおよびポール下降を確実に捕捉)
-    max_lost_frames: 12                            # 見失い許容フレーム数 (一時的な深度欠損を許容)
+    max_lost_frames: 8                             # 見失い許容フレーム数 (点群消失時に即座にLANDED確定)
     min_tracking_points: 12                        # 追尾中(TRACKING)に維持する最小点数 (4〜9点のポール深度ジッター誤吸着を遮断)
     landing_min_z: 0.15                            # 着地確定判定高さ (m, 床面・カゴ到達で確実にLANDEDへ遷移)
     drag_coeff: 0.40                               # 空気抵抗減衰係数
@@ -99,3 +99,15 @@
     depth_fps: 60                                  # Depthフレームレート (60 または 90 ※USB3.0必須)
     rs_laser_power: -1.0                           # 赤外線レーザー出力 (-1.0で自動的に最大出力に設定し点群欠損を防ぐ)
     rs_exposure_us: -1                             # Depthシャッタースピード (-1: 自動露出, 実機rosbag実績設定)
+
+    # =========================================================================
+    # 【9. ロボット走行連携 & 停止時背景再学習 (動いて止まって撃つ)】
+    # =========================================================================
+    enable_cmd_vel_watch: true                     # 走行中の誤検出抑制 & 停止時自動再学習を有効化
+    cmd_vel_topic: "/robot/operation/cmd_vel"       # 走行速度トピック名 (フォールバック /cmd_vel)
+    cmd_vel_deadband_linear: 0.02                  # 並進速度の不感帯 (m/s, これ未満は停止とみなす)
+    cmd_vel_deadband_angular: 0.02                 # 旋回角速度の不感帯 (rad/s)
+    cmd_vel_timeout_sec: 0.25                      # 指令途絶判定タイムアウト (s, Unity/Navi同期)
+    stop_settle_sec: 0.10                          # 停止後の機体揺れ収束待ち時間 (s)
+    bg_relearn_frames: 5                           # 停止後の高速背景再学習フレーム数 (約0.05s)
+    landing_position_topic: "/cloth/landing_position" # 最終着地位置パブリッシュトピック (gn10-shot-manager連携)

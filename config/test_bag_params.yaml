@@ -45,7 +45,7 @@
     min_launch_move_m: 0.05                        # 静止ノイズの揺れを無視するための前進距離 (m)
     pending_reset_sec: 0.25                        # 発射保留タイムアウト時間 (s)
     gate_radius_m: 0.70                            # 探索ゲート半径 (m, 高速射出フレームおよびポール下降を確実に捕捉)
-    max_lost_frames: 12                            # 見失い許容フレーム数 (一時的な深度欠損を許容)
+    max_lost_frames: 8                             # 見失い許容フレーム数 (点群消失時に即座にLANDED確定)
     min_tracking_points: 12                        # 飛翔追跡 最小点数下限 (4〜9点のポール深度ジッター誤吸着を遮断)
     landing_min_z: 0.15                            # 着地確定判定高さ (m, 床面・カゴ到達で確実にLANDEDへ移行)
     drag_coeff: 0.40                               # 空気抵抗減衰係数
@@ -82,4 +82,16 @@
     color_fps: 30
     jpeg_quality: 65
     color_rotation_deg: 90                         # 時計回り90度回転で正立
+
+    # =========================================================================
+    # 【9. ロボット走行連携 & 停止時背景再学習 (テストバッグ再生用)】
+    # =========================================================================
+    enable_cmd_vel_watch: false                    # bag再生時は機体移動監視OFF (全編で追跡を稼働)
+    cmd_vel_topic: "/robot/operation/cmd_vel"
+    cmd_vel_deadband_linear: 0.02
+    cmd_vel_deadband_angular: 0.02
+    cmd_vel_timeout_sec: 0.25
+    stop_settle_sec: 0.10
+    bg_relearn_frames: 5
+    landing_position_topic: "/cloth/landing_position"
 

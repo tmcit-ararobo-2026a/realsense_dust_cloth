@@ -88,9 +88,17 @@ ClothTrackerCudaNode::ClothTrackerCudaNode(const rclcpp::NodeOptions& options)
     tf_static_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
     publish_static_transforms();
     pub_point_ = this->create_publisher<geometry_msgs::msg::PointStamped>("/cloth/position", DEFAULT_QOS_DEPTH);
+    pub_landing_pos_ = this->create_publisher<geometry_msgs::msg::PointStamped>(landing_position_topic_, DEFAULT_QOS_DEPTH);
     pub_marker_ = this->create_publisher<visualization_msgs::msg::Marker>("/cloth/trajectory_marker", DEFAULT_QOS_DEPTH);
     pub_path_ = this->create_publisher<nav_msgs::msg::Path>("/cloth/measured_path", DEFAULT_QOS_DEPTH);
     pub_rotated_color_ = this->create_publisher<sensor_msgs::msg::Image>("/cloth/camera_view", DEFAULT_QOS_DEPTH);
+
+    if (enable_cmd_vel_watch_) {
+        sub_cmd_vel_ = this->create_subscription<geometry_msgs::msg::Twist>(
+            cmd_vel_topic_, rclcpp::QoS(10),
+            std::bind(&ClothTrackerCudaNode::cmd_vel_callback, this, std::placeholders::_1));
+        RCLCPP_INFO(this->get_logger(), "Robot motion monitoring enabled on topic: %s", cmd_vel_topic_.c_str());
+    }
 
     // Debug publishers (always available for RViz visualization & verification)
     pub_roi_markers_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("/cloth/debug/roi_markers", DEFAULT_QOS_DEPTH);
@@ -269,6 +277,16 @@ void ClothTrackerCudaNode::declare_parameters() {
     this->declare_parameter("max_flight_duration_sec", 2.50);
     this->declare_parameter("min_stationary_move_m", 0.10);
     this->declare_parameter("max_stationary_frames", 8);
+
+    // Robot Motion Monitoring & Stop-and-Shoot Fast Background Relearn
+    this->declare_parameter("enable_cmd_vel_watch", false);
+    this->declare_parameter("cmd_vel_topic", "/robot/operation/cmd_vel");
+    this->declare_parameter("landing_position_topic", "/cloth/landing_position");
+    this->declare_parameter("cmd_vel_deadband_linear", 0.02);
+    this->declare_parameter("cmd_vel_deadband_angular", 0.02);
+    this->declare_parameter("cmd_vel_timeout_sec", 0.25);
+    this->declare_parameter("stop_settle_sec", 0.10);
+    this->declare_parameter("bg_relearn_frames", 5);
 }
 
 void ClothTrackerCudaNode::load_parameters() {
@@ -355,6 +373,17 @@ void ClothTrackerCudaNode::load_parameters() {
     filter_cfg_.launch_min_z = static_cast<float>(ballistic_tracker_.launch_min_z);
     filter_cfg_.launch_max_z = static_cast<float>(ballistic_tracker_.launch_max_z);
     filter_cfg_.gate_radius_m = static_cast<float>(ballistic_tracker_.gate_radius_m);
+
+    // Load Robot Motion Monitoring & Relearning Parameters
+    enable_cmd_vel_watch_ = this->get_parameter("enable_cmd_vel_watch").as_bool();
+    cmd_vel_topic_ = this->get_parameter("cmd_vel_topic").as_string();
+    landing_position_topic_ = this->get_parameter("landing_position_topic").as_string();
+    cmd_vel_deadband_linear_ = this->get_parameter("cmd_vel_deadband_linear").as_double();
+    cmd_vel_deadband_angular_ = this->get_parameter("cmd_vel_deadband_angular").as_double();
+    cmd_vel_timeout_sec_ = this->get_parameter("cmd_vel_timeout_sec").as_double();
+    stop_settle_sec_ = this->get_parameter("stop_settle_sec").as_double();
+    bg_relearn_frames_ = this->get_parameter("bg_relearn_frames").as_int();
+    bg_relearn_counter_ = bg_relearn_frames_;
 }
 
 // =============================================================================
@@ -665,6 +694,57 @@ void ClothTrackerCudaNode::publish_roi_markers(const rclcpp::Time& stamp, const 
     pub_roi_markers_->publish(markers);
 }
 
+void ClothTrackerCudaNode::cmd_vel_callback(const geometry_msgs::msg::Twist::SharedPtr msg) {
+    if (!enable_cmd_vel_watch_) return;
+    last_cmd_vel_time_ = this->now();
+
+    double speed_lin = std::hypot(msg->linear.x, msg->linear.y);
+    double speed_ang = std::abs(msg->angular.z);
+    bool moving = (speed_lin >= cmd_vel_deadband_linear_ || speed_ang >= cmd_vel_deadband_angular_);
+
+    if (moving) {
+        is_robot_moving_ = true;
+        needs_bg_relearn_ = true;
+        stop_detected_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+    } else {
+        if (is_robot_moving_ && stop_detected_time_.nanoseconds() == 0) {
+            stop_detected_time_ = this->now();
+        }
+    }
+}
+
+void ClothTrackerCudaNode::check_robot_motion_state(const rclcpp::Time& current_time) {
+    if (!enable_cmd_vel_watch_) return;
+
+    // Timeout check: if no cmd_vel received for > cmd_vel_timeout_sec_, treat as zero command
+    if (last_cmd_vel_time_.nanoseconds() > 0) {
+        double elapsed_since_cmd = (current_time - last_cmd_vel_time_).seconds();
+        if (elapsed_since_cmd > cmd_vel_timeout_sec_ && is_robot_moving_) {
+            if (stop_detected_time_.nanoseconds() == 0) {
+                stop_detected_time_ = current_time;
+            }
+        }
+    }
+
+    // Check if robot has stayed below deadband for at least stop_settle_sec_
+    if (is_robot_moving_ && stop_detected_time_.nanoseconds() > 0) {
+        double stop_duration = (current_time - stop_detected_time_).seconds();
+        if (stop_duration >= stop_settle_sec_) {
+            is_robot_moving_ = false;
+            stop_detected_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+
+            if (needs_bg_relearn_) {
+                needs_bg_relearn_ = false;
+                reset_background_cuda(cuda_ctx_);
+                bg_relearn_counter_ = 0;
+                RCLCPP_INFO(this->get_logger(),
+                            "[ClothTracker] Robot stopped & settled: Relearning background (%d frames)...",
+                            bg_relearn_frames_);
+            }
+        }
+    }
+}
+
 void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const rclcpp::Time& stamp) {
     double now_sec = stamp.seconds();
     if (last_frame_stamp_sec_ > 0.0 && now_sec < last_frame_stamp_sec_ - BAG_LOOP_RESET_TOLERANCE_SEC) {
@@ -677,14 +757,33 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
     }
     last_frame_stamp_sec_ = now_sec;
 
-    // Phase 1: Background Calibration (learn static walls, ceiling, furniture)
-    if (filter_cfg_.use_bg_subtraction && bg_frames_collected_ < bg_target_frames_) {
-        update_background_cuda(cuda_ctx_, depth_ptr, camera_intrin_.width, camera_intrin_.height);
-        bg_frames_collected_++;
-        if (bg_frames_collected_ == bg_target_frames_) {
-            RCLCPP_INFO(this->get_logger(), "=== BACKGROUND CALIBRATED (%d frames)! Static walls, ceiling and furniture are now IGNORED. ===", bg_target_frames_);
-        }
+    // Check motion state when monitoring cmd_vel
+    check_robot_motion_state(stamp);
+
+    if (enable_cmd_vel_watch_ && is_robot_moving_) {
+        // Suppress cloth detection while robot is in motion to prevent false triggers
         return;
+    }
+
+    // Phase 1: Background Calibration (learn static walls, ceiling, furniture)
+    if (filter_cfg_.use_bg_subtraction) {
+        if (bg_frames_collected_ < bg_target_frames_) {
+            update_background_cuda(cuda_ctx_, depth_ptr, camera_intrin_.width, camera_intrin_.height);
+            bg_frames_collected_++;
+            if (bg_frames_collected_ == bg_target_frames_) {
+                RCLCPP_INFO(this->get_logger(), "=== BACKGROUND CALIBRATED (%d frames)! Static walls, ceiling and furniture are now IGNORED. ===", bg_target_frames_);
+            }
+            return;
+        }
+
+        if (enable_cmd_vel_watch_ && bg_relearn_counter_ < bg_relearn_frames_) {
+            update_background_cuda(cuda_ctx_, depth_ptr, camera_intrin_.width, camera_intrin_.height);
+            bg_relearn_counter_++;
+            if (bg_relearn_counter_ == bg_relearn_frames_) {
+                RCLCPP_INFO(this->get_logger(), "=== FAST BACKGROUND RELEARNED (%d frames)! READY TO SHOOT ===", bg_relearn_frames_);
+            }
+            return;
+        }
     }
 
     std::vector<float3> debug_cluster_pts;
@@ -732,6 +831,16 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
     );
 
     if (prev_state_ == TrackerState::TRACKING && ballistic_tracker_.state == TrackerState::LANDED) {
+        if (pub_landing_pos_) {
+            geometry_msgs::msg::PointStamped landing_msg;
+            landing_msg.header.stamp = stamp;
+            landing_msg.header.frame_id = camera_parent_frame_;
+            landing_msg.point.x = last_cloth_x_;
+            landing_msg.point.y = last_cloth_y_;
+            landing_msg.point.z = last_cloth_z_;
+            pub_landing_pos_->publish(landing_msg);
+        }
+
         RCLCPP_INFO(this->get_logger(),
                     "========================================================================\n"
                     "*** CLOTH LANDED at (%.2f, %.2f, %.2f)! Recorded %zu flight points. ***\n"
