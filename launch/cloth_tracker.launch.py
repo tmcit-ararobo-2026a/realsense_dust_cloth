@@ -19,7 +19,6 @@ def _create_tracker_node(context):
 
     use_sim_time_str = LaunchConfiguration('use_sim_time').perform(context)
     use_direct_rs_str = LaunchConfiguration('use_direct_realsense').perform(context)
-    use_bg_sub_str = LaunchConfiguration('use_bg_subtraction').perform(context)
 
     with open(params_file, encoding='utf-8') as stream:
         config = yaml.safe_load(stream) or {}
@@ -32,8 +31,6 @@ def _create_tracker_node(context):
         overrides['use_sim_time'] = use_sim_time_str.lower() == 'true'
     if use_direct_rs_str != '':
         overrides['use_direct_realsense'] = use_direct_rs_str.lower() == 'true'
-    if use_bg_sub_str != '':
-        overrides['use_bg_subtraction'] = use_bg_sub_str.lower() == 'true'
 
     return [
         Node(
@@ -71,12 +68,6 @@ def generate_launch_description():
         'use_sim_time',
         default_value='',
         description='Use simulation clock (Isaac Sim / rosbag)'
-    )
-
-    declare_use_bg_subtraction = DeclareLaunchArgument(
-        'use_bg_subtraction',
-        default_value='',
-        description='Optional override: Enable background subtraction. Empty uses YAML.'
     )
 
     declare_rviz = DeclareLaunchArgument(
@@ -157,7 +148,6 @@ def generate_launch_description():
         declare_params_file,
         declare_use_direct_rs,
         declare_use_sim_time,
-        declare_use_bg_subtraction,
         declare_rviz,
         declare_record,
         declare_enable_analyzer,

@@ -4,7 +4,6 @@
 /**:
   ros__parameters:
     observed_landing_only: true
-    background_mode: map
     use_sim_time: true
     depth_topic: /camera/camera/depth/image_rect_raw
     camera_info_topic: /camera/camera/depth/camera_info
@@ -52,11 +51,6 @@
     max_flight_duration_sec: 2.5
     min_stationary_move_m: 0.12
     max_stationary_frames: 5
-    use_bg_subtraction: true
-    bg_diff_thresh_m: 0.12
-    bg_target_frames: 30
-    reject_uncalibrated_bg: false
-    uncalibrated_bg_max_depth_m: 5.5
     voxel_size_m: 0.02
     cluster_eps_m: 0.1
     min_cluster_points: 45
@@ -79,7 +73,6 @@
     cmd_vel_deadband_angular: 0.02
     cmd_vel_timeout_sec: 0.25
     stop_settle_sec: 0.1
-    bg_relearn_frames: 5
     landing_position_topic: /cloth/landing_position
     map_file_path: package://gn10_pointcloud_localization/map/nhk2026_map.json
     map_frame: map

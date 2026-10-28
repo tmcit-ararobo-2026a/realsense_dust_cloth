@@ -1,116 +1,96 @@
+# RealSense direct: production prior-map background filtering (Competition Field)
+# map_file_path describes the competition field map matching gn10_pointcloud_localization.
 /**:
   ros__parameters:
-    observed_landing_only: false
-    background_mode: "depth"                     # depth:停止後背景学習 / map:事前地図差分
+    observed_landing_only: true
     use_sim_time: false
-    # =========================================================================
-    # 【1. カメラ接続・トピック設定】
-    # =========================================================================
-    depth_topic: "/camera/camera/depth/image_rect_raw"
-    camera_info_topic: "/camera/camera/depth/camera_info"
-    color_topic: "/camera/camera/color/image_raw"
-    use_direct_realsense: true                     # true: librealsense2 C++ API直結, false: ROS 2トピック購読
-    publish_debug_cloud: true                      # デバッグ点群(/cloth/debug/...)をパブリッシュするか
-
-    # =========================================================================
-    # 【2. カメラ取り付け位置・姿勢 (base_link 基準)】
-    # ノード自身がこの設定から静的TF (base_link -> camera_link -> optical) を直接発行します
-    # =========================================================================
-    publish_static_tf: true                        # ノードから静的TFを発行するか (URDF側で発行する場合はfalse)
-    camera_parent_frame: "base_link"
-    camera_frame: "camera_link"
-    camera_x_offset_m: 0.50                        # base_link からの前方オフセット (m)
-    camera_height_offset_m: 1.00                   # base_link からのカメラ高さ (m)
-    camera_pitch_deg: 20.0                         # 仰角 (度, 水平から上向き20度)
-    camera_roll_deg: 90.0                          # 縦置きロール角 (度, 90.0: 時計回り縦置き)
-    camera_width: 640                              # 解像度 幅 (px)
-    camera_height: 480                             # 解像度 高さ (px)
-
-    # =========================================================================
-    # 【3. 空間ROIフィルタ (探索境界エリア, base_link 基準)】
-    # =========================================================================
-    min_x_m: 0.60                                  # 前方 最小 (m, カメラ位置0.50m + 最短深度手前から検知)
-    max_x_m: 5.00                                  # 前方 最大 (m, 奥のシャッター壁 X=3.66〜4.16m への誤ロックを遮断)
-    min_y_m: -0.60                                 # 左右幅 左側 (m, 左上の天井・壁ノイズ Y=0.73〜1.13m への乗り移りを遮断)
-    max_y_m: 0.60                                  # 左右幅 右側 (m)
-    min_z_m: 0.05                                  # 高さ 最小 (m, 床面のカゴ着地までカバー)
-    max_z_m: 3.10                                  # 高さ 最大 (m, 最高到達点 Z=2.32〜2.95m は通し、天井梁・照明 Z=3.96m を完全遮断)
-    min_depth_m: 0.25                              # カメラ最短深度 (m)
-    max_depth_m: 5.50                              # カメラ最長深度 (m, 5m以遠まで確実にカバー)
-
-    # =========================================================================
-    # 【4. 発射口検知ゲート (弾道ステートマシン)】
-    # =========================================================================
-    enable_ballistic_filter: true                  # 弾道フィルタ有効化 (静止ノイズを遮断し飛翔体のみロック)
-    launch_min_x: 0.80                             # 発射口エリア X 最小 (m, 射出はX=0.89m〜)
-    launch_max_x: 1.35                             # 発射口エリア X 最大 (m, 初速の速い射出も確実に捕捉)
-    launch_min_y: -0.25                            # 発射口エリア Y 最小 (m)
-    launch_max_y: 0.18                             # 発射口エリア Y 最大 (m, 左側からの回収棒・人物Y>=0.19mを遮断)
-    launch_min_z: 1.45                             # 発射口エリア Z 最小 (m, 人間の回収・手作業Z=0.7〜1.2mを完全遮断)
-    launch_max_z: 2.10                             # 発射口エリア Z 最大 (m, 上部からの射出をカバー)
-    min_launch_vx: 0.30                            # 発射判定 最小前進速度 (m/s)
-    min_launch_move_m: 0.05                        # 静止ノイズの揺れを無視するための前進距離 (m)
-    pending_reset_sec: 0.25                        # 発射ゲート内の基準点リセット時間 (s)
-    gate_radius_m: 0.70                            # 探索ゲート半径 (m, 高速射出フレームおよびポール下降を確実に捕捉)
-    max_lost_frames: 8                             # 見失い許容フレーム数 (点群消失時に即座にLANDED確定)
-    min_tracking_points: 12                        # 追尾中(TRACKING)に維持する最小点数 (4〜9点のポール深度ジッター誤吸着を遮断)
-    landing_min_z: 0.15                            # 着地確定判定高さ (m, 床面・カゴ到達で確実にLANDEDへ遷移)
-    drag_coeff: 0.40                               # 空気抵抗減衰係数
-    vel_smoothing_beta: 0.50                       # 速度平滑化ブレンド率
-    min_flight_vx_m_s: -1.50                       # 飛翔中 最小前進速度下限 (m/s, 幕・ポール接触後の垂直落下時の深度ブレを許容)
-    max_vx_m_s: 15.0                               # 飛翔中 最大前進速度上限 (m/s)
-    max_abs_vy_m_s: 3.50                           # 飛翔中 最大横移動速度上限 (m/s, 壁・天井への横ワープ乗り移りを遮断)
-    min_vz_m_s: -10.0                              # 飛翔中 最小落下速度下限 (m/s)
-    max_vz_m_s: 12.0                               # 飛翔中 最大上昇速度上限 (m/s, 短周期フレーム間での高速射出初速+11m/sを許容)
-    max_flight_duration_sec: 2.50                  # 最大飛行時間タイムアウト (s, 背景ノイズへの永久ロックオン防止)
-    min_stationary_move_m: 0.12                    # 空中静止判定の基準点からの最小移動半径 (m, ポール引っ掛かり時の揺れを吸収し静止判定)
-    max_stationary_frames: 5                       # 空中静止許容フレーム数 (ポール引っ掛かり・カゴ着地静止で即座にLANDED確定)
-
-    # =========================================================================
-    # 【5. 背景差分 (静止物除去)】
-    # =========================================================================
-    use_bg_subtraction: true                       # 静止した床・壁・天井を消去 (移動射撃時はfalse推奨)
-    bg_diff_thresh_m: 0.12                         # 背景より12cm手前に現れた動く物体のみ抽出 (m, RealSenseの深度ブレ6〜10cmを遮断)
-    bg_target_frames: 30                           # 背景学習フレーム数 (起動直後の背景学習を30フレームに安定化)
-    reject_uncalibrated_bg: false                  # 背景未計測(黒シャッター等)の手前を飛ぶ雑巾(2.2m以遠)が消えるのを防止
-    uncalibrated_bg_max_depth_m: 5.50              # 背景未計測ピクセルを許容する最大距離 (m, max_depth_mと同期)
-
-    # =========================================================================
-    # 【6. 点群クラスタリング & 雑巾抽出】
-    # =========================================================================
-    voxel_size_m: 0.02                             # ボクセル間引きサイズ (m, 2cm)
-    cluster_eps_m: 0.10                            # DBSCANクラスタ探索距離 (m, 離れたノイズ点の結合を抑制)
-    min_cluster_points: 45                         # 雑巾クラスタ最小点数 (35〜39点の手元・棒ノイズを遮断し106点以上の本番射出を捕捉)
-    max_cluster_points: 12000                      # 雑巾クラスタ最大点数 (近距離全開時の9300点を確実に許容)
-    min_cloth_size_m: 0.05                         # 雑巾の最小3Dサイズ (m, これ未満の微小ゴミ塊を除外)
-    max_cloth_size_m: 0.80                         # 雑巾最大3D対角サイズ (m, 射出機本体構造物を遮断し空中の布をカバー)
-    continuity_thresh_m: 0.08                      # 隣り合うピクセルとの許容深度差 (m, フライングピクセルを遮断)
-    continuity_min_neighbors: 3                    # 4方向のうち繋がっているべき最小方向数 (0〜4)
-    trajectory_history_sec: 15.0                   # RViz軌跡残像の保持秒数 (s, 次の投擲まで飛翔軌跡を保持)
-
-    # =========================================================================
-    # 【7. カラー映像配信設定 (Wi-Fi 遠隔監視 / rosbag 軽量記録)】
-    # =========================================================================
-    enable_color_stream: true                      # カラー映像の配信
-    color_fps: 30                                  # カラーフレームレート (fps)
-    jpeg_quality: 65                               # JPEG圧縮品質 (1-100)
-    color_rotation_deg: 90                         # 縦置きカメラ映像の回転角 (90度縦置きカメラの映像を正立表示)
-
-    # =========================================================================
-    # 【8. RealSense ハードウェア高速撮影設定】
-    # =========================================================================
-    depth_fps: 60                                  # Depthフレームレート (60 または 90 ※USB3.0必須)
-    rs_laser_power: -1.0                           # 赤外線レーザー出力 (-1.0で自動的に最大出力に設定し点群欠損を防ぐ)
-    rs_exposure_us: -1                             # Depthシャッタースピード (-1: 自動露出, 実機rosbag実績設定)
-
-    # =========================================================================
-    # 【9. ロボット走行連携 & 停止時背景再学習 (動いて止まって撃つ)】
-    # =========================================================================
-    enable_cmd_vel_watch: true                     # 走行中の誤検出抑制 & 停止時自動再学習を有効化
-    cmd_vel_topic: "/robot/operation/cmd_vel"       # 走行速度トピック名 (フォールバック /cmd_vel)
-    cmd_vel_deadband_linear: 0.02                  # 並進速度の不感帯 (m/s, これ未満は停止とみなす)
-    cmd_vel_deadband_angular: 0.02                 # 旋回角速度の不感帯 (rad/s)
-    cmd_vel_timeout_sec: 0.25                      # 指令途絶判定タイムアウト (s, Unity/Navi同期)
-    stop_settle_sec: 0.10                          # 停止後の機体揺れ収束待ち時間 (s)
-    bg_relearn_frames: 5                           # 停止後の高速背景再学習フレーム数 (約0.05s)
-    landing_position_topic: "/cloth/landing_position" # 最終着地位置パブリッシュトピック (gn10-shot-manager連携)
+    depth_topic: /camera/camera/depth/image_rect_raw
+    camera_info_topic: /camera/camera/depth/camera_info
+    color_topic: /camera/camera/color/image_raw
+    use_direct_realsense: true
+    publish_debug_cloud: false
+    publish_static_tf: true
+    camera_parent_frame: base_link
+    camera_frame: camera_link
+    camera_x_offset_m: 0.5
+    camera_height_offset_m: 1.0
+    camera_pitch_deg: 20.0
+    camera_roll_deg: 90.0
+    camera_width: 640
+    camera_height: 480
+    min_x_m: 0.6
+    max_x_m: 6.0
+    min_y_m: -0.6
+    max_y_m: 0.6
+    min_z_m: 0.05
+    max_z_m: 3.1
+    min_depth_m: 0.25
+    max_depth_m: 5.5
+    enable_ballistic_filter: true
+    launch_min_x: 0.8
+    launch_max_x: 1.35
+    launch_min_y: -0.25
+    launch_max_y: 0.18
+    launch_min_z: 1.45
+    launch_max_z: 2.1
+    min_launch_vx: 0.3
+    min_launch_move_m: 0.05
+    pending_reset_sec: 0.25
+    gate_radius_m: 0.7
+    max_lost_frames: 8
+    min_tracking_points: 12
+    landing_min_z: 0.15
+    drag_coeff: 0.4
+    vel_smoothing_beta: 0.5
+    min_flight_vx_m_s: -1.5
+    max_vx_m_s: 15.0
+    max_abs_vy_m_s: 3.5
+    min_vz_m_s: -10.0
+    max_vz_m_s: 12.0
+    max_flight_duration_sec: 2.5
+    min_stationary_move_m: 0.12
+    max_stationary_frames: 5
+    voxel_size_m: 0.02
+    cluster_eps_m: 0.1
+    min_cluster_points: 45
+    max_cluster_points: 12000
+    min_cloth_size_m: 0.05
+    max_cloth_size_m: 0.8
+    continuity_thresh_m: 0.08
+    continuity_min_neighbors: 3
+    trajectory_history_sec: 15.0
+    enable_color_stream: false
+    color_fps: 30
+    jpeg_quality: 65
+    color_rotation_deg: 90
+    depth_fps: 60
+    rs_laser_power: -1.0
+    rs_exposure_us: -1
+    enable_cmd_vel_watch: true
+    cmd_vel_topic: /robot/operation/cmd_vel
+    cmd_vel_deadband_linear: 0.02
+    cmd_vel_deadband_angular: 0.02
+    cmd_vel_timeout_sec: 0.25
+    stop_settle_sec: 0.1
+    landing_position_topic: /cloth/landing_position
+    map_file_path: package://gn10_pointcloud_localization/map/nhk2026_map.json
+    map_frame: map
+    map_resolution_m: 0.05
+    map_max_distance_m: 0.5
+    map_min_x_m: -5.5
+    map_max_x_m: 5.5
+    map_min_y_m: -6.0
+    map_max_y_m: 6.0
+    map_min_z_m: -0.2
+    map_max_z_m: 4.0
+    map_max_memory_mb: 128
+    map_exclusion_distance_m: 0.08
+    map_tracking_keep_radius_m: 0.3
+    map_reject_unknown: true
+    map_use_floor: true
+    map_floor_z_m: 0.0
+    map_tf_wait_sec: 0.15
+    map_tf_poll_sec: 0.002
+    map_max_image_age_sec: 0.25
+    map_pose_loss_reset_sec: 0.25
+    map_depth_queue_size: 8

@@ -63,8 +63,6 @@ namespace realsense_dust_cloth
         // -------------------------------------------------------------
         __global__ void kernel_backproject_and_passthrough(
             const uint16_t *__restrict__ depth,
-            const uint16_t *__restrict__ bg_depth,
-            bool use_bg_sub,
             CameraIntrinsics intrin,
             CameraPoseConfig pose,
             FilterConfig filter,
@@ -89,24 +87,6 @@ namespace realsense_dust_cloth
             float z_raw = raw_depth * intrin.depth_scale;
             if (z_raw < filter.min_depth_m || z_raw > filter.max_depth_m)
                 return;
-
-            // Background Subtraction: If this pixel is at or behind the background, discard!
-            if (use_bg_sub && bg_depth != nullptr)
-            {
-                uint16_t bg = bg_depth[idx];
-                if (bg > 0)
-                {
-                    float z_bg = bg * intrin.depth_scale;
-                    if (z_raw >= (z_bg - filter.bg_diff_thresh_m))
-                    {
-                        return; // Part of background (walls, ceiling, floor, furniture)
-                    }
-                }
-                else if (filter.reject_uncalibrated_bg && z_raw > filter.uncalibrated_bg_max_depth_m)
-                {
-                    return; // Part of uncalibrated far background
-                }
-            }
 
             // 2D Depth Continuity Check (Parameterizable via FilterConfig / YAML)
             if (filter.continuity_min_neighbors > 0)
@@ -163,13 +143,12 @@ namespace realsense_dust_cloth
             // Restrict points to the active 3D gate (padded by max_cloth_size_m so large objects
             // crossing the gate boundary are not artificially sliced into small cloth-sized clusters,
             // while far background/wall noise cannot overflow the voxel buffer or chain-merge).
-            constexpr float HALF_CLOTH_EXTENT_RATIO = 0.5f;
             if (has_prediction)
             {
                 float dx = x_rob - pred_pos.x;
                 float dy = y_rob - pred_pos.y;
                 float dz = z_rob - pred_pos.z;
-                float max_gate_r = filter.gate_radius_m + (use_bg_sub ? filter.max_cloth_size_m : (filter.max_cloth_size_m * HALF_CLOTH_EXTENT_RATIO));
+                float max_gate_r = filter.gate_radius_m + filter.max_cloth_size_m;
                 if (dx * dx + dy * dy + dz * dz > max_gate_r * max_gate_r)
                 {
                     return;
@@ -177,7 +156,7 @@ namespace realsense_dust_cloth
             }
             else
             {
-                float pad = use_bg_sub ? filter.max_cloth_size_m : (filter.max_cloth_size_m * HALF_CLOTH_EXTENT_RATIO);
+                float pad = filter.max_cloth_size_m;
                 if (x_rob < filter.launch_min_x - pad || x_rob > filter.launch_max_x + pad ||
                     y_rob < filter.launch_min_y - pad || y_rob > filter.launch_max_y + pad ||
                     z_rob < filter.launch_min_z - pad || z_rob > filter.launch_max_z + pad)
@@ -474,10 +453,6 @@ namespace realsense_dust_cloth
         cudaStreamCreate(&ctx.stream);
 
         cudaMalloc(&ctx.d_depth, ctx.max_pixels * sizeof(uint16_t));
-        cudaMalloc(&ctx.d_bg_depth, ctx.max_pixels * sizeof(uint16_t));
-        cudaMemset(ctx.d_bg_depth, 0, ctx.max_pixels * sizeof(uint16_t));
-        ctx.bg_ready = false;
-
         cudaMalloc(&ctx.d_valid_points, ctx.max_pixels * sizeof(float3));
         cudaMalloc(&ctx.d_valid_count, sizeof(int));
 
@@ -499,52 +474,6 @@ namespace realsense_dust_cloth
         return true;
     }
 
-    void reset_background_cuda(CudaTrackerContext &ctx)
-    {
-        if (!ctx.initialized || ctx.d_bg_depth == nullptr)
-            return;
-        cudaMemset(ctx.d_bg_depth, 0, ctx.max_pixels * sizeof(uint16_t));
-        ctx.bg_ready = false;
-    }
-
-    __global__ void kernel_update_bg(
-        const uint16_t *__restrict__ depth,
-        uint16_t *__restrict__ bg_depth,
-        int total_pixels)
-    {
-        int idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (idx >= total_pixels)
-            return;
-        uint16_t d = depth[idx];
-        if (d > 0)
-        {
-            uint16_t old = bg_depth[idx];
-            if (old == 0 || d < old)
-            {
-                // Record minimum static depth across calibration frames so stereo edge flicker
-                // on poles/banners/walls never protrudes in front of the calibrated background
-                bg_depth[idx] = d;
-            }
-        }
-    }
-
-
-    void update_background_cuda(CudaTrackerContext &ctx, const uint16_t *host_depth_ptr, int width, int height)
-    {
-        if (!ctx.initialized || host_depth_ptr == nullptr || ctx.d_bg_depth == nullptr)
-            return;
-        int total_pixels = width * height;
-        if (total_pixels > ctx.max_pixels)
-            return;
-
-        cudaMemcpyAsync(ctx.d_depth, host_depth_ptr, total_pixels * sizeof(uint16_t), cudaMemcpyHostToDevice, ctx.stream);
-        int block = 256;
-        int grid = (total_pixels + block - 1) / block;
-        kernel_update_bg<<<grid, block, 0, ctx.stream>>>(ctx.d_depth, ctx.d_bg_depth, total_pixels);
-        cudaStreamSynchronize(ctx.stream);
-        ctx.bg_ready = true;
-    }
-
     void destroy_cuda_tracker(CudaTrackerContext &ctx)
     {
         if (!ctx.initialized)
@@ -552,8 +481,6 @@ namespace realsense_dust_cloth
 
         if (ctx.d_depth)
             cudaFree(ctx.d_depth);
-        if (ctx.d_bg_depth)
-            cudaFree(ctx.d_bg_depth);
         if (ctx.d_valid_points)
             cudaFree(ctx.d_valid_points);
         if (ctx.d_valid_count)
@@ -622,8 +549,6 @@ namespace realsense_dust_cloth
 
         kernel_backproject_and_passthrough<<<grid2d, block2d, 0, ctx.stream>>>(
             ctx.d_depth,
-            ctx.d_bg_depth,
-            !map.enabled && filter.use_bg_subtraction && ctx.bg_ready,
             intrin,
             pose,
             filter,

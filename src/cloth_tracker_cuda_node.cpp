@@ -142,7 +142,7 @@ ClothTrackerCudaNode::ClothTrackerCudaNode(const rclcpp::NodeOptions& options)
     }
 
     if (!use_direct_realsense_) {
-        rclcpp::QoS depth_qos(background_mode_ == "map" ? map_depth_queue_size_ : SENSOR_QOS_DEPTH);
+        rclcpp::QoS depth_qos(map_depth_queue_size_);
         depth_qos.reliable();
 
         rclcpp::QoS color_qos(SENSOR_QOS_DEPTH);
@@ -246,12 +246,6 @@ void ClothTrackerCudaNode::declare_parameters() {
     this->declare_parameter("max_cloth_size_m", 0.85);
     this->declare_parameter("continuity_thresh_m", 0.30);
     this->declare_parameter("continuity_min_neighbors", 2);
-    this->declare_parameter("reject_uncalibrated_bg", false);
-    this->declare_parameter("uncalibrated_bg_max_depth_m", 3.50);
-
-    this->declare_parameter("use_bg_subtraction", true);
-    this->declare_parameter("bg_diff_thresh_m", 0.08);
-    this->declare_parameter("bg_target_frames", 10);
 
     this->declare_parameter("publish_debug_cloud", false);
     this->declare_parameter("trajectory_history_sec", 15.0);
@@ -298,7 +292,6 @@ void ClothTrackerCudaNode::declare_parameters() {
     this->declare_parameter("cmd_vel_deadband_angular", 0.02);
     this->declare_parameter("cmd_vel_timeout_sec", 0.25);
     this->declare_parameter("stop_settle_sec", 0.10);
-    this->declare_parameter("bg_relearn_frames", 5);
 }
 
 void ClothTrackerCudaNode::load_parameters() {
@@ -337,12 +330,6 @@ void ClothTrackerCudaNode::load_parameters() {
     filter_cfg_.max_cloth_size_m = static_cast<float>(this->get_parameter("max_cloth_size_m").as_double());
     filter_cfg_.continuity_thresh_m = static_cast<float>(this->get_parameter("continuity_thresh_m").as_double());
     filter_cfg_.continuity_min_neighbors = this->get_parameter("continuity_min_neighbors").as_int();
-    filter_cfg_.reject_uncalibrated_bg = this->get_parameter("reject_uncalibrated_bg").as_bool();
-    filter_cfg_.uncalibrated_bg_max_depth_m = static_cast<float>(this->get_parameter("uncalibrated_bg_max_depth_m").as_double());
-
-    filter_cfg_.use_bg_subtraction = this->get_parameter("use_bg_subtraction").as_bool();
-    filter_cfg_.bg_diff_thresh_m = static_cast<float>(this->get_parameter("bg_diff_thresh_m").as_double());
-    bg_target_frames_ = this->get_parameter("bg_target_frames").as_int();
 
     publish_debug_cloud_ = this->get_parameter("publish_debug_cloud").as_bool();
     trajectory_history_sec_ = this->get_parameter("trajectory_history_sec").as_double();
@@ -395,8 +382,6 @@ void ClothTrackerCudaNode::load_parameters() {
     cmd_vel_deadband_angular_ = this->get_parameter("cmd_vel_deadband_angular").as_double();
     cmd_vel_timeout_sec_ = this->get_parameter("cmd_vel_timeout_sec").as_double();
     stop_settle_sec_ = this->get_parameter("stop_settle_sec").as_double();
-    bg_relearn_frames_ = this->get_parameter("bg_relearn_frames").as_int();
-    bg_relearn_counter_ = bg_relearn_frames_;
 }
 
 // =============================================================================
@@ -481,15 +466,9 @@ void ClothTrackerCudaNode::depth_image_callback(const sensor_msgs::msg::Image::C
     std::lock_guard<std::recursive_mutex> lock(processing_mutex_);
     camera_intrin_.width = msg->width;
     camera_intrin_.height = msg->height;
-    if (!intrinsics_ready_ && background_mode_ == "map") {
-        publish_background_state("MAP_WAITING_FOR_CAMERA_INFO",false);return;
-    }
     if (!intrinsics_ready_) {
-        // Fallback default intrinsics if CameraInfo has not arrived yet
-        camera_intrin_.fx = DEFAULT_DEPTH_FOCAL_LENGTH_PX;
-        camera_intrin_.fy = DEFAULT_DEPTH_FOCAL_LENGTH_PX;
-        camera_intrin_.cx = msg->width * 0.5f;
-        camera_intrin_.cy = msg->height * 0.5f;
+        publish_background_state("MAP_WAITING_FOR_CAMERA_INFO", false);
+        return;
     }
 
     // Auto-resize CUDA context if incoming image exceeds allocated max_pixels
@@ -723,7 +702,6 @@ void ClothTrackerCudaNode::cmd_vel_callback(const geometry_msgs::msg::Twist::Sha
 
     if (moving) {
         is_robot_moving_ = true;
-        needs_bg_relearn_ = true;
         stop_detected_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
     } else {
         if (is_robot_moving_ && stop_detected_time_.nanoseconds() == 0) {
@@ -751,16 +729,7 @@ void ClothTrackerCudaNode::check_robot_motion_state(const rclcpp::Time& current_
         if (stop_duration >= stop_settle_sec_) {
             is_robot_moving_ = false;
             stop_detected_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
-
-            if (needs_bg_relearn_) {
-                needs_bg_relearn_ = false;
-                if (background_mode_ == "map") return;
-                reset_background_cuda(cuda_ctx_);
-                bg_relearn_counter_ = 0;
-                RCLCPP_INFO(this->get_logger(),
-                            "[ClothTracker] Robot stopped & settled: Relearning background (%d frames)...",
-                            bg_relearn_frames_);
-            }
+            RCLCPP_INFO(this->get_logger(), "[ClothTracker] Robot stopped & settled: Ready to shoot.");
         }
     }
 }
@@ -769,11 +738,9 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
     std::lock_guard<std::recursive_mutex> lock(processing_mutex_);
     double now_sec = stamp.seconds();
     if (last_frame_stamp_sec_ > 0.0 && now_sec < last_frame_stamp_sec_ - BAG_LOOP_RESET_TOLERANCE_SEC) {
-        // Rosbag looped back to the beginning: clear all trajectory history, clear background, and reset tracker
+        // Rosbag looped back to the beginning: clear all trajectory history and reset tracker
         trajectory_points_.clear();
         ballistic_tracker_.reset();
-        reset_background_cuda(cuda_ctx_);
-        bg_frames_collected_ = 0;
         has_cloth_pose_ = false;
     }
     last_frame_stamp_sec_ = now_sec;
@@ -783,38 +750,15 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
 
     if (enable_cmd_vel_watch_ && is_robot_moving_) {
         // Suppress cloth detection while robot is in motion to prevent false triggers
-        if (background_mode_ == "map") {
-            ballistic_tracker_.reset();prev_state_=TrackerState::IDLE;
-            trajectory_points_.clear();has_cloth_pose_=false;
-        }
-        publish_background_state("MOVING_OR_SETTLING",false);
+        ballistic_tracker_.reset();
+        prev_state_ = TrackerState::IDLE;
+        trajectory_points_.clear();
+        has_cloth_pose_ = false;
+        publish_background_state("MOVING_OR_SETTLING", false);
         return;
     }
 
-    if (background_mode_ == "map" && !prepare_map_frame(stamp)) return;
-
-    // Phase 1: Background Calibration (depth mode only)
-    if (background_mode_ == "depth" && filter_cfg_.use_bg_subtraction) {
-        if (bg_frames_collected_ < bg_target_frames_) {
-            update_background_cuda(cuda_ctx_, depth_ptr, camera_intrin_.width, camera_intrin_.height);
-            bg_frames_collected_++;
-            publish_background_state("DEPTH_LEARNING",false);
-            if (bg_frames_collected_ == bg_target_frames_) {
-                RCLCPP_INFO(this->get_logger(), "=== BACKGROUND CALIBRATED (%d frames)! Static walls, ceiling and furniture are now IGNORED. ===", bg_target_frames_);
-            }
-            return;
-        }
-
-        if (enable_cmd_vel_watch_ && bg_relearn_counter_ < bg_relearn_frames_) {
-            update_background_cuda(cuda_ctx_, depth_ptr, camera_intrin_.width, camera_intrin_.height);
-            bg_relearn_counter_++;
-            publish_background_state("DEPTH_LEARNING",false);
-            if (bg_relearn_counter_ == bg_relearn_frames_) {
-                RCLCPP_INFO(this->get_logger(), "=== FAST BACKGROUND RELEARNED (%d frames)! READY TO SHOOT ===", bg_relearn_frames_);
-            }
-            return;
-        }
-    }
+    if (!prepare_map_frame(stamp)) return;
 
     std::vector<float3> debug_cluster_pts;
     std::vector<float3> debug_filtered_pts;
@@ -828,14 +772,12 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
         pred_x, pred_y, pred_z, has_pred, map_filter_
     );
 
-    if (background_mode_ == "map") {
-        auto error=cudaGetLastError();
-        if (error != cudaSuccess) {
-            map_processing_failed_=true;
-            publish_background_state("MAP_PROCESSING_ERROR",false);
-            RCLCPP_ERROR(get_logger(),"Map tracking CUDA failure: %s",cudaGetErrorString(error));
-            return;
-        }
+    auto error = cudaGetLastError();
+    if (error != cudaSuccess) {
+        map_processing_failed_ = true;
+        publish_background_state("MAP_PROCESSING_ERROR", false);
+        RCLCPP_ERROR(get_logger(), "Map tracking CUDA failure: %s", cudaGetErrorString(error));
+        return;
     }
 
     // Phase 2: Ballistic State Tracking (Filter out stationary walls/ceiling & robot shaking)
@@ -848,8 +790,7 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
         is_actively_tracked = raw_res.valid;
     }
 
-    publish_background_state(background_mode_ == "map" ? "MAP_READY" : "DEPTH_READY",
-        ballistic_tracker_.state != TrackerState::TRACKING);
+    publish_background_state("MAP_READY", ballistic_tracker_.state != TrackerState::TRACKING);
 
     // Publish Debug Point Clouds & ROI Markers after tracker state update
     if (publish_debug_cloud_) {
@@ -873,8 +814,10 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
         ballistic_tracker_.state == TrackerState::TRACKING ? "TRACKING" : "IDLE"
     );
 
-    if (background_mode_ == "map" && is_actively_tracked && ballistic_tracker_.state == TrackerState::LANDED) {
-        last_cloth_x_=res.cx;last_cloth_y_=res.cy;last_cloth_z_=res.cz;
+    if (is_actively_tracked && ballistic_tracker_.state == TrackerState::LANDED) {
+        last_cloth_x_ = res.cx;
+        last_cloth_y_ = res.cy;
+        last_cloth_z_ = res.cz;
     }
     if (prev_state_ == TrackerState::TRACKING && ballistic_tracker_.state == TrackerState::LANDED) {
         if (pub_landing_pos_) {
@@ -960,7 +903,7 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
     }
 
     // 1. Broadcast TF: base_link -> flying_cloth (Every frame while tracked or landed so RViz TF axes NEVER flicker or expire)
-    if (has_cloth_pose_ && (background_mode_ != "map" || is_actively_tracked)) {
+    if (has_cloth_pose_ && is_actively_tracked) {
         geometry_msgs::msg::TransformStamped tf_msg;
         tf_msg.header.stamp = stamp;
         tf_msg.header.frame_id = camera_parent_frame_;

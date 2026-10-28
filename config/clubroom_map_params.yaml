@@ -1,10 +1,8 @@
-# RealSense direct: prior-map subtraction
-# map_file_path must describe the same map and coordinate frame as localization.
-# Map thresholds/timing are explicit here. Launch only overrides explicitly supplied arguments.
+# RealSense direct: clubroom simplified field prior-map subtraction
+# Uses test.json from gn10_navigation describing the clubroom simplified field.
 /**:
   ros__parameters:
     observed_landing_only: true
-    background_mode: map
     use_sim_time: false
     depth_topic: /camera/camera/depth/image_rect_raw
     camera_info_topic: /camera/camera/depth/camera_info
@@ -21,13 +19,13 @@
     camera_width: 640
     camera_height: 480
     min_x_m: 0.6
-    max_x_m: 6.0
+    max_x_m: 3.5
     min_y_m: -0.6
     max_y_m: 0.6
     min_z_m: 0.05
-    max_z_m: 3.1
+    max_z_m: 2.2
     min_depth_m: 0.25
-    max_depth_m: 5.5
+    max_depth_m: 4.0
     enable_ballistic_filter: true
     launch_min_x: 0.8
     launch_max_x: 1.35
@@ -52,11 +50,6 @@
     max_flight_duration_sec: 2.5
     min_stationary_move_m: 0.12
     max_stationary_frames: 5
-    use_bg_subtraction: true
-    bg_diff_thresh_m: 0.12
-    bg_target_frames: 30
-    reject_uncalibrated_bg: false
-    uncalibrated_bg_max_depth_m: 5.5
     voxel_size_m: 0.02
     cluster_eps_m: 0.1
     min_cluster_points: 45
@@ -79,19 +72,18 @@
     cmd_vel_deadband_angular: 0.02
     cmd_vel_timeout_sec: 0.25
     stop_settle_sec: 0.1
-    bg_relearn_frames: 5
     landing_position_topic: /cloth/landing_position
-    map_file_path: package://gn10_pointcloud_localization/map/nhk2026_map.json
+    map_file_path: package://gn10_navigation/config/test.json
     map_frame: map
     map_resolution_m: 0.05
     map_max_distance_m: 0.5
-    map_min_x_m: -5.5
-    map_max_x_m: 5.5
-    map_min_y_m: -6.0
-    map_max_y_m: 6.0
+    map_min_x_m: -1.0
+    map_max_x_m: 3.5
+    map_min_y_m: -2.0
+    map_max_y_m: 1.0
     map_min_z_m: -0.2
-    map_max_z_m: 4.0
-    map_max_memory_mb: 128
+    map_max_z_m: 2.0
+    map_max_memory_mb: 32
     map_exclusion_distance_m: 0.08
     map_tracking_keep_radius_m: 0.3
     map_reject_unknown: true

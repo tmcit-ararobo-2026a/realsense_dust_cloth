@@ -9,7 +9,6 @@
 
 namespace realsense_dust_cloth {
 void ClothTrackerCudaNode::declare_map_parameters() {
-    declare_parameter("background_mode","depth");
     declare_parameter("map_file_path","");
     declare_parameter("map_frame","map");
     declare_parameter("map_resolution_m",0.05);
@@ -31,16 +30,10 @@ void ClothTrackerCudaNode::declare_map_parameters() {
 }
 
 void ClothTrackerCudaNode::setup_map_background() {
-    background_mode_=get_parameter("background_mode").as_string();
-    if (background_mode_!="depth" && background_mode_!="map")
-        throw std::invalid_argument("background_mode must be 'depth' or 'map'");
     pub_background_status_=create_publisher<std_msgs::msg::String>("/cloth/background_status",rclcpp::QoS(1).transient_local());
     pub_ready_=create_publisher<std_msgs::msg::Bool>("/cloth/ready",rclcpp::QoS(1).transient_local());
     pub_tracking_state_=create_publisher<std_msgs::msg::String>("/cloth/tracking_state",rclcpp::QoS(1).transient_local());
     publish_background_state("INITIALIZING",false);
-    if (background_mode_!="map") return;
-    if (!filter_cfg_.use_bg_subtraction)
-        throw std::invalid_argument("map mode requires use_bg_subtraction: true");
     map_frame_=get_parameter("map_frame").as_string();
     if (map_frame_.empty() || map_frame_==camera_parent_frame_)
         throw std::invalid_argument("map_frame must differ from camera_parent_frame");

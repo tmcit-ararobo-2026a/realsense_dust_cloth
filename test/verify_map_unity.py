@@ -23,7 +23,6 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--params-file',required=True)
     parser.add_argument('--output',required=True)
-    parser.add_argument('--mode',choices=['map','depth'],default='map')
     parser.add_argument('--require-observed-landing',action='store_true')
     args=parser.parse_args()
     if not os.environ.get('ROS_DOMAIN_ID') or os.environ['ROS_DOMAIN_ID']=='0':
@@ -66,14 +65,13 @@ def main():
         try:
             throw.publish(Bool(data=False))
             assert until(lambda:ready[0],15), 'Background never ready; '+str(states[-5:])
-            assert args.mode!='map' or len(poses)>3, 'Actual localization poses are missing'
+            assert len(poses)>3, 'Actual localization poses are missing'
             client=node.create_client(GetParameters,'/cloth_tracker_cuda_node/get_parameters')
             assert client.wait_for_service(timeout_sec=2)
-            request=GetParameters.Request();request.names=['background_mode','use_sim_time','use_direct_realsense','use_bg_subtraction']
+            request=GetParameters.Request();request.names=['use_sim_time','use_direct_realsense']
             future=client.call_async(request);assert until(future.done,3)
             values=future.result().values
-            assert values[0].string_value==args.mode
-            assert values[1].bool_value and not values[2].bool_value and values[3].bool_value
+            assert values[0].bool_value and not values[1].bool_value
             advance(.5)
             assert len(positions)==0,'False detection before a throw'
             for index,ratio in enumerate((.4,.7,.4)):
@@ -86,7 +84,7 @@ def main():
                     assert any(s['state']=='MOVING_OR_SETTLING' for s in states[state_index:])
                     after=poses[-1] if poses else None
                     distance=((after['x']-before['x'])**2+(after['y']-before['y'])**2)**.5 if before and after else None
-                    if args.mode=='map':assert distance>.2,'Localization did not observe actual travel'
+                    assert distance>.2,'Localization did not observe actual travel'
                     movement=dict(sim_wait=sim[0]-stop_time,wall_wait=time.monotonic()-wall,localized_travel_m=distance)
                 assert until(lambda:ready[0],3)
                 point_index=len(positions);land_index=len(landings)
@@ -104,19 +102,17 @@ def main():
                 trials.append(trial);print(json.dumps(trial),flush=True)
                 advance(.5)
             logs=(output/'tracker.log').read_text()
-            if args.mode=='map':
-                assert 'BACKGROUND CALIBRATED' not in logs and 'FAST BACKGROUND RELEARNED' not in logs
-                assert any(s['state']=='MAP_READY' for s in states)
+            assert 'BACKGROUND CALIBRATED' not in logs and 'FAST BACKGROUND RELEARNED' not in logs
+            assert any(s['state']=='MAP_READY' for s in states)
             assert all(t['detected'] and t['points']>=5 for t in trials),'A simulated throw was not tracked'
             if args.require_observed_landing:
                 assert all(t['observed_landing'] for t in trials), 'Not all flights were observed to the landing height'
             assert not any(s['state']=='MAP_PROCESSING_ERROR' for s in states)
-            result=dict(passed=True,mode=args.mode,trials=trials,all_landings_observed=all(t['observed_landing'] for t in trials),localization_messages=len(poses),
+            result=dict(passed=True,mode='map',trials=trials,all_landings_observed=all(t['observed_landing'] for t in trials),localization_messages=len(poses),
                 checks=['launch respects YAML','real localization input','stationary shots','travel then stop and shot',
-                        'no shot-counter dependency','no depth learning in map mode'] if args.mode=='map' else
-                       ['launch respects YAML','legacy background mode','stationary shots','travel then relearn and shot'])
+                        'no shot-counter dependency','no depth learning in map mode'])
         except Exception as error:
-            result=dict(passed=False,mode=args.mode,trials=trials,error=str(error),last_states=states[-10:])
+            result=dict(passed=False,mode='map',trials=trials,error=str(error),last_states=states[-10:])
             raise
         finally:
             command.publish(Twist());throw.publish(Bool(data=False));advance(.1)

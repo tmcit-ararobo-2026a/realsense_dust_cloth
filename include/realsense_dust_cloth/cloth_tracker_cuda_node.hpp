@@ -51,7 +51,7 @@ private:
     bool prepare_map_frame(const rclcpp::Time& stamp);
     void publish_background_state(const std::string&, bool);
     std::recursive_mutex processing_mutex_;
-    std::string background_mode_{"depth"}, map_frame_;
+    std::string map_frame_;
     MapBackground map_background_;
     MapFilterView map_filter_;
     std::shared_ptr<tf2_ros::Buffer> map_tf_buffer_;
@@ -85,8 +85,6 @@ private:
     bool use_direct_realsense_{false};
     bool enable_ballistic_filter_{true};
     double trajectory_history_sec_{3.0};
-    int bg_frames_collected_{0};
-    int bg_target_frames_{20};
 
     // Trajectory history
     std::vector<std::pair<double, geometry_msgs::msg::Point>> trajectory_points_;
@@ -152,11 +150,8 @@ private:
     double cmd_vel_deadband_angular_{0.02};
     double cmd_vel_timeout_sec_{0.25};
     double stop_settle_sec_{0.10};
-    int bg_relearn_frames_{5};
 
     bool is_robot_moving_{false};
-    bool needs_bg_relearn_{false};
-    int bg_relearn_counter_{0};
     rclcpp::Time last_cmd_vel_time_{0, 0, RCL_ROS_TIME};
     rclcpp::Time stop_detected_time_{0, 0, RCL_ROS_TIME};
 

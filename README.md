@@ -12,9 +12,10 @@ Intel RealSense D435 と NVIDIA Jetson (CUDA) を C++ で密結合した、飛�
   * 飛翔中の布のはためきや RealSense の微小深度ノイズを100%除去。
   * 最小二乗法により、数学的に最も確からしい真の放物線 $Z(X) = a X^2 + b X + c$ と直進線 $Y(X) = d X + e$ をリアルタイム算出（信頼度 $R^2 \ge 95\%$）。
   * 最高到達点（Apex）と着地予測地点（Landing Target）をミリ単位で即時計算。
-* **ロボット静止時 / 走行時の両対応モード**:
-  * **停止時（発射反動あり）**: 背景差分（`use_bg_subtraction:=true`）により周囲の壁や家具を完全消去。
-  * **台車走行時（移動射撃）**: 背景差分を OFF（`use_bg_subtraction:=false`）にし、空間ROI ＋ 発射口ゲート ＋ 進行速度ベクトル照合で追尾。
+* **事前地図 ESDF 背景差分（自己位置連動・学習待ちゼロ）**:
+  * 競技場・フィールドの事前マップ（JSON / ESDF）と撮影時刻同期 TF（`map -> base_link`）を使い、ロボットがどこに移動しても静止構造物（壁・柱・床・障害物）を GPU 上で完全消去。
+  * 従来の静止画深度蓄積（depth学習）が不要なため、起動直後から即時射出可能。台車停止後の再学習待ち時間もゼロ（機体揺れ収束待ち `stop_settle_sec: 0.10s` のみ）。
+  * 走行中（cmd_vel受信時）は自動的に認識を休止（`MOVING_OR_SETTLING`）し、停止と同時に `MAP_READY` に復帰。
 * **超軽量 JPEG エンコーダ圧縮配信（rosbag 記録容量 95% 削減 & Wi-Fi 遠隔配信）**:
   * Jetson の高速ハードウェア/SIMD エンコーダで JPEG 圧縮し、`/camera/camera/color/image_raw/compressed` を自動配信。
   * ディスク容量を消費せず rosbag に投擲映像を記録でき、Wi-Fi 経由でも遅延なく手元 PC へ映像をストリーミング可能。
@@ -38,94 +39,57 @@ Intel RealSense D435 と NVIDIA Jetson (CUDA) を C++ で密結合した、飛�
 
 ## 3. 起動コマンド（用途別）
 
-### A. 実機 RealSense での運用
+### A. 実機での運用
 
 ```bash
 source ~/ros2_ws/install/setup.bash
 
-# 1. 実機単体運用（Direct RealSense API / 停止射撃モード）
+# 1. 大会本番フィールド運用（デフォルト: tracker_params.yaml -> nhk2026_map.json）
 ros2 launch realsense_dust_cloth cloth_tracker.launch.py
 
-# 2. RViz2 GUI も一緒に起動して弾道を確認する場合
-ros2 launch realsense_dust_cloth cloth_tracker.launch.py rviz:=true
+# 2. 部室簡易フィールド運用（clubroom_map_params.yaml -> test.json）
+ros2 launch realsense_dust_cloth cloth_tracker.launch.py params_file:=clubroom_map_params.yaml
 
-# 3. ロボットが走行しながら撃つ場合（移動射撃モード・背景差分OFF）
-ros2 launch realsense_dust_cloth cloth_tracker.launch.py use_bg_subtraction:=false
+# 3. RViz2 GUI も一緒に起動して弾道を確認する場合
+ros2 launch realsense_dust_cloth cloth_tracker.launch.py rviz:=true
 ```
 
 ---
 
-### B. Isaac Sim（シミュレータ）での動作確認
+### B. Unity / シミュレータでの動作確認
 
-Isaac Sim や Gazebo 等のシミュレータ上で動作確認を行う場合、以下の最小 3 オプションで実機同様に起動できます：
+Unity シミュレーション環境（gn10 自己位置推定ノードが時刻付き TF を配信している状態）で動作確認を行う場合：
 
 ```bash
 source ~/ros2_ws/install/setup.bash
 
 ros2 launch realsense_dust_cloth cloth_tracker.launch.py \
-  use_sim_time:=true \
-  use_direct_realsense:=false \
+  params_file:=unity_map_params.yaml \
   rviz:=true
 ```
 * **オプションの役割**:
-  * `use_sim_time:=true`: シミュレータのクロック（`/clock`）に同期。
-  * `use_direct_realsense:=false`: 実機 USB ではなくシミュレータの ROS 2 画像トピックを購読。
+  * `use_sim_time: true`: シミュレータのクロック（`/clock`）に同期。
+  * `use_direct_realsense: false`: 実機 USB ではなくシミュレータの ROS 2 画像トピックを購読。
   * `rviz:=true`: 弾道確認用の RViz2 画面を表示。
-  * ※ 背景差分（`use_bg_subtraction`）は実機同様デフォルトで有効（`true`）となるため、シミュレータ内の静止した床や壁も自動で消去されます。Isaac Sim 固有の `32FC1`（float深度）もノード側で自動判別・変換されます。
 
 ---
 
-### C. 記録済み rosbag を再生してテスト（1コマンド自動再生）
+### C. 記録した実機 rosbag の再生・オフライン検証
 
-付属の `play_bag_rviz.launch.py` を使うと、バッグ再生・TF 発行・ノード起動・RViz 画面表示がワンコマンドで自動実行されます：
-
-```bash
-source ~/ros2_ws/install/setup.bash
-
-# デフォルト（テストバッグ cloth_test_11_camera_only をループ再生）
-ros2 launch realsense_dust_cloth play_bag_rviz.launch.py
-
-# 任意の bag フォルダを指定する場合
-ros2 launch realsense_dust_cloth play_bag_rviz.launch.py bag_path:=<bagフォルダへのパス>
-```
-
-#### （参考）ターミナルを分けて手動再生する場合
-
-実機カメラ直接接続ではなく ROS 2 トピックから画像を読み込むため、**`use_direct_realsense:=false`** を指定してください。
+実機で記録したバッグ（TF・生Depth・CameraInfo 含む）を再生し、追尾ノードをオフラインで再実行する場合：
 
 ```bash
-# ターミナル1: トラッカー & RViz2 起動
-ros2 launch realsense_dust_cloth cloth_tracker.launch.py rviz:=true use_sim_time:=true use_direct_realsense:=false
-
-# ターミナル2: bag 再生（カメラ・Depthトピックのみに限定して再生）
-ros2 bag play <記録したbagフォルダ名> --loop --clock --topics \
-  /camera/camera/depth/image_rect_raw \
-  /camera/camera/depth/camera_info \
-  /camera/camera/color/image_raw/compressed \
-  /camera/camera/color/camera_info
-```
-
-> 💡 **なぜ `--topics` を指定するのか？**  
-> rosbag に過去の軌道トピック（`/cloth/*`）や TF（`/tf`）が記録されている場合、オプションなしで再生すると過去の古い弾道表示が混入し、現在起動中のノードの追尾計算と競合してしまいます。  
-> `--topics` でカメラ映像と生Depthのみに限定して再生することで、純粋なセンサ入力だけを流し、**現在起動中のノードに新規で追尾・弾道計算を行わせる実験**が可能になります（過去の失敗原因などを当時の軌道のまま確認したい場合は `--topics` を外して全トピック再生してください）。
-
-#### 💡 過去のテスト rosbag を再生する場合
-水平設置（仰角 0°）で撮影された過去のテスト rosbag を再生する場合は、専用設定ファイル **`test_bag_params.yaml`** を指定してください：
-
-```bash
-# ターミナル1: test_bag 専用設定で起動（ファイル名指定で自動解決されます）
+# ターミナル1: トラッカー & RViz2 起動（対象フィールドに合わせて YAML を指定）
 ros2 launch realsense_dust_cloth cloth_tracker.launch.py \
-  params_file:=test_bag_params.yaml \
-  rviz:=true use_sim_time:=true
+  params_file:=tracker_params.yaml \
+  rviz:=true use_sim_time:=true use_direct_realsense:=false
 
-# ターミナル2: bag 再生（カメラ・Depthトピックのみ限定）
-ros2 bag play <記録したbagフォルダへのパス> --loop --clock --topics \
-  /camera/camera/depth/image_rect_raw \
-  /camera/camera/depth/camera_info \
-  /camera/camera/color/image_raw/compressed \
-  /camera/camera/color/camera_info
+# ターミナル2: bag 再生（--clock を付与して /clock を配信）
+ros2 bag play <記録したbagフォルダ名> --clock
 ```
-* **理由**: デフォルト設定（`tracker_params.yaml`）は本番機体用（上向き 20°、探索範囲 5.5m）です。水平設置で撮影された過去の bag に適用すると、座標が傾いて計算され、着地後に床や奥の壁ノイズを拾って軌道が折れ曲がってしまいます。`test_bag_params.yaml` を指定することで、撮影当時のカメラ角度（仰角 0°）・範囲（3.5m）で綺麗な放物線が再現されます。
+
+> 💡 **rosbag 再生時の注意点**  
+> 地図差分方式は画像のタイムスタンプと同一時刻の `map -> base_link` TF を厳格に照合します。rosbag 再生時は必ず `--clock` を付与し、ノード側に `use_sim_time:=true` を設定してください。古い弾道トピックとの競合を防ぐため、必要に応じて `--topics /tf /tf_static /camera/...` を指定してください。
 
 ---
 
@@ -135,9 +99,20 @@ ros2 bag play <記録したbagフォルダへのパス> --loop --clock --topics 
 
 ---
 
-### A. 実機での rosbag 記録コマンド（生Depth・カラー・弾道データ完全版）
+### A. 実機での rosbag 記録（推奨スクリプト利用）
 
-実機（ロボットまたは手元PC）のターミナルで以下を実行します。**生Depth画像とカメラ内部パラメータ（CameraInfo）を含めることで、持ち帰ったPC上で何度でも追尾ノードを再実行・パラメータ最適化が可能**になります（全15トピック）：
+実機での検証・データ収集には、自己位置 TF・カメラ画像・追尾トピックを一括記録する付属スクリプトの使用を推奨します：
+
+```bash
+# デフォルト（bags/real_cloth_日時 に自動記録）
+~/ros2_ws/src/realsense_dust_cloth/scripts/record_real_robot.sh
+
+# 任意の保存ディレクトリ名を指定する場合
+~/ros2_ws/src/realsense_dust_cloth/scripts/record_real_robot.sh my_test_bag
+```
+
+#### （参考）手動で `ros2 bag record` を実行する場合
+実機（ロボットまたは手元PC）のターミナルで以下を実行します：
 
 ```bash
 ros2 bag record \
@@ -156,7 +131,8 @@ ros2 bag record \
   /camera/camera/depth/camera_info \
   /camera/camera/color/image_raw/compressed \
   /camera/camera/color/camera_info \
-  -o cloth_test_04
+  /robot/operation/cmd_vel \
+  -o cloth_test_01
 ```
 * **記録される主要トピックの内訳**:
   * `/camera/camera/depth/image_rect_raw`, `/camera/camera/depth/camera_info`: **生Depth画像とカメラ情報**（`use_direct_realsense: true` 実機直結時でも録画時のみ自動配信。オフライン再解析・アルゴリズム検証に必須）
@@ -219,23 +195,27 @@ ros2 run rviz2 rviz2 -d ~/ros2_ws/src/realsense_dust_cloth/rviz/cloth_tracker.rv
 
 ---
 
-#### 方法3. 追尾アルゴリズムの再実験・パラメータ検証（カメラ・Depthのみフィルタ再生）
-bag 内に記録されている前回の軌道マーカー（`/cloth/*`）や TF を遮断し、純粋なセンサ入力のみを流して新パラメータで追尾し直したい場合：
+#### 方法3. 追尾アルゴリズムの再実験・パラメータ検証（TF・センサ入力再生）
+bag 内に記録されている前回の軌道マーカー（`/cloth/*`）を遮断し、センサ入力とTFのみを流して新パラメータで追尾し直したい場合：
 
 ```bash
-# ターミナル1: トラッカー & RViz2 起動
+# ターミナル1: トラッカー & RViz2 起動（対象環境の YAML を指定）
 ros2 launch realsense_dust_cloth cloth_tracker.launch.py \
-  params_file:=test_bag_params.yaml \
+  params_file:=tracker_params.yaml \
+  use_direct_realsense:=false \
   rviz:=true use_sim_time:=true
 
-# ターミナル2: カメラ・Depthトピックのみに限定して再生（--topics）
+# ターミナル2: カメラ・TF・cmd_vel トピックに限定して再生（--topics）
 ros2 bag play cloth_test_01 --loop --clock --topics \
+  /tf \
+  /tf_static \
   /camera/camera/depth/image_rect_raw \
   /camera/camera/depth/camera_info \
   /camera/camera/color/image_raw/compressed \
-  /camera/camera/color/camera_info
+  /camera/camera/color/camera_info \
+  /robot/operation/cmd_vel
 ```
-※ 前回の古い弾道や座標軸が混ざることなく、現在のノードが1フレームずつ新パラメータで追尾した結果のみを観察できます。
+※ 前回の古い弾道マーカーが混ざることなく、現在のノードが1フレームずつ新パラメータで追尾した結果のみを観察できます。
 
 ---
 
@@ -308,8 +288,11 @@ python3 ~/ros2_ws/src/realsense_dust_cloth/realsense_dust_cloth/trajectory_proba
 | `landing_min_z` | `0.15` [m] | 着地確定判定高さ（カゴ・床面到達でLANDEDへ遷移） |
 | `drag_coeff` | `0.40` | 空気抵抗減衰係数 |
 | `max_vx_m_s` | `15.0` [m/s] | 飛翔最大前進速度上限 |
+| `map_file_path` | `package://gn10_pointcloud_localization/map/nhk2026_map.json` | 事前マップファイルパス（JSON / ESDF） |
+| `map_exclusion_distance_m` | `0.10` [m] | 静止構造物からの除外マージン |
+| `stop_settle_sec` | `0.10` [s] | 台車停止後の機体揺れ収束待ち時間（収束後即時 MAP_READY） |
+| `cmd_vel_timeout_sec` | `0.30` [s] | 台車走行判定のタイムアウト時間 |
 | `use_direct_realsense` | `true` | RealSense C++ API 直接ストリーミング |
-| `use_bg_subtraction` | `true` | 静止背景差分（停止時は `true`、台車走行射撃時は `false`） |
 | `enable_color_stream` | `true` | JPEG 圧縮カラー配信（rosbag 記録 & 遠隔監視用） |
 | `jpeg_quality` | `65` | JPEG 圧縮品質（1〜100、65 で帯域 95% 削減） |
 | `color_rotation_deg` | `90` | 縦置きカメラ映像の正立回転角度 |
@@ -318,39 +301,38 @@ python3 ~/ros2_ws/src/realsense_dust_cloth/realsense_dust_cloth/trajectory_proba
 `cloth_tracker.launch.py` では、必要に応じて実行モードのみを引数で切り替えられます：
 
 * `use_direct_realsense:=false`: ROS 2 トピック（`/camera/...`）から深度を受け取るモード（実機ではデフォルトで `true`）
-* `use_bg_subtraction:=false`: ロボット走行時の射撃モード（背景差分をOFF）
 * `use_sim_time:=true`: Isaac Sim や rosbag 再生時のシミュレーションクロック同期
 * `rviz:=true`: 手元 PC 等で RViz2 GUI を同時に起動
 * `record:=true`: 主要トピック（TF, 雑巾位置, 軌跡, 圧縮カラー）を自動で rosbag 録画
-* `params_file:=/path/to/custom.yaml`: 別のカスタム YAML ファイルを指定して起動
+* `params_file:=/path/to/custom.yaml`: 別のカスタム YAML ファイルを指定して起動（例: `clubroom_map_params.yaml`）
 
 
-## 追加：地図差分と停止後背景学習の切り替え
+## 事前地図 ESDF 差分方式の仕様と設定
 
-従来方式は `background_mode: depth` のまま利用できる。地図・自己位置は不要。
-`background_mode: map` は事前マップと撮影時刻の `map -> base_link` TF を使い、背景画像を学習せず静止構造物を除く。
-どちらも射出カウンタは不要。走行中は認識を休止し、停止後の揺れ待ちはYAMLで設定する。
+事前マップと撮影時刻の `map -> base_link` TF を使い、背景画像を蓄積学習することなく静止構造物・床面を瞬時に除外します。
+射出カウンタは不要です。走行中は認識を休止し、停止後の揺れ収束（`stop_settle_sec: 0.10s`）後に即座に `MAP_READY` となります。
 
 | 設定ファイル | 用途 |
 |---|---|
-| `tracker_params.yaml` | 従来の実機・停止後背景学習 |
-| `test_bag_params.yaml` | 従来の固定カメラbag。地図・自己位置不要 |
-| `unity_depth_params.yaml` | Unityで従来方式を比較 |
-| `map_tracker_params.yaml` | 実機の事前マップ差分 |
-| `unity_map_params.yaml` | Unityの事前マップ差分 |
+| `tracker_params.yaml` | 実機・大会本番フィールド（`nhk2026_map.json`）※デフォルト |
+| `clubroom_map_params.yaml` | 実機・部室簡易フィールド（`test.json`） |
+| `unity_map_params.yaml` | Unity シミュレータ（`nhk2026_map.json`） |
 
-Unity側を再生し、既存の自己位置推定がTFを出している状態で起動する。追跡ノードを二重起動しない。
+Unity側を再生し、既存の自己位置推定がTFを出している状態で起動する例：
 
 ```bash
 source ~/ros2_ws/install/setup.bash
-# 事前マップ差分
 ros2 launch realsense_dust_cloth cloth_tracker.launch.py params_file:=unity_map_params.yaml enable_analyzer:=false rviz:=true
-# 地図なしの従来方式（上の追跡ノードを終了してから）
-ros2 launch realsense_dust_cloth cloth_tracker.launch.py params_file:=unity_depth_params.yaml enable_analyzer:=false rviz:=true
 ```
 
-実機の地図方式は `params_file:=map_tracker_params.yaml`。通常の引数なし起動は従来方式。
-launchの `use_sim_time / use_direct_realsense / use_bg_subtraction` は未指定ならYAMLを尊重する。明示指定したときだけ上書きする。
+実機（部室簡易フィールド）での起動例：
+
+```bash
+source ~/ros2_ws/install/setup.bash
+ros2 launch realsense_dust_cloth cloth_tracker.launch.py params_file:=clubroom_map_params.yaml
+```
+
+launchの `use_sim_time / use_direct_realsense` は未指定ならYAMLを尊重します。明示指定したときだけ上書きします。
 
 ### 地図方式の設定と条件
 
@@ -361,9 +343,9 @@ launchの `use_sim_time / use_direct_realsense / use_bg_subtraction` は未指�
 - JSONから距離場を作る範囲・解像度・最大メモリは `map_min/max_* / map_resolution_m / map_max_memory_mb`。`.esdf` 読み込み時はファイル内の範囲と解像度を使用する。
 - `map_exclusion_distance_m` 内の静止構造物を除外する。地図外は `map_reject_unknown` で扱いを指定する。
 - 床平面の除去は `map_use_floor / map_floor_z_m`。実測で飛翔を確認した後は、予測位置から `map_tracking_keep_radius_m` 内を一律の地図除去から保護する。大きさ・速度・予測ゲートの検証は継続する。
-- 地図モードのプロファイルは `observed_landing_only: true`。低い点を実測した場合だけLANDED、未検出終了はLOST、空中静止はRESTING。従来プロファイルはfalseで既存の判定を維持する。
-- 地図モードでは従来の実験室の壁を避けるための前方5m制限を6mへ広げている。実測更新のない画像で古い雑巾TFを新しい時刻に更新しない。Unity比較用プロファイルはRVizのカメラ表示のためカラーON。実機の地図プロファイルはカラーOFF。デバッグ点群は比較用プロファイルでOFF。
-- 設定は起動時に読み込む。方式や地図を切り替えるときはYAMLを選び直し、追跡ノードを再起動する。
+- 地図モードのプロファイルは `observed_landing_only: true`。低い点を実測した場合だけLANDED、未検出終了はLOST、空中静止はRESTING。
+- 実測更新のない画像で古い雑巾TFを新しい時刻に更新しない。Unity用プロファイルはRVizのカメラ表示のためカラーON。実機用プロファイルはカラーOFF。
+- 設定は起動時に読み込む。地図を切り替えるときはYAMLを選び直し、追跡ノードを再起動する。
 
 ### 状態確認
 
@@ -375,12 +357,10 @@ ros2 topic echo /cloth/tracking_state
 
 `MAP_READY` は時刻付き自己位置が取得できている状態。`MAP_WAITING_FOR_POSE` は自己位置待ち、`MAP_IMAGE_TIME_INVALID` は画像とROS時計の不整合、`MAP_PROCESSING_ERROR` はCUDA異常。`/cloth/ready` は背景準備済み・追跡中ではないことを通知するが、射出を強制的に止める機能ではない。
 
-`cloth_test_11_camera_only` には対応地図・自己位置がないため、通常は従来モードで検証する。大会の地図に架空の自己位置を付けて地図方式の成功とは扱わない。
-
 ### 検証
 
 `-DBUILD_TESTING=ON` でGPUの地図照合とCPUの着地判定テストを追加する。
 `test/test_map_pose_guard.py` は独立したROS_DOMAIN_IDで、TF欠損、停止した時計、古い画像、自己位置復帰を検証する。
 `test/verify_map_unity.py` はUnityと実際のgn10自己位置推定を起動した上で連投・走行停止後射出を検証する。
 結果の `passed` は構成の機能検証、`all_landings_observed` は全投で着地高さまで実測できたかを表す。両者を混同しない。
-地図方式の `--require-observed-landing` は全投の実測着地を必須にする品質確認用。
+`--require-observed-landing` は全投の実測着地を必須にする品質確認用。
