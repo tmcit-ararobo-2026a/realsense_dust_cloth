@@ -98,6 +98,13 @@ ClothTrackerCudaNode::ClothTrackerCudaNode(const rclcpp::NodeOptions& options)
             cmd_vel_topic_, rclcpp::QoS(10),
             std::bind(&ClothTrackerCudaNode::cmd_vel_callback, this, std::placeholders::_1));
         RCLCPP_INFO(this->get_logger(), "Robot motion monitoring enabled on topic: %s", cmd_vel_topic_.c_str());
+
+        if (cmd_vel_topic_ != "/cmd_vel") {
+            sub_fallback_cmd_vel_ = this->create_subscription<geometry_msgs::msg::Twist>(
+                "/cmd_vel", rclcpp::QoS(10),
+                std::bind(&ClothTrackerCudaNode::cmd_vel_callback, this, std::placeholders::_1));
+            RCLCPP_INFO(this->get_logger(), "Robot motion monitoring fallback enabled on topic: /cmd_vel");
+        }
     }
 
     // Debug publishers (always available for RViz visualization & verification)

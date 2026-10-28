@@ -139,6 +139,7 @@ private:
     rclcpp::Time stop_detected_time_{0, 0, RCL_ROS_TIME};
 
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_cmd_vel_;
+    rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_fallback_cmd_vel_;
 
     void cmd_vel_callback(const geometry_msgs::msg::Twist::SharedPtr msg);
     void check_robot_motion_state(const rclcpp::Time& current_time);
