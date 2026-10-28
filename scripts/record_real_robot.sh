@@ -17,14 +17,12 @@ echo "======================================================================"
 
 ros2 bag record \
   -o "${OUTPUT_DIR}" \
+  /tf \
+  /tf_static \
+  /platform_constraint \
   /camera/camera/depth/image_rect_raw \
   /camera/camera/depth/camera_info \
   /camera/camera/color/image_raw/compressed \
-  /tf \
-  /tf_static \
-  /robot/operation/cmd_vel \
-  /cmd_vel \
-  /livox/lidar \
-  /livox/imu \
-  /robot/operation/navigation_status
+  /camera/camera/color/camera_info \
+  /robot/operation/cmd_vel
 

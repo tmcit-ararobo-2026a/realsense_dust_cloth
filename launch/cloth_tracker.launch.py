@@ -126,20 +126,14 @@ def generate_launch_description():
     # 4. Automatic Rosbag Recording (Optional: record:=true)
     record_process = ExecuteProcess(
         cmd=['ros2', 'bag', 'record',
-             '/tf', '/tf_static',
-             '/cloth/position',
-             '/cloth/trajectory_marker',
-             '/cloth/measured_path',
-             '/cloth/most_probable_path',
-             '/cloth/probability_markers',
-             '/cloth/predicted_landing_point',
-             '/cloth/debug/roi_markers',
-             '/cloth/debug/cluster_points',
-             '/cloth/debug/filtered_points',
+             '/tf',
+             '/tf_static',
+             '/platform_constraint',
              '/camera/camera/depth/image_rect_raw',
              '/camera/camera/depth/camera_info',
              '/camera/camera/color/image_raw/compressed',
-             '/camera/camera/color/camera_info'],
+             '/camera/camera/color/camera_info',
+             '/robot/operation/cmd_vel'],
         output='screen',
         condition=IfCondition(LaunchConfiguration('record'))
     )

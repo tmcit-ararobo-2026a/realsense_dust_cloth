@@ -45,8 +45,7 @@ public:
     ~ClothTrackerCudaNode() override;
 
 private:
-    void declare_parameters();
-    void declare_map_parameters();
+    void declare_and_load_parameters();
     void setup_map_background();
     bool prepare_map_frame(const rclcpp::Time& stamp);
     void publish_background_state(const std::string&, bool);
@@ -64,7 +63,6 @@ private:
     double map_pose_loss_reset_sec_{0.25}, map_last_pose_sec_{-1.0};
     int map_depth_queue_size_{8};
     bool map_processing_failed_{false};
-    void load_parameters();
     void publish_static_transforms();
 
     void camera_info_callback(const sensor_msgs::msg::CameraInfo::ConstSharedPtr msg);

@@ -81,9 +81,7 @@ sensor_msgs::msg::CameraInfo build_camera_info_msg(
 
 ClothTrackerCudaNode::ClothTrackerCudaNode(const rclcpp::NodeOptions& options)
     : Node("cloth_tracker_cuda_node", options) {
-    declare_parameters();
-    declare_map_parameters();
-    load_parameters();
+    declare_and_load_parameters();
     setup_map_background();
 
     tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
@@ -207,164 +205,90 @@ ClothTrackerCudaNode::~ClothTrackerCudaNode() {
 }
 
 // =============================================================================
-// Section 2: ROS 2 Parameter Declaration & Loading
+// =============================================================================
+// Section 2: ROS 2 Parameter Declaration & Loading (gn10-style unified setup)
 // =============================================================================
 
-void ClothTrackerCudaNode::declare_parameters() {
-    this->declare_parameter("tracking_mode", "depth");
+void ClothTrackerCudaNode::declare_and_load_parameters() {
+    // 1. Topic Names & Connection Mode
+    this->declare_parameter("tracking_mode", "map");
     this->declare_parameter("points_topic", "/camera/camera/depth/color/points");
-    this->declare_parameter("use_direct_realsense", false);
     this->declare_parameter("depth_topic", "/camera/camera/depth/image_rect_raw");
     this->declare_parameter("camera_info_topic", "/camera/camera/depth/camera_info");
     this->declare_parameter("color_topic", "/camera/camera/color/image_raw");
+    use_direct_realsense_ = this->declare_parameter("use_direct_realsense", false);
 
-    this->declare_parameter("camera_parent_frame", "base_link");
-    this->declare_parameter("camera_frame", "camera_link");
-    this->declare_parameter("publish_static_tf", true);
-    this->declare_parameter("camera_width", 848);
-    this->declare_parameter("camera_height", 480);
-    this->declare_parameter("camera_pitch_deg", 20.0);
-    this->declare_parameter("camera_roll_deg", 90.0);
-    this->declare_parameter("camera_x_offset_m", 0.15);
-    this->declare_parameter("camera_height_offset_m", 0.35);
+    // 2. Camera Frames & Physical Mount Offsets
+    camera_parent_frame_ = this->declare_parameter("camera_parent_frame", "base_link");
+    camera_frame_ = this->declare_parameter("camera_frame", "camera_link");
+    publish_static_tf_ = this->declare_parameter("publish_static_tf", true);
+    camera_intrin_.width = this->declare_parameter("camera_width", 848);
+    camera_intrin_.height = this->declare_parameter("camera_height", 480);
+    camera_pose_.pitch_deg = static_cast<float>(this->declare_parameter("camera_pitch_deg", 20.0));
+    camera_pose_.roll_deg = static_cast<float>(this->declare_parameter("camera_roll_deg", 90.0));
+    camera_pose_.x_offset_m = static_cast<float>(this->declare_parameter("camera_x_offset_m", 0.50));
+    camera_pose_.height_offset_m = static_cast<float>(this->declare_parameter("camera_height_offset_m", 1.00));
+    color_rotation_deg_ = this->declare_parameter("color_rotation_deg", 90);
+    depth_fps_ = this->declare_parameter("depth_fps", 60);
+    rs_laser_power_ = this->declare_parameter("rs_laser_power", -1.0);
+    rs_exposure_us_ = this->declare_parameter("rs_exposure_us", -1);
 
-    this->declare_parameter("min_depth_m", 0.25);
-    this->declare_parameter("max_depth_m", 4.5);
+    // 3. 3D Spatial ROI Filter Bounds
+    filter_cfg_.min_depth_m = static_cast<float>(this->declare_parameter("min_depth_m", 0.25));
+    filter_cfg_.max_depth_m = static_cast<float>(this->declare_parameter("max_depth_m", 6.00));
+    filter_cfg_.min_x_m = static_cast<float>(this->declare_parameter("min_x_m", 0.35));
+    filter_cfg_.max_x_m = static_cast<float>(this->declare_parameter("max_x_m", 6.00));
+    filter_cfg_.min_y_m = static_cast<float>(this->declare_parameter("min_y_m", -0.60));
+    filter_cfg_.max_y_m = static_cast<float>(this->declare_parameter("max_y_m", 0.60));
+    filter_cfg_.min_z_m = static_cast<float>(this->declare_parameter("min_z_m", 0.05));
+    filter_cfg_.max_z_m = static_cast<float>(this->declare_parameter("max_z_m", 2.40));
 
-    this->declare_parameter("min_x_m", 0.30);
-    this->declare_parameter("max_x_m", 5.50);
-    this->declare_parameter("min_y_m", -1.50);
-    this->declare_parameter("max_y_m", 1.50);
-    this->declare_parameter("min_z_m", 0.00);
-    this->declare_parameter("max_z_m", 3.50);
+    // 4. Voxel Downsampling & DBSCAN Clustering
+    filter_cfg_.voxel_size_m = static_cast<float>(this->declare_parameter("voxel_size_m", 0.02));
+    filter_cfg_.cluster_eps_m = static_cast<float>(this->declare_parameter("cluster_eps_m", 0.08));
+    filter_cfg_.min_cluster_points = this->declare_parameter("min_cluster_points", 45);
+    filter_cfg_.max_cluster_points = this->declare_parameter("max_cluster_points", 12000);
+    filter_cfg_.min_cloth_size_m = static_cast<float>(this->declare_parameter("min_cloth_size_m", 0.05));
+    filter_cfg_.max_cloth_size_m = static_cast<float>(this->declare_parameter("max_cloth_size_m", 0.80));
+    filter_cfg_.continuity_thresh_m = static_cast<float>(this->declare_parameter("continuity_thresh_m", 0.08));
+    filter_cfg_.continuity_min_neighbors = this->declare_parameter("continuity_min_neighbors", 3);
 
-    this->declare_parameter("voxel_size_m", 0.02);
-    this->declare_parameter("cluster_eps_m", 0.15);
-    this->declare_parameter("min_cluster_points", 10);
-    this->declare_parameter("max_cluster_points", 6000);
-    this->declare_parameter("min_cloth_size_m", 0.05);
-    this->declare_parameter("max_cloth_size_m", 0.85);
-    this->declare_parameter("continuity_thresh_m", 0.30);
-    this->declare_parameter("continuity_min_neighbors", 2);
+    // 5. Debug Point Clouds & Streaming Options
+    publish_debug_cloud_ = this->declare_parameter("publish_debug_cloud", false);
+    trajectory_history_sec_ = this->declare_parameter("trajectory_history_sec", 15.0);
+    enable_color_stream_ = this->declare_parameter("enable_color_stream", true);
+    color_fps_ = this->declare_parameter("color_fps", 30);
+    jpeg_quality_ = this->declare_parameter("jpeg_quality", 65);
 
-    this->declare_parameter("publish_debug_cloud", false);
-    this->declare_parameter("trajectory_history_sec", 15.0);
-    this->declare_parameter("enable_color_stream", true);
-    this->declare_parameter("color_fps", 30);
-    this->declare_parameter("jpeg_quality", 65);
-    this->declare_parameter("color_rotation_deg", 180);
-
-    // Ballistic Filter & Launch Gate parameters
-    this->declare_parameter("enable_ballistic_filter", true);
-    this->declare_parameter("observed_landing_only", false);
-    this->declare_parameter("launch_min_x", 0.30);
-    this->declare_parameter("launch_max_x", 1.80);
-    this->declare_parameter("launch_min_y", -1.00);
-    this->declare_parameter("launch_max_y", 1.00);
-    this->declare_parameter("launch_min_z", 0.50);
-    this->declare_parameter("launch_max_z", 2.00);
-    this->declare_parameter("gate_radius_m", 0.60);
-    this->declare_parameter("max_lost_frames", 15);
-    this->declare_parameter("min_launch_vx", 0.10);
-    this->declare_parameter("min_launch_move_m", 0.08);
-    this->declare_parameter("pending_reset_sec", 0.20);
-    this->declare_parameter("min_tracking_points", 8);
-    this->declare_parameter("depth_fps", 60);
-    this->declare_parameter("rs_laser_power", -1.0);
-    this->declare_parameter("rs_exposure_us", -1);
-    this->declare_parameter("landing_min_z", 0.05);
-    this->declare_parameter("drag_coeff", 0.40);
-    this->declare_parameter("vel_smoothing_beta", 0.30);
-    this->declare_parameter("min_flight_vx_m_s", -1.50);
-    this->declare_parameter("max_vx_m_s", 15.0);
-    this->declare_parameter("max_abs_vy_m_s", 2.50);
-    this->declare_parameter("min_vz_m_s", -10.0);
-    this->declare_parameter("max_vz_m_s", 8.0);
-    this->declare_parameter("max_flight_duration_sec", 2.50);
-    this->declare_parameter("min_stationary_move_m", 0.10);
-    this->declare_parameter("max_stationary_frames", 8);
-
-    // Robot Motion Monitoring & Stop-and-Shoot Fast Background Relearn
-    this->declare_parameter("enable_cmd_vel_watch", false);
-    this->declare_parameter("cmd_vel_topic", "/robot/operation/cmd_vel");
-    this->declare_parameter("landing_position_topic", "/cloth/landing_position");
-    this->declare_parameter("cmd_vel_deadband_linear", 0.02);
-    this->declare_parameter("cmd_vel_deadband_angular", 0.02);
-    this->declare_parameter("cmd_vel_timeout_sec", 0.25);
-    this->declare_parameter("stop_settle_sec", 0.10);
-}
-
-void ClothTrackerCudaNode::load_parameters() {
-    use_direct_realsense_ = this->get_parameter("use_direct_realsense").as_bool();
-    camera_parent_frame_ = this->get_parameter("camera_parent_frame").as_string();
-    camera_frame_ = this->get_parameter("camera_frame").as_string();
-    publish_static_tf_ = this->get_parameter("publish_static_tf").as_bool();
-
-    camera_intrin_.width = this->get_parameter("camera_width").as_int();
-    camera_intrin_.height = this->get_parameter("camera_height").as_int();
-
-    camera_pose_.pitch_deg = static_cast<float>(this->get_parameter("camera_pitch_deg").as_double());
-    camera_pose_.roll_deg = static_cast<float>(this->get_parameter("camera_roll_deg").as_double());
-    camera_pose_.x_offset_m = static_cast<float>(this->get_parameter("camera_x_offset_m").as_double());
-    camera_pose_.height_offset_m = static_cast<float>(this->get_parameter("camera_height_offset_m").as_double());
-    color_rotation_deg_ = this->get_parameter("color_rotation_deg").as_int();
-    depth_fps_ = this->get_parameter("depth_fps").as_int();
-    rs_laser_power_ = this->get_parameter("rs_laser_power").as_double();
-    rs_exposure_us_ = this->get_parameter("rs_exposure_us").as_int();
-
-    filter_cfg_.min_depth_m = static_cast<float>(this->get_parameter("min_depth_m").as_double());
-    filter_cfg_.max_depth_m = static_cast<float>(this->get_parameter("max_depth_m").as_double());
-
-    filter_cfg_.min_x_m = static_cast<float>(this->get_parameter("min_x_m").as_double());
-    filter_cfg_.max_x_m = static_cast<float>(this->get_parameter("max_x_m").as_double());
-    filter_cfg_.min_y_m = static_cast<float>(this->get_parameter("min_y_m").as_double());
-    filter_cfg_.max_y_m = static_cast<float>(this->get_parameter("max_y_m").as_double());
-    filter_cfg_.min_z_m = static_cast<float>(this->get_parameter("min_z_m").as_double());
-    filter_cfg_.max_z_m = static_cast<float>(this->get_parameter("max_z_m").as_double());
-
-    filter_cfg_.voxel_size_m = static_cast<float>(this->get_parameter("voxel_size_m").as_double());
-    filter_cfg_.cluster_eps_m = static_cast<float>(this->get_parameter("cluster_eps_m").as_double());
-    filter_cfg_.min_cluster_points = this->get_parameter("min_cluster_points").as_int();
-    filter_cfg_.max_cluster_points = this->get_parameter("max_cluster_points").as_int();
-    filter_cfg_.min_cloth_size_m = static_cast<float>(this->get_parameter("min_cloth_size_m").as_double());
-    filter_cfg_.max_cloth_size_m = static_cast<float>(this->get_parameter("max_cloth_size_m").as_double());
-    filter_cfg_.continuity_thresh_m = static_cast<float>(this->get_parameter("continuity_thresh_m").as_double());
-    filter_cfg_.continuity_min_neighbors = this->get_parameter("continuity_min_neighbors").as_int();
-
-    publish_debug_cloud_ = this->get_parameter("publish_debug_cloud").as_bool();
-    trajectory_history_sec_ = this->get_parameter("trajectory_history_sec").as_double();
-    enable_color_stream_ = this->get_parameter("enable_color_stream").as_bool();
-    color_fps_ = this->get_parameter("color_fps").as_int();
-    jpeg_quality_ = this->get_parameter("jpeg_quality").as_int();
-
-    enable_ballistic_filter_ = this->get_parameter("enable_ballistic_filter").as_bool();
-    ballistic_tracker_.observed_landing_only = get_parameter("observed_landing_only").as_bool();
-    ballistic_tracker_.launch_min_x = this->get_parameter("launch_min_x").as_double();
-    ballistic_tracker_.launch_max_x = this->get_parameter("launch_max_x").as_double();
-    ballistic_tracker_.launch_min_y = this->get_parameter("launch_min_y").as_double();
-    ballistic_tracker_.launch_max_y = this->get_parameter("launch_max_y").as_double();
-    ballistic_tracker_.launch_min_z = this->get_parameter("launch_min_z").as_double();
-    ballistic_tracker_.launch_max_z = this->get_parameter("launch_max_z").as_double();
-    ballistic_tracker_.gate_radius_m = this->get_parameter("gate_radius_m").as_double();
-    ballistic_tracker_.max_lost_frames = this->get_parameter("max_lost_frames").as_int();
-    ballistic_tracker_.min_launch_vx = this->get_parameter("min_launch_vx").as_double();
-    ballistic_tracker_.min_launch_move_m = this->get_parameter("min_launch_move_m").as_double();
-    ballistic_tracker_.launch_timeout_sec = this->get_parameter("pending_reset_sec").as_double();
-    ballistic_tracker_.min_track_points_limit = this->get_parameter("min_tracking_points").as_int();
+    // 6. Ballistic Tracking & Launch Gate Parameters
+    enable_ballistic_filter_ = this->declare_parameter("enable_ballistic_filter", true);
+    ballistic_tracker_.observed_landing_only = this->declare_parameter("observed_landing_only", true);
+    ballistic_tracker_.launch_min_x = this->declare_parameter("launch_min_x", 0.80);
+    ballistic_tracker_.launch_max_x = this->declare_parameter("launch_max_x", 1.35);
+    ballistic_tracker_.launch_min_y = this->declare_parameter("launch_min_y", -0.25);
+    ballistic_tracker_.launch_max_y = this->declare_parameter("launch_max_y", 0.18);
+    ballistic_tracker_.launch_min_z = this->declare_parameter("launch_min_z", 1.45);
+    ballistic_tracker_.launch_max_z = this->declare_parameter("launch_max_z", 2.10);
+    ballistic_tracker_.gate_radius_m = this->declare_parameter("gate_radius_m", 0.70);
+    ballistic_tracker_.max_lost_frames = this->declare_parameter("max_lost_frames", 8);
+    ballistic_tracker_.min_launch_vx = this->declare_parameter("min_launch_vx", 0.30);
+    ballistic_tracker_.min_launch_move_m = this->declare_parameter("min_launch_move_m", 0.05);
+    ballistic_tracker_.launch_timeout_sec = this->declare_parameter("pending_reset_sec", 0.25);
+    ballistic_tracker_.min_track_points_limit = this->declare_parameter("min_tracking_points", 12);
     ballistic_tracker_.min_cluster_points = filter_cfg_.min_cluster_points;
-    ballistic_tracker_.landing_min_z = this->get_parameter("landing_min_z").as_double();
-    ballistic_tracker_.drag_coeff = this->get_parameter("drag_coeff").as_double();
-    ballistic_tracker_.vel_smoothing_beta = this->get_parameter("vel_smoothing_beta").as_double();
-    ballistic_tracker_.min_flight_vx_m_s = this->get_parameter("min_flight_vx_m_s").as_double();
-    ballistic_tracker_.max_vx_m_s = this->get_parameter("max_vx_m_s").as_double();
-    ballistic_tracker_.max_abs_vy_m_s = this->get_parameter("max_abs_vy_m_s").as_double();
-    ballistic_tracker_.min_vz_m_s = this->get_parameter("min_vz_m_s").as_double();
-    ballistic_tracker_.max_vz_m_s = this->get_parameter("max_vz_m_s").as_double();
-    ballistic_tracker_.max_flight_duration_sec = this->get_parameter("max_flight_duration_sec").as_double();
-    ballistic_tracker_.min_stationary_move_m = this->get_parameter("min_stationary_move_m").as_double();
-    ballistic_tracker_.max_stationary_frames = this->get_parameter("max_stationary_frames").as_int();
+    ballistic_tracker_.landing_min_z = this->declare_parameter("landing_min_z", 0.15);
+    ballistic_tracker_.drag_coeff = this->declare_parameter("drag_coeff", 0.40);
+    ballistic_tracker_.vel_smoothing_beta = this->declare_parameter("vel_smoothing_beta", 0.50);
+    ballistic_tracker_.min_flight_vx_m_s = this->declare_parameter("min_flight_vx_m_s", -1.50);
+    ballistic_tracker_.max_vx_m_s = this->declare_parameter("max_vx_m_s", 15.0);
+    ballistic_tracker_.max_abs_vy_m_s = this->declare_parameter("max_abs_vy_m_s", 3.50);
+    ballistic_tracker_.min_vz_m_s = this->declare_parameter("min_vz_m_s", -10.0);
+    ballistic_tracker_.max_vz_m_s = this->declare_parameter("max_vz_m_s", 12.0);
+    ballistic_tracker_.max_flight_duration_sec = this->declare_parameter("max_flight_duration_sec", 2.50);
+    ballistic_tracker_.min_stationary_move_m = this->declare_parameter("min_stationary_move_m", 0.12);
+    ballistic_tracker_.max_stationary_frames = this->declare_parameter("max_stationary_frames", 5);
 
-    // Synchronize CUDA filter launch gate & tracking points with tracker parameters (No hardcoded values!)
+    // Synchronize CUDA filter launch gate & tracking points with tracker parameters
     filter_cfg_.min_tracking_points = ballistic_tracker_.min_track_points_limit;
     filter_cfg_.launch_min_x = static_cast<float>(ballistic_tracker_.launch_min_x);
     filter_cfg_.launch_max_x = static_cast<float>(ballistic_tracker_.launch_max_x);
@@ -374,14 +298,37 @@ void ClothTrackerCudaNode::load_parameters() {
     filter_cfg_.launch_max_z = static_cast<float>(ballistic_tracker_.launch_max_z);
     filter_cfg_.gate_radius_m = static_cast<float>(ballistic_tracker_.gate_radius_m);
 
-    // Load Robot Motion Monitoring & Relearning Parameters
-    enable_cmd_vel_watch_ = this->get_parameter("enable_cmd_vel_watch").as_bool();
-    cmd_vel_topic_ = this->get_parameter("cmd_vel_topic").as_string();
-    landing_position_topic_ = this->get_parameter("landing_position_topic").as_string();
-    cmd_vel_deadband_linear_ = this->get_parameter("cmd_vel_deadband_linear").as_double();
-    cmd_vel_deadband_angular_ = this->get_parameter("cmd_vel_deadband_angular").as_double();
-    cmd_vel_timeout_sec_ = this->get_parameter("cmd_vel_timeout_sec").as_double();
-    stop_settle_sec_ = this->get_parameter("stop_settle_sec").as_double();
+    // 7. Robot Motion Monitoring & Stop-and-Shoot
+    enable_cmd_vel_watch_ = this->declare_parameter("enable_cmd_vel_watch", true);
+    cmd_vel_topic_ = this->declare_parameter("cmd_vel_topic", "/robot/operation/cmd_vel");
+    landing_position_topic_ = this->declare_parameter("landing_position_topic", "/cloth/landing_position");
+    cmd_vel_deadband_linear_ = this->declare_parameter("cmd_vel_deadband_linear", 0.02);
+    cmd_vel_deadband_angular_ = this->declare_parameter("cmd_vel_deadband_angular", 0.02);
+    cmd_vel_timeout_sec_ = this->declare_parameter("cmd_vel_timeout_sec", 0.25);
+    stop_settle_sec_ = this->declare_parameter("stop_settle_sec", 0.10);
+
+    // 8. Prior-Map ESDF Background Parameters
+    this->declare_parameter("map_file_path", "");
+    this->declare_parameter("map_frame", "map");
+    this->declare_parameter("map_resolution_m", 0.05);
+    this->declare_parameter("map_max_distance_m", 0.50);
+    this->declare_parameter("map_min_x_m", -5.50);
+    this->declare_parameter("map_max_x_m", 5.50);
+    this->declare_parameter("map_min_y_m", -6.00);
+    this->declare_parameter("map_max_y_m", 6.00);
+    this->declare_parameter("map_min_z_m", -0.20);
+    this->declare_parameter("map_max_z_m", 4.00);
+    this->declare_parameter("map_max_memory_mb", 128);
+    this->declare_parameter("map_exclusion_distance_m", 0.08);
+    this->declare_parameter("map_tracking_keep_radius_m", 0.30);
+    this->declare_parameter("map_reject_unknown", true);
+    this->declare_parameter("map_use_floor", true);
+    this->declare_parameter("map_floor_z_m", 0.00);
+    this->declare_parameter("map_tf_wait_sec", 0.15);
+    this->declare_parameter("map_tf_poll_sec", 0.002);
+    this->declare_parameter("map_max_image_age_sec", 0.25);
+    this->declare_parameter("map_pose_loss_reset_sec", 0.25);
+    this->declare_parameter("map_depth_queue_size", 8);
 }
 
 // =============================================================================

@@ -97,6 +97,7 @@ install(DIRECTORY
   config
   rviz
   data
+  scripts
   DESTINATION share/${PROJECT_NAME}
 )
 
