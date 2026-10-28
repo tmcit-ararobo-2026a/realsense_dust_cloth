@@ -362,7 +362,7 @@ launchの `use_sim_time / use_direct_realsense / use_bg_subtraction` は未指�
 - `map_exclusion_distance_m` 内の静止構造物を除外する。地図外は `map_reject_unknown` で扱いを指定する。
 - 床平面の除去は `map_use_floor / map_floor_z_m`。実測で飛翔を確認した後は、予測位置から `map_tracking_keep_radius_m` 内を一律の地図除去から保護する。大きさ・速度・予測ゲートの検証は継続する。
 - 地図モードのプロファイルは `observed_landing_only: true`。低い点を実測した場合だけLANDED、未検出終了はLOST、空中静止はRESTING。従来プロファイルはfalseで既存の判定を維持する。
-- 地図モードでは従来の実験室の壁を避けるための前方5m制限を6mへ広げている。実測更新のない画像で古い雑巾TFを新しい時刻に更新しない。カラー・デバッグ点群は比較用プロファイルでOFF。
+- 地図モードでは従来の実験室の壁を避けるための前方5m制限を6mへ広げている。実測更新のない画像で古い雑巾TFを新しい時刻に更新しない。Unity比較用プロファイルはRVizのカメラ表示のためカラーON。実機の地図プロファイルはカラーOFF。デバッグ点群は比較用プロファイルでOFF。
 - 設定は起動時に読み込む。方式や地図を切り替えるときはYAMLを選び直し、追跡ノードを再起動する。
 
 ### 状態確認

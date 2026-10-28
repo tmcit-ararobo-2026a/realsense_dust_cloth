@@ -66,7 +66,7 @@
     continuity_thresh_m: 0.08
     continuity_min_neighbors: 3
     trajectory_history_sec: 15.0
-    enable_color_stream: false
+    enable_color_stream: true
     color_fps: 30
     jpeg_quality: 65
     color_rotation_deg: 90
