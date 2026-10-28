@@ -33,6 +33,7 @@ bool BallisticTracker::get_prediction(double stamp_sec, float& px, float& py, fl
     px = static_cast<float>(x + vx * dt * drag_factor);
     py = static_cast<float>(y + vy * dt * drag_factor);
     pz = static_cast<float>(z + vz * dt - HALF_GRAVITY_FACTOR * gravity_m_s2 * dt * dt);
+    if (observed_landing_only) pz = std::max(pz,static_cast<float>(landing_min_z));
     return true;
 }
 
@@ -42,7 +43,7 @@ bool BallisticTracker::update(
     // =========================================================================
     // Phase A: IDLE / LANDED -> Launch Candidate Acquisition
     // =========================================================================
-    if (state == TrackerState::IDLE || state == TrackerState::LANDED) {
+    if (state != TrackerState::TRACKING) {
         if (!raw.valid) {
             return false;
         }
@@ -83,7 +84,7 @@ bool BallisticTracker::update(
     // =========================================================================
     if (max_flight_duration_sec > 0.0 && (stamp_sec - launch_stamp) > max_flight_duration_sec) {
         if (launch_displacement_confirmed && x > launch_max_x) {
-            state = TrackerState::LANDED;
+            state = observed_landing_only ? TrackerState::LOST : TrackerState::LANDED;
             lost_count = 0;
             stationary_count = 0;
         } else {
@@ -172,7 +173,7 @@ bool BallisticTracker::update(
                     stationary_count++;
                     if (max_stationary_frames > 0 && stationary_count >= max_stationary_frames) {
                         if (x > launch_max_x) {
-                            state = TrackerState::LANDED;
+                            state = observed_landing_only ? TrackerState::RESTING : TrackerState::LANDED;
                             lost_count = 0;
                             stationary_count = 0;
                         } else {
@@ -250,8 +251,8 @@ bool BallisticTracker::update(
             return false;
         }
         lost_count++;
-        if (lost_count > max_lost_frames || pred_z <= landing_min_z) {
-            state = TrackerState::LANDED;
+        if (lost_count > max_lost_frames || (!observed_landing_only && pred_z <= landing_min_z)) {
+            state = observed_landing_only ? TrackerState::LOST : TrackerState::LANDED;
             lost_count = 0;
             stationary_count = 0;
             return false;

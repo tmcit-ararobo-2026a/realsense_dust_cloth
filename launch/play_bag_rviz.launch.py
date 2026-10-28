@@ -39,10 +39,7 @@ def generate_launch_description():
         name='cloth_tracker_cuda_node',
         output='screen',
         parameters=[
-            LaunchConfiguration('params_file'),
-            {
-                'use_sim_time': True,
-            }
+            LaunchConfiguration('params_file')
         ]
     )
 

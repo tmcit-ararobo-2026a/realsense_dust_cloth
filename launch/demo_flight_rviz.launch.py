@@ -6,7 +6,7 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     pkg_share = get_package_share_directory('realsense_dust_cloth')
-    config_file = os.path.join(pkg_share, 'config', 'tracker_params.yaml')
+    config_file = os.path.join(pkg_share, 'config', 'test_bag_params.yaml')
     rviz_config = os.path.join(pkg_share, 'rviz', 'cloth_tracker.rviz')
 
     # 1. Simulated Cloth Flight Depth Streamer
@@ -25,11 +25,7 @@ def generate_launch_description():
         name='cloth_tracker_cuda_node',
         output='screen',
         parameters=[
-            config_file,
-            {
-                'publish_debug_cloud': True,
-                'use_direct_realsense': False
-            }
+            config_file
         ]
     )
 

@@ -1,5 +1,8 @@
 /**:
   ros__parameters:
+    observed_landing_only: false
+    background_mode: "depth"                     # depth:停止後背景学習 / map:事前地図差分
+    use_sim_time: true
     # =========================================================================
     # 【test_bag (実機テストバッグ再生) 専用設定】
     # 記録データ: 小型台車環境 (2026-09-26 記録)

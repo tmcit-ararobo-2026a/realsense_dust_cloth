@@ -70,6 +70,7 @@ namespace realsense_dust_cloth
             FilterConfig filter,
             float3 pred_pos,
             bool has_prediction,
+            MapFilterView map,
             float3 *__restrict__ valid_points,
             int *__restrict__ valid_count,
             int max_valid_points)
@@ -148,6 +149,8 @@ namespace realsense_dust_cloth
             float y_rob = y_roll;
             float z_rob = pose.height_offset_m + (z_cam * sin_p + z_roll * cos_p);
 
+
+            if (!retain_map_point(map, make_float3(x_rob,y_rob,z_rob), pred_pos)) return;
 
             // PassThrough in base_link
             if (x_rob < filter.min_x_m || x_rob > filter.max_x_m ||
@@ -598,7 +601,8 @@ namespace realsense_dust_cloth
         float pred_x,
         float pred_y,
         float pred_z,
-        bool has_prediction)
+        bool has_prediction,
+        const MapFilterView& map)
     {
         ClothTrackingResult empty_res;
         if (!ctx.initialized || host_depth_ptr == nullptr)
@@ -619,12 +623,13 @@ namespace realsense_dust_cloth
         kernel_backproject_and_passthrough<<<grid2d, block2d, 0, ctx.stream>>>(
             ctx.d_depth,
             ctx.d_bg_depth,
-            filter.use_bg_subtraction && ctx.bg_ready,
+            !map.enabled && filter.use_bg_subtraction && ctx.bg_ready,
             intrin,
             pose,
             filter,
             make_float3(pred_x, pred_y, pred_z),
             has_prediction,
+            map,
             ctx.d_valid_points,
             ctx.d_valid_count,
             ctx.max_pixels);

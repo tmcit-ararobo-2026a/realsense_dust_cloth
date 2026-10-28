@@ -21,6 +21,10 @@
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <tf2_ros/transform_broadcaster.h>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
+#include <std_msgs/msg/string.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <tf2_ros/static_transform_broadcaster.h>
 #include <tf2/LinearMath/Quaternion.h>
 
@@ -42,6 +46,24 @@ public:
 
 private:
     void declare_parameters();
+    void declare_map_parameters();
+    void setup_map_background();
+    bool prepare_map_frame(const rclcpp::Time& stamp);
+    void publish_background_state(const std::string&, bool);
+    std::recursive_mutex processing_mutex_;
+    std::string background_mode_{"depth"}, map_frame_;
+    MapBackground map_background_;
+    MapFilterView map_filter_;
+    std::shared_ptr<tf2_ros::Buffer> map_tf_buffer_;
+    std::shared_ptr<tf2_ros::TransformListener> map_tf_listener_;
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_background_status_;
+    rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr pub_ready_;
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_tracking_state_;
+    double map_tf_wait_sec_{0.15}, map_max_image_age_sec_{0.25};
+    double map_tf_poll_sec_{0.002};
+    double map_pose_loss_reset_sec_{0.25}, map_last_pose_sec_{-1.0};
+    int map_depth_queue_size_{8};
+    bool map_processing_failed_{false};
     void load_parameters();
     void publish_static_transforms();
 

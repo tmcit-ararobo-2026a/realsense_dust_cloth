@@ -12,7 +12,9 @@ namespace realsense_dust_cloth {
 enum class TrackerState {
     IDLE,       ///< Waiting for launch from configured launch zone
     TRACKING,   ///< Actively tracking flying cloth along ballistic trajectory
-    LANDED      ///< Cloth touched floor or came to complete rest
+    LANDED,     ///< Landing (strict mode: observed below landing_min_z)
+    LOST,       ///< Observations ended; landing is unknown
+    RESTING     ///< Observed stationary above the landing plane
 };
 
 /**
@@ -27,6 +29,7 @@ enum class TrackerState {
 class BallisticTracker {
 public:
     TrackerState state{TrackerState::IDLE};
+    bool observed_landing_only{false};
     double x{0.0}, y{0.0}, z{0.0};
     double vx{0.0}, vy{0.0}, vz{0.0};
     double last_stamp{0.0};

@@ -1,4 +1,5 @@
 import os
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction
@@ -20,9 +21,15 @@ def _create_tracker_node(context):
     use_direct_rs_str = LaunchConfiguration('use_direct_realsense').perform(context)
     use_bg_sub_str = LaunchConfiguration('use_bg_subtraction').perform(context)
 
-    overrides = {
-        'use_sim_time': use_sim_time_str.lower() == 'true',
-    }
+    with open(params_file, encoding='utf-8') as stream:
+        config = yaml.safe_load(stream) or {}
+    values = dict(config.get('/**', {}).get('ros__parameters', {}))
+    values.update(config.get('cloth_tracker_cuda_node', {}).get('ros__parameters', {}))
+    effective_sim_time = values.get('use_sim_time', False) if use_sim_time_str == '' else use_sim_time_str.lower() == 'true'
+    context.launch_configurations['resolved_use_sim_time'] = str(effective_sim_time).lower()
+    overrides = {}
+    if use_sim_time_str != '':
+        overrides['use_sim_time'] = use_sim_time_str.lower() == 'true'
     if use_direct_rs_str != '':
         overrides['use_direct_realsense'] = use_direct_rs_str.lower() == 'true'
     if use_bg_sub_str != '':
@@ -62,7 +69,7 @@ def generate_launch_description():
 
     declare_use_sim_time = DeclareLaunchArgument(
         'use_sim_time',
-        default_value='false',
+        default_value='',
         description='Use simulation clock (Isaac Sim / rosbag)'
     )
 
@@ -104,7 +111,7 @@ def generate_launch_description():
         parameters=[
             {
                 'use_sim_time': ParameterValue(
-                    LaunchConfiguration('use_sim_time'), value_type=bool),
+                    LaunchConfiguration('resolved_use_sim_time'), value_type=bool),
             }
         ]
     )
@@ -120,7 +127,7 @@ def generate_launch_description():
         parameters=[
             {
                 'use_sim_time': ParameterValue(
-                    LaunchConfiguration('use_sim_time'), value_type=bool),
+                    LaunchConfiguration('resolved_use_sim_time'), value_type=bool),
             }
         ]
     )

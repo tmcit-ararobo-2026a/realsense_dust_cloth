@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <vector>
 #include <cuda_runtime.h>
+#include "realsense_dust_cloth/map_background.hpp"
 
 namespace realsense_dust_cloth
 {
@@ -133,6 +134,7 @@ namespace realsense_dust_cloth
         float pred_x = 0.0f,
         float pred_y = 0.0f,
         float pred_z = 0.0f,
-        bool has_prediction = false);
+        bool has_prediction = false,
+        const MapFilterView& map = MapFilterView{});
 
 } // namespace realsense_dust_cloth

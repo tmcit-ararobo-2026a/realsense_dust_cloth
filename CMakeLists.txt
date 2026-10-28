@@ -16,6 +16,8 @@ find_package(CUDAToolkit REQUIRED)
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(ament_index_cpp REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
@@ -38,6 +40,8 @@ endif()
 add_executable(cloth_tracker_cuda_node
   src/cloth_tracker_cuda_node.cpp
   src/ballistic_tracker.cpp
+  src/map_background.cpp
+  src/map_tracking_control.cpp
   src/cuda_kernels.cu
 )
 
@@ -52,6 +56,8 @@ target_link_libraries(cloth_tracker_cuda_node CUDA::cudart ${OpenCV_LIBRARIES})
 
 ament_target_dependencies(cloth_tracker_cuda_node
   rclcpp
+  ament_index_cpp
+  std_msgs
   sensor_msgs
   geometry_msgs
   visualization_msgs
@@ -93,5 +99,20 @@ install(DIRECTORY
   data
   DESTINATION share/${PROJECT_NAME}
 )
+
+if(BUILD_TESTING)
+  enable_testing()
+  add_executable(map_background_test test/test_map_background.cu src/map_background.cpp)
+  target_include_directories(map_background_test PRIVATE include ${OpenCV_INCLUDE_DIRS})
+  target_link_libraries(map_background_test CUDA::cudart ${OpenCV_LIBRARIES})
+  target_compile_options(map_background_test PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-UNDEBUG>)
+  add_test(NAME map_background COMMAND map_background_test)
+  set_tests_properties(map_background PROPERTIES SKIP_RETURN_CODE 77)
+  add_executable(observed_landing_test test/test_observed_landing.cpp src/ballistic_tracker.cpp)
+  target_include_directories(observed_landing_test PRIVATE include ${CUDAToolkit_INCLUDE_DIRS})
+  target_link_libraries(observed_landing_test CUDA::cudart)
+  target_compile_options(observed_landing_test PRIVATE -UNDEBUG)
+  add_test(NAME observed_landing COMMAND observed_landing_test)
+endif()
 
 ament_package()

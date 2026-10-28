@@ -323,3 +323,64 @@ python3 ~/ros2_ws/src/realsense_dust_cloth/realsense_dust_cloth/trajectory_proba
 * `rviz:=true`: 手元 PC 等で RViz2 GUI を同時に起動
 * `record:=true`: 主要トピック（TF, 雑巾位置, 軌跡, 圧縮カラー）を自動で rosbag 録画
 * `params_file:=/path/to/custom.yaml`: 別のカスタム YAML ファイルを指定して起動
+
+
+## 追加：地図差分と停止後背景学習の切り替え
+
+従来方式は `background_mode: depth` のまま利用できる。地図・自己位置は不要。
+`background_mode: map` は事前マップと撮影時刻の `map -> base_link` TF を使い、背景画像を学習せず静止構造物を除く。
+どちらも射出カウンタは不要。走行中は認識を休止し、停止後の揺れ待ちはYAMLで設定する。
+
+| 設定ファイル | 用途 |
+|---|---|
+| `tracker_params.yaml` | 従来の実機・停止後背景学習 |
+| `test_bag_params.yaml` | 従来の固定カメラbag。地図・自己位置不要 |
+| `unity_depth_params.yaml` | Unityで従来方式を比較 |
+| `map_tracker_params.yaml` | 実機の事前マップ差分 |
+| `unity_map_params.yaml` | Unityの事前マップ差分 |
+
+Unity側を再生し、既存の自己位置推定がTFを出している状態で起動する。追跡ノードを二重起動しない。
+
+```bash
+source ~/ros2_ws/install/setup.bash
+# 事前マップ差分
+ros2 launch realsense_dust_cloth cloth_tracker.launch.py params_file:=unity_map_params.yaml enable_analyzer:=false rviz:=true
+# 地図なしの従来方式（上の追跡ノードを終了してから）
+ros2 launch realsense_dust_cloth cloth_tracker.launch.py params_file:=unity_depth_params.yaml enable_analyzer:=false rviz:=true
+```
+
+実機の地図方式は `params_file:=map_tracker_params.yaml`。通常の引数なし起動は従来方式。
+launchの `use_sim_time / use_direct_realsense / use_bg_subtraction` は未指定ならYAMLを尊重する。明示指定したときだけ上書きする。
+
+### 地図方式の設定と条件
+
+- `map_file_path` は自己位置推定と同じ地図を指定する。gn10のJSON（BOX / CYLINDER）と `.esdf` バイナリに対応。`package://パッケージ名/相対パス` が使える。VISUAL_BOXはgn10と同様に距離場に含めない。
+- PCDを使う場合は、gn10の `pcd_to_esdf_converter` で事前に `.esdf` へ変換する。追跡ノードはPCLや自己位置探索を実行しない。
+- `map_frame` と `camera_parent_frame` のTFを画像のstampで取得する。最新の位置を代用しない。待ち時間上限は `map_tf_wait_sec`、ポーリング周期は `map_tf_poll_sec`。Unityの時計が停止しても壁時計で待ちを打ち切る。
+- `map_max_image_age_sec` より古い画像、対応するTFがない画像は処理しない。短いTF遅延では飛翔状態を保持し、`map_pose_loss_reset_sec` を超える途絶ではリセットする。
+- JSONから距離場を作る範囲・解像度・最大メモリは `map_min/max_* / map_resolution_m / map_max_memory_mb`。`.esdf` 読み込み時はファイル内の範囲と解像度を使用する。
+- `map_exclusion_distance_m` 内の静止構造物を除外する。地図外は `map_reject_unknown` で扱いを指定する。
+- 床平面の除去は `map_use_floor / map_floor_z_m`。実測で飛翔を確認した後は、予測位置から `map_tracking_keep_radius_m` 内を一律の地図除去から保護する。大きさ・速度・予測ゲートの検証は継続する。
+- 地図モードのプロファイルは `observed_landing_only: true`。低い点を実測した場合だけLANDED、未検出終了はLOST、空中静止はRESTING。従来プロファイルはfalseで既存の判定を維持する。
+- 地図モードでは従来の実験室の壁を避けるための前方5m制限を6mへ広げている。実測更新のない画像で古い雑巾TFを新しい時刻に更新しない。カラー・デバッグ点群は比較用プロファイルでOFF。
+- 設定は起動時に読み込む。方式や地図を切り替えるときはYAMLを選び直し、追跡ノードを再起動する。
+
+### 状態確認
+
+```bash
+ros2 topic echo /cloth/ready
+ros2 topic echo /cloth/background_status
+ros2 topic echo /cloth/tracking_state
+```
+
+`MAP_READY` は時刻付き自己位置が取得できている状態。`MAP_WAITING_FOR_POSE` は自己位置待ち、`MAP_IMAGE_TIME_INVALID` は画像とROS時計の不整合、`MAP_PROCESSING_ERROR` はCUDA異常。`/cloth/ready` は背景準備済み・追跡中ではないことを通知するが、射出を強制的に止める機能ではない。
+
+`cloth_test_11_camera_only` には対応地図・自己位置がないため、通常は従来モードで検証する。大会の地図に架空の自己位置を付けて地図方式の成功とは扱わない。
+
+### 検証
+
+`-DBUILD_TESTING=ON` でGPUの地図照合とCPUの着地判定テストを追加する。
+`test/test_map_pose_guard.py` は独立したROS_DOMAIN_IDで、TF欠損、停止した時計、古い画像、自己位置復帰を検証する。
+`test/verify_map_unity.py` はUnityと実際のgn10自己位置推定を起動した上で連投・走行停止後射出を検証する。
+結果の `passed` は構成の機能検証、`all_landings_observed` は全投で着地高さまで実測できたかを表す。両者を混同しない。
+地図方式の `--require-observed-landing` は全投の実測着地を必須にする品質確認用。
