@@ -16,7 +16,6 @@
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 
 #include "realsense_dust_cloth/cuda_kernels.cuh"
-#include "realsense_dust_cloth/parabola_fit.hpp"
 
 namespace realsense_dust_cloth {
 

@@ -2,95 +2,128 @@
 # Uses test.json from gn10_navigation describing the clubroom simplified field.
 /**:
   ros__parameters:
-    observed_landing_only: true
-    use_sim_time: false
+    # =========================================================================
+    # 1. ROS・実行モード
+    # =========================================================================
+    observed_landing_only: true                    # 実測着地位置のみを採用
+    use_sim_time: false                            # シミュレーション時刻を使用するか（実機はfalse）
+    use_direct_realsense: true                     # librealsense2 C++ API直結ストリーミング
+
+    # =========================================================================
+    # 2. RealSense・カメラ設定
+    # =========================================================================
     depth_topic: /camera/camera/depth/image_rect_raw
     camera_info_topic: /camera/camera/depth/camera_info
     color_topic: /camera/camera/color/image_raw
-    use_direct_realsense: true
-    publish_debug_cloud: false
-    publish_static_tf: true
-    camera_parent_frame: base_link
-    camera_frame: camera_link
-    camera_x_offset_m: 0.5
-    camera_height_offset_m: 1.0
-    camera_pitch_deg: 20.0
-    camera_roll_deg: 90.0
-    camera_width: 640
-    camera_height: 480
-    min_x_m: 0.6
-    max_x_m: 3.5
-    min_y_m: -0.6
-    max_y_m: 0.6
-    min_z_m: 0.05
-    max_z_m: 2.2
-    min_depth_m: 0.25
-    max_depth_m: 4.0
-    enable_ballistic_filter: true
-    launch_min_x: 0.8
-    launch_max_x: 1.35
-    launch_min_y: -0.25
-    launch_max_y: 0.18
-    launch_min_z: 1.45
-    launch_max_z: 2.1
-    min_launch_vx: 0.3
-    min_launch_move_m: 0.05
-    pending_reset_sec: 0.25
-    gate_radius_m: 0.7
-    max_lost_frames: 8
-    min_tracking_points: 12
-    landing_min_z: 0.15
-    drag_coeff: 0.4
-    vel_smoothing_beta: 0.5
-    min_flight_vx_m_s: -1.5
-    max_vx_m_s: 15.0
-    max_abs_vy_m_s: 3.5
-    min_vz_m_s: -10.0
-    max_vz_m_s: 12.0
-    max_flight_duration_sec: 2.5
-    min_stationary_move_m: 0.12
-    max_stationary_frames: 5
-    voxel_size_m: 0.02
-    cluster_eps_m: 0.1
-    min_cluster_points: 45
-    max_cluster_points: 12000
-    min_cloth_size_m: 0.05
-    max_cloth_size_m: 0.8
-    continuity_thresh_m: 0.08
-    continuity_min_neighbors: 3
-    trajectory_history_sec: 15.0
-    enable_color_stream: true
-    color_fps: 30
-    jpeg_quality: 65
-    color_rotation_deg: 90
-    depth_fps: 60
-    rs_laser_power: -1.0
-    rs_exposure_us: -1
-    enable_cmd_vel_watch: true
-    cmd_vel_topic: /robot/operation/cmd_vel
-    cmd_vel_deadband_linear: 0.02
-    cmd_vel_deadband_angular: 0.02
-    cmd_vel_timeout_sec: 0.25
-    stop_settle_sec: 0.1
-    landing_position_topic: /cloth/landing_position
-    map_file_path: package://gn10_navigation/config/test.json
-    map_frame: map
-    map_resolution_m: 0.05
-    map_max_distance_m: 0.5
-    map_min_x_m: -1.0
-    map_max_x_m: 3.5
-    map_min_y_m: -2.0
-    map_max_y_m: 1.0
-    map_min_z_m: -0.2
-    map_max_z_m: 2.0
-    map_max_memory_mb: 32
-    map_exclusion_distance_m: 0.08
-    map_tracking_keep_radius_m: 0.3
-    map_reject_unknown: true
-    map_use_floor: true
-    map_floor_z_m: 0.0
-    map_tf_wait_sec: 0.15
-    map_tf_poll_sec: 0.002
-    map_max_image_age_sec: 0.25
-    map_pose_loss_reset_sec: 0.25
-    map_depth_queue_size: 8
+    camera_width: 640                              # 解像度 幅 (px)
+    camera_height: 480                             # 解像度 高さ (px)
+    depth_fps: 60                                  # 深度フレームレート
+    rs_laser_power: -1.0                           # レーザー出力 (-1.0: 自動最大)
+    rs_exposure_us: -1                             # 露出時間 (-1: 自動露出)
+    enable_color_stream: true                      # カラー映像配信
+    color_fps: 30                                  # カラーフレームレート
+    jpeg_quality: 65                               # JPEG圧縮品質 (1-100)
+    color_rotation_deg: 90                         # 縦置きカメラ映像の回転角 (度)
+
+    # =========================================================================
+    # 3. カメラ取り付け位置・TF
+    # =========================================================================
+    publish_static_tf: true                        # 静的TF (base_link -> camera_link) を発行するか
+    camera_parent_frame: base_link                 # ロボット基準座標系
+    camera_frame: camera_link                      # カメラ座標系
+    camera_x_offset_m: 0.5                         # 前方オフセット (m)
+    camera_height_offset_m: 1.0                    # 高さオフセット (m)
+    camera_pitch_deg: 20.0                         # 仰角 (度, 上向き20度)
+    camera_roll_deg: 90.0                          # 縦置きロール角 (度, 時計回り90度)
+
+    # =========================================================================
+    # 4. 認識対象範囲（ROI）
+    # =========================================================================
+    min_x_m: 0.6                                   # 前方 最小 (m)
+    max_x_m: 3.5                                   # 前方 最大 (m, 部室サイズ)
+    min_y_m: -0.6                                  # 左右幅 左側 (m)
+    max_y_m: 0.6                                   # 左右幅 右側 (m)
+    min_z_m: 0.05                                  # 高さ 最小 (m, 床面上)
+    max_z_m: 2.2                                   # 高さ 最大 (m, 部室天井高)
+    min_depth_m: 0.25                              # カメラ最短深度 (m)
+    max_depth_m: 4.0                               # カメラ最長深度 (m)
+
+    # =========================================================================
+    # 5. 雑巾の射出開始範囲
+    # =========================================================================
+    launch_min_x: 0.8                              # 射出検知 X 最小 (m)
+    launch_max_x: 1.35                             # 射出検知 X 最大 (m)
+    launch_min_y: -0.25                            # 射出検知 Y 最小 (m)
+    launch_max_y: 0.18                             # 射出検知 Y 最大 (m)
+    launch_min_z: 1.45                             # 射出検知 Z 最小 (m)
+    launch_max_z: 2.1                              # 射出検知 Z 最大 (m)
+    min_launch_vx: 0.3                             # 射出確定 最小前進速度 (m/s)
+    min_launch_move_m: 0.05                        # 射出確定 最小前進移動距離 (m)
+    pending_reset_sec: 0.25                        # 射出ゲート基準点リセット時間 (s)
+
+    # =========================================================================
+    # 6. 点群処理・クラスタリング
+    # =========================================================================
+    voxel_size_m: 0.02                             # ボクセル間引きサイズ (m, 2cm)
+    cluster_eps_m: 0.1                             # DBSCANクラスタ探索半径 (m)
+    min_cluster_points: 45                         # 雑巾最小点群数
+    max_cluster_points: 12000                      # 雑巾最大点群数
+    min_cloth_size_m: 0.05                         # 雑巾最小3Dサイズ (m)
+    max_cloth_size_m: 0.8                          # 雑巾最大3Dサイズ (m)
+    continuity_thresh_m: 0.08                      # 深度連続性閾値 (m)
+    continuity_min_neighbors: 3                    # 深度連続性 必要近傍ピクセル数
+
+    # =========================================================================
+    # 7. 弾道追跡・着地判定
+    # =========================================================================
+    enable_ballistic_filter: true                  # 弾道フィルタ有効化
+    gate_radius_m: 0.7                             # 追跡ゲート半径 (m)
+    max_lost_frames: 8                             # 見失い許容フレーム数
+    min_tracking_points: 12                        # 追跡維持 最小点群数
+    landing_min_z: 0.15                            # 着地確定判定高さ (m)
+    drag_coeff: 0.4                                # 空気抵抗係数
+    vel_smoothing_beta: 0.5                        # 速度平滑化ブレンド率
+    min_flight_vx_m_s: -1.5                        # 飛翔中 最小前進速度下限 (m/s)
+    max_vx_m_s: 15.0                               # 飛翔中 最大前進速度上限 (m/s)
+    max_abs_vy_m_s: 3.5                            # 飛翔中 最大横速度上限 (m/s)
+    min_vz_m_s: -10.0                              # 飛翔中 最小落下速度下限 (m/s)
+    max_vz_m_s: 12.0                               # 飛翔中 最大上昇速度上限 (m/s)
+    max_flight_duration_sec: 2.5                   # 最大飛行時間タイムアウト (s)
+    min_stationary_move_m: 0.12                    # 静止判定 基準点移動半径 (m)
+    max_stationary_frames: 5                       # 静止確定許容フレーム数
+    trajectory_history_sec: 15.0                   # RViz軌跡保持時間 (s)
+
+    # =========================================================================
+    # 8. 3Dマップ・背景除外
+    # =========================================================================
+    map_file_path: package://gn10_navigation/config/test.json # 部室検証用簡易マップ
+    map_resolution_m: 0.05                         # マップ解像度 (m)
+    map_max_distance_m: 0.5                        # ESDF最大距離 (m)
+    map_min_x_m: -1.0                              # マップ範囲 X 最小 (m)
+    map_max_x_m: 3.5                               # マップ範囲 X 最大 (m)
+    map_min_y_m: -2.0                              # マップ範囲 Y 最小 (m)
+    map_max_y_m: 1.0                               # マップ範囲 Y 最大 (m)
+    map_min_z_m: -0.2                              # マップ範囲 Z 最小 (m)
+    map_max_z_m: 2.0                               # マップ範囲 Z 最大 (m)
+    map_max_memory_mb: 32                          # マップGPU最大メモリ (MB)
+    map_exclusion_distance_m: 0.08                 # 構造物表面からの除外距離 (m)
+    map_tracking_keep_radius_m: 0.3                # 追跡中雑巾の保護半径 (m)
+    map_reject_unknown: true                       # 未知領域（マップ外）を除外するか
+    map_use_floor: true                            # 床面除外を有効化するか
+    map_floor_z_m: 0.0                             # 床面 Z 座標 (m)
+
+    # =========================================================================
+    # 9. 自己位置TF・時刻同期
+    # =========================================================================
+    map_frame: map                                 # 地図座標系フレーム名
+    map_tf_wait_sec: 0.15                          # TFタイムスタンプ同期 最大待機時間 (s)
+    map_tf_poll_sec: 0.002                         # TFポーリング周期 (s)
+    map_max_image_age_sec: 0.25                    # 画像鮮度タイムアウト (s)
+    map_pose_loss_reset_sec: 0.25                  # 自己位置TF途絶時の追跡リセット時間 (s)
+    map_depth_queue_size: 8                        # 深度キューサイズ
+
+    # =========================================================================
+    # 10. デバッグ・出力トピック
+    # =========================================================================
+    publish_debug_cloud: false                     # デバッグ点群パブリッシュ
+    landing_position_topic: /cloth/landing_position # 着地位置パブリッシュトピック

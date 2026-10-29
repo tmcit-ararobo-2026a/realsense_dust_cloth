@@ -9,6 +9,17 @@ namespace realsense_dust_cloth
 
     namespace
     {
+        // =====================================================================
+        // Algorithmic Constants & Tuning Weights (Explicit Named Constants)
+        // =====================================================================
+        constexpr int CONTINUITY_PIXEL_STEP = 2;              // 深度画像の近傍画素距離 (px)
+        constexpr int VOXEL_HASH_MAX_PROBES = 32;             // ボクセルハッシュテーブルの線形探索回数上限
+        constexpr int CUDA_BLOCK_SIZE_1D = 256;               // 1次元CUDAカーネルの標準スレッドブロックサイズ
+        constexpr float PRED_BASE_SCORE = 3000.0f;            // 弾道追跡中の基本優先スコア
+        constexpr float PRED_DIST_PENALTY = 1000.0f;          // 予測位置からの距離ペナルティ重み
+        constexpr float LAUNCH_BASE_SCORE = 1000.0f;          // 射出候補クラスタの基本スコア
+        constexpr float LAUNCH_FORWARD_WEIGHT = 50.0f;        // 射出候補の前方優先重み (手元より前方の布を優先)
+        constexpr float CLUSTER_SIZE_WEIGHT = 0.1f;           // クラスタサイズ (点数) のタイブレーカー重み
 
         __device__ __forceinline__ float atomicMinFloat(float *addr, float value)
         {
@@ -91,12 +102,13 @@ namespace realsense_dust_cloth
             // 2D Depth Continuity Check (Parameterizable via FilterConfig / YAML)
             if (filter.continuity_min_neighbors > 0)
             {
-                if (u < 2 || u >= intrin.width - 2 || v < 2 || v >= intrin.height - 2)
+                if (u < CONTINUITY_PIXEL_STEP || u >= intrin.width - CONTINUITY_PIXEL_STEP ||
+                    v < CONTINUITY_PIXEL_STEP || v >= intrin.height - CONTINUITY_PIXEL_STEP)
                     return;
-                float z_up = depth[(v - 2) * intrin.width + u] * intrin.depth_scale;
-                float z_dn = depth[(v + 2) * intrin.width + u] * intrin.depth_scale;
-                float z_lf = depth[v * intrin.width + (u - 2)] * intrin.depth_scale;
-                float z_rt = depth[v * intrin.width + (u + 2)] * intrin.depth_scale;
+                float z_up = depth[(v - CONTINUITY_PIXEL_STEP) * intrin.width + u] * intrin.depth_scale;
+                float z_dn = depth[(v + CONTINUITY_PIXEL_STEP) * intrin.width + u] * intrin.depth_scale;
+                float z_lf = depth[v * intrin.width + (u - CONTINUITY_PIXEL_STEP)] * intrin.depth_scale;
+                float z_rt = depth[v * intrin.width + (u + CONTINUITY_PIXEL_STEP)] * intrin.depth_scale;
                 int valid_neighbors = 0;
                 if (z_up > 0.0f && fabsf(z_raw - z_up) <= filter.continuity_thresh_m) valid_neighbors++;
                 if (z_dn > 0.0f && fabsf(z_raw - z_dn) <= filter.continuity_thresh_m) valid_neighbors++;
@@ -209,7 +221,7 @@ namespace realsense_dust_cloth
             uint32_t slot = static_cast<uint32_t>(h) & (hash_table_size - 1);
 
             // Linear probing
-            for (int probe = 0; probe < 32; ++probe)
+            for (int probe = 0; probe < VOXEL_HASH_MAX_PROBES; ++probe)
             {
                 uint32_t s = (slot + probe) & (hash_table_size - 1);
                 unsigned long long prev = atomicCAS(
@@ -394,9 +406,6 @@ namespace realsense_dust_cloth
                         }
 
                         // Close to ballistic prediction: highest priority
-                        constexpr float PRED_BASE_SCORE = 3000.0f;
-                        constexpr float PRED_DIST_PENALTY = 1000.0f;
-                        constexpr float CLUSTER_SIZE_WEIGHT = 0.1f;
                         score = PRED_BASE_SCORE - dist * PRED_DIST_PENALTY + static_cast<float>(sz) * CLUSTER_SIZE_WEIGHT;
                     }
                     else
@@ -407,9 +416,6 @@ namespace realsense_dust_cloth
                             c_cz >= filter.launch_min_z && c_cz <= filter.launch_max_z)
                         {
                             // Favor the most forward cluster (away from hand/launcher); size is only a tiebreaker so a large hand cannot outrank the cloth
-                            constexpr float LAUNCH_BASE_SCORE = 1000.0f;
-                            constexpr float LAUNCH_FORWARD_WEIGHT = 50.0f;
-                            constexpr float CLUSTER_SIZE_WEIGHT = 0.1f;
                             score = LAUNCH_BASE_SCORE + c_cx * LAUNCH_FORWARD_WEIGHT + static_cast<float>(sz) * CLUSTER_SIZE_WEIGHT;
                         }
                         else
@@ -576,7 +582,7 @@ namespace realsense_dust_cloth
         cudaMemsetAsync(ctx.d_voxel_count, 0, sizeof(int), ctx.stream);
         cudaMemsetAsync(ctx.d_hash_keys, 0xFF, CudaTrackerContext::HASH_TABLE_SIZE * sizeof(uint64_t), ctx.stream);
 
-        int block1d = 256;
+        int block1d = CUDA_BLOCK_SIZE_1D;
         int grid_voxel = (active_valid + block1d - 1) / block1d;
 
         kernel_voxel_downsample<<<grid_voxel, block1d, 0, ctx.stream>>>(

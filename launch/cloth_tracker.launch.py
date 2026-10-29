@@ -55,7 +55,7 @@ def generate_launch_description():
     declare_params_file = DeclareLaunchArgument(
         'params_file',
         default_value=default_config_file,
-        description='Path to tracker parameter YAML file (tracker_params.yaml or test_bag_params.yaml)'
+        description='Path to tracker parameter YAML file (tracker_params.yaml, clubroom_map_params.yaml, or unity_map_params.yaml)'
     )
 
     declare_use_direct_rs = DeclareLaunchArgument(
@@ -132,8 +132,7 @@ def generate_launch_description():
              '/camera/camera/depth/image_rect_raw',
              '/camera/camera/depth/camera_info',
              '/camera/camera/color/image_raw/compressed',
-             '/camera/camera/color/camera_info',
-             '/robot/operation/cmd_vel'],
+             '/camera/camera/color/camera_info'],
         output='screen',
         condition=IfCondition(LaunchConfiguration('record'))
     )
