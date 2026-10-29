@@ -47,7 +47,7 @@ Intel RealSense D435 と NVIDIA Jetson (CUDA) を C++ で密結合した、飛�
 ```bash
 source ~/ros2_ws/install/setup.bash
 
-# 1. 実機起動（大会本番フィールド / デフォルト）
+# 1. 実機起動（大会本番フィールド / デフォルト：引数なしでそのまま動きます）
 ros2 launch realsense_dust_cloth cloth_tracker.launch.py
 
 # 2. 実機起動（部室簡易フィールド）
@@ -56,12 +56,13 @@ ros2 launch realsense_dust_cloth cloth_tracker.launch.py params_file:=clubroom_m
 # 3. RViz2 GUI を同時表示する場合
 ros2 launch realsense_dust_cloth cloth_tracker.launch.py rviz:=true
 
-# 4. Unity シミュレータで動作確認する場合
-ros2 launch realsense_dust_cloth cloth_tracker.launch.py params_file:=unity_map_params.yaml rviz:=true
+# 4. Unity シミュレータで動作確認する場合（sim:=true を付けるだけでYAML切替不要）
+ros2 launch realsense_dust_cloth cloth_tracker.launch.py sim:=true rviz:=true
 ```
 
 ### Launch スイッチ引数
-* `params_file:=<yaml>`: 設定 YAML の指定（ファイル名のみまたは絶対パス）
+* `sim:=true`: シミュレーションモード（`use_sim_time:=true` かつ `use_direct_realsense:=false` を自動設定）
+* `params_file:=<yaml>`: 設定 YAML の指定（デフォルト: `tracker_params.yaml`）
 * `rviz:=true`: RViz2 GUI を同時起動
 * `use_direct_realsense:=false`: 実機カメラ直結ではなく ROS 2 トピックから画像を購読
 * `use_sim_time:=true`: シミュレータや rosbag の `/clock` に同期

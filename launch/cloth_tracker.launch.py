@@ -17,6 +17,9 @@ def _create_tracker_node(context):
         if os.path.exists(candidate):
             params_file = candidate
 
+    sim_str = LaunchConfiguration('sim').perform(context)
+    is_sim = sim_str.lower() == 'true'
+
     use_sim_time_str = LaunchConfiguration('use_sim_time').perform(context)
     use_direct_rs_str = LaunchConfiguration('use_direct_realsense').perform(context)
 
@@ -24,13 +27,27 @@ def _create_tracker_node(context):
         config = yaml.safe_load(stream) or {}
     values = dict(config.get('/**', {}).get('ros__parameters', {}))
     values.update(config.get('cloth_tracker_cuda_node', {}).get('ros__parameters', {}))
-    effective_sim_time = values.get('use_sim_time', False) if use_sim_time_str == '' else use_sim_time_str.lower() == 'true'
-    context.launch_configurations['resolved_use_sim_time'] = str(effective_sim_time).lower()
-    overrides = {}
+
+    # Priority: explicit launch argument > sim switch > YAML file
     if use_sim_time_str != '':
-        overrides['use_sim_time'] = use_sim_time_str.lower() == 'true'
+        effective_sim_time = use_sim_time_str.lower() == 'true'
+    elif is_sim:
+        effective_sim_time = True
+    else:
+        effective_sim_time = values.get('use_sim_time', False)
+
     if use_direct_rs_str != '':
-        overrides['use_direct_realsense'] = use_direct_rs_str.lower() == 'true'
+        effective_direct_rs = use_direct_rs_str.lower() == 'true'
+    elif is_sim:
+        effective_direct_rs = False
+    else:
+        effective_direct_rs = values.get('use_direct_realsense', True)
+
+    context.launch_configurations['resolved_use_sim_time'] = str(effective_sim_time).lower()
+    overrides = {
+        'use_sim_time': effective_sim_time,
+        'use_direct_realsense': effective_direct_rs,
+    }
 
     return [
         Node(
@@ -52,6 +69,12 @@ def generate_launch_description():
     # 実行モード切り替えスイッチ (Runtime Switches)
     # 調整用パラメータ (TF含む) は config/tracker_params.yaml に一本化されています
     # =========================================================================
+    declare_sim = DeclareLaunchArgument(
+        'sim',
+        default_value='false',
+        description='Run in simulation mode (Unity/rosbag: sets use_sim_time:=true, use_direct_realsense:=false)'
+    )
+
     declare_params_file = DeclareLaunchArgument(
         'params_file',
         default_value=default_config_file,
@@ -138,6 +161,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        declare_sim,
         declare_params_file,
         declare_use_direct_rs,
         declare_use_sim_time,
