@@ -44,6 +44,11 @@ public:
     bool launch_displacement_confirmed{false};
     double min_launch_vx{0.30}; ///< Minimum forward velocity (m/s) to confirm launch
 
+    // Pending launch anchor for jitter noise rejection
+    double anchor_x{0.0}, anchor_y{0.0}, anchor_z{0.0};
+    double first_detect_stamp{0.0};
+    bool is_pending_launch{false};
+
     // Configurable Parameters (Loaded via ROS 2 tracker_params.yaml)
     double launch_min_x{0.40};
     double launch_max_x{0.85};
