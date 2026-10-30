@@ -17,8 +17,9 @@ def _create_tracker_node(context):
     pkg_share = get_package_share_directory('realsense_dust_cloth')
     default_config_file = os.path.join(pkg_share, 'config', 'tracker_params.yaml')
 
-    if is_sim and params_file in ('', default_config_file, 'tracker_params.yaml'):
-        candidate = os.path.join(pkg_share, 'config', 'unity_localization_cloud_params.yaml')
+    if params_file in ('', default_config_file, 'tracker_params.yaml'):
+        target_name = 'unity_localization_cloud_params.yaml' if is_sim else 'localization_cloud_params.yaml'
+        candidate = os.path.join(pkg_share, 'config', target_name)
         if os.path.exists(candidate):
             params_file = candidate
 
