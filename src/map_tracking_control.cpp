@@ -26,6 +26,16 @@ void ClothTrackerCudaNode::setup_map_background() {
         throw std::invalid_argument("map_frame must differ from camera_parent_frame");
     }
 
+    map_max_image_age_sec_ = get_parameter("map_max_image_age_sec").as_double();
+    map_depth_queue_size_ = get_parameter("map_depth_queue_size").as_int();
+    if (!std::isfinite(map_max_image_age_sec_) || map_max_image_age_sec_ <= 0 || map_depth_queue_size_ <= 0)
+        throw std::invalid_argument("Invalid image age or queue size");
+    if (external_dynamic_cloud_) {
+        publish_background_state("EXTERNAL_WAITING_FOR_CLOUD", false);
+        RCLCPP_INFO(get_logger(), "External dynamic-cloud mode: no tracker ESDF allocation");
+        return;
+    }
+
     MapBuildConfig config;
     config.resolution = get_parameter("map_resolution_m").as_double();
     config.max_distance = get_parameter("map_max_distance_m").as_double();

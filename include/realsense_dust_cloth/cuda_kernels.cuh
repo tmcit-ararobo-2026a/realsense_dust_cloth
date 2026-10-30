@@ -112,6 +112,13 @@ namespace realsense_dust_cloth
     bool init_cuda_tracker(CudaTrackerContext &ctx, int max_depth_width = 848, int max_depth_height = 480);
     void destroy_cuda_tracker(CudaTrackerContext &ctx);
 
+    // External-map path: export ROI voxels once, then cluster returned voxels without re-voxelizing.
+    std::vector<float3> prepare_depth_cloud_cuda(CudaTrackerContext&, const uint16_t*,
+        const CameraIntrinsics&, const CameraPoseConfig&, const FilterConfig&);
+    ClothTrackingResult process_point_cloud_cuda(CudaTrackerContext&, const std::vector<float3>&,
+        const FilterConfig&, std::vector<float3>*, std::vector<float3>*,
+        float, float, float, bool);
+
     ClothTrackingResult process_depth_frame_cuda(
         CudaTrackerContext &ctx,
         const uint16_t *host_depth_ptr,

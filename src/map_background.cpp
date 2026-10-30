@@ -65,10 +65,23 @@ std::vector<float> read_json(const std::string& path, const MapBuildConfig& c, M
     std::vector<Object> objects;
     for (const auto& n : array) {
         std::string type; n["type"] >> type;
-        if (type=="VISUAL_BOX") continue;
+        if (type=="VISUAL_BOX" || type=="ZONE" || type=="PENALTY_ZONE") continue;
+        if (!n["passable"].empty() && static_cast<int>(n["passable"]) != 0) continue;
         if (type!="BOX" && type!="CYLINDER") throw std::runtime_error("Unsupported map type: "+type);
+        auto dimension = [&](const char* canonical, const char* alias, const char* size,
+                             const char* legacy) {
+            for (const char* key : {canonical, alias, size, legacy}) {
+                if (key && !n[key].empty())
+                    return read_number(n,key) * (size && std::string(key)==size ? 0.5f : 1.0f);
+            }
+            throw std::runtime_error("Map object missing shape dimensions");
+        };
+        const float a = type=="CYLINDER" ?
+            (!n["radius"].empty() ? read_number(n,"radius") : read_number(n,"param1")) :
+            dimension("half_x","half_width","size_x","param1");
+        const float b = type=="CYLINDER" ? 0.0f : dimension("half_y","half_depth","size_y","param2");
         Object o{type,read_number(n,"x"),read_number(n,"y"),read_number(n,"z_min"),
-            read_number(n,"z_max"),read_number(n,"param1"),read_number(n,"param2")};
+            read_number(n,"z_max"),a,b};
         if (!(o.z0<o.z1 && o.a>0 && (type!="BOX" || o.b>0)))
             throw std::runtime_error("Invalid map object dimensions");
         objects.push_back(o);

@@ -47,6 +47,21 @@ public:
 private:
     void declare_and_load_parameters();
     void setup_map_background();
+    bool external_dynamic_cloud_{false};
+    std::string cropped_cloud_topic_, dynamic_cloud_topic_;
+    double external_keep_radius_m_{0.3};
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_filter_prediction_;
+    double external_result_timeout_sec_{0.25}, external_poll_sec_{0.02};
+    double last_external_wall_sec_{-1.0}, last_external_stamp_sec_{-1.0};
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_cropped_cloud_;
+    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_dynamic_cloud_;
+    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_filter_status_;
+    rclcpp::TimerBase::SharedPtr external_watchdog_;
+    void setup_external_cloud();
+    void dynamic_cloud_callback(const sensor_msgs::msg::PointCloud2::SharedPtr);
+    void publish_tracking_result(const ClothTrackingResult&, const rclcpp::Time&,
+        const std::vector<float3>&, const std::vector<float3>&);
+
     bool prepare_map_frame(const rclcpp::Time& stamp);
     void publish_background_state(const std::string&, bool);
     std::recursive_mutex processing_mutex_;

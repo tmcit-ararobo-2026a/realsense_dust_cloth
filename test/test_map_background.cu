@@ -44,6 +44,14 @@ int main() {
     assert(!keep(view,make_float3(0.5f,0,0.01f)));
     view.protect_tracking=true;
     assert(keep(view,make_float3(0.5f,0,0.01f),make_float3(0.5f,0,0.01f)));
+    std::ofstream(json) << R"([{"type":"BOX","x":1,"y":0,"z_min":0,"z_max":2,"half_x":0.1,"half_y":0.1},
+        {"type":"CYLINDER","x":2,"y":0,"z_min":0,"z_max":2,"radius":0.1},
+        {"type":"ZONE"},{"type":"PENALTY_ZONE"}])";
+    MapBackground canonical;canonical.load(json.string(),config);
+    auto canonical_view=canonical.view();canonical_view.use_floor=false;
+    assert(!keep(canonical_view,make_float3(1.1f,0,1)));
+    assert(!keep(canonical_view,make_float3(2.1f,0,1)));
+    assert(keep(canonical_view,make_float3(0.5f,0,1)));
     auto file=folder/"test.esdf";
     MapGridHeader header{0.1f,2,2,2,-1,-1,-1,0.5f};float distances[8]{};
     {std::ofstream stream(file,std::ios::binary);stream.write(reinterpret_cast<const char*>(&header),sizeof(header));stream.write(reinterpret_cast<const char*>(distances),sizeof(distances));}

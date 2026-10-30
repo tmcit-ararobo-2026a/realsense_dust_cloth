@@ -42,6 +42,7 @@ add_executable(cloth_tracker_cuda_node
   src/ballistic_tracker.cpp
   src/map_background.cpp
   src/map_tracking_control.cpp
+  src/external_cloud_tracking.cpp
   src/cuda_kernels.cu
 )
 

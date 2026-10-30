@@ -112,6 +112,8 @@ ClothTrackerCudaNode::ClothTrackerCudaNode(const rclcpp::NodeOptions& options)
     pub_cluster_cloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloth/debug/cluster_points", DEFAULT_QOS_DEPTH);
     pub_filtered_cloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloth/debug/filtered_points", DEFAULT_QOS_DEPTH);
 
+    if (external_dynamic_cloud_) setup_external_cloud();
+
     // Initialize CUDA memory and stream
     if (!init_cuda_tracker(cuda_ctx_, camera_intrin_.width, camera_intrin_.height)) {
         RCLCPP_ERROR(this->get_logger(), "Failed to initialize CUDA tracker context!");
@@ -234,6 +236,23 @@ void ClothTrackerCudaNode::declare_and_load_parameters() {
     rs_exposure_us_ = this->declare_parameter("rs_exposure_us", -1);
 
     // 3. 3D Spatial ROI Filter Bounds
+    const auto input_mode = declare_parameter("tracking_input_mode", std::string("depth_map"));
+    if (input_mode!="depth_map" && input_mode!="external_dynamic_cloud")
+        throw std::invalid_argument("Unknown tracking_input_mode");
+    external_dynamic_cloud_ = input_mode=="external_dynamic_cloud";
+    cropped_cloud_topic_ = declare_parameter("cropped_cloud_topic", std::string("/realsense/cropped_cloud"));
+    dynamic_cloud_topic_ = declare_parameter("dynamic_cloud_topic", std::string("/realsense/dynamic_cloud"));
+    external_result_timeout_sec_ = declare_parameter("external_result_timeout_sec",0.25);
+    external_poll_sec_ = declare_parameter("external_poll_sec",0.02);
+    external_keep_radius_m_ = declare_parameter("external_tracking_keep_radius_m",0.3);
+    declare_parameter("external_prediction_topic",std::string("/cloth/filter_prediction"));
+    if (!std::isfinite(external_keep_radius_m_) || external_keep_radius_m_<0)
+        throw std::invalid_argument("Invalid tracking protection radius");
+    declare_parameter("external_filter_status_topic",std::string("/realsense/filter_status"));
+    if (!std::isfinite(external_result_timeout_sec_) || external_result_timeout_sec_<=0 ||
+        !std::isfinite(external_poll_sec_) || external_poll_sec_<=0)
+        throw std::invalid_argument("Invalid external cloud timing");
+
     filter_cfg_.min_depth_m = static_cast<float>(this->declare_parameter("min_depth_m", 0.25));
     filter_cfg_.max_depth_m = static_cast<float>(this->declare_parameter("max_depth_m", 6.00));
     filter_cfg_.min_x_m = static_cast<float>(this->declare_parameter("min_x_m", 0.35));
@@ -689,6 +708,8 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
         trajectory_points_.clear();
         ballistic_tracker_.reset();
         has_cloth_pose_ = false;
+        last_external_stamp_sec_ = -1.0;
+        last_external_wall_sec_ = -1.0;
     }
     last_frame_stamp_sec_ = now_sec;
 
@@ -705,6 +726,33 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
         return;
     }
 
+    if (external_dynamic_cloud_) {
+        if (std::abs((now()-stamp).seconds())>map_max_image_age_sec_) {
+            publish_background_state("MAP_IMAGE_TIME_INVALID",false); return;
+        }
+        try {
+            const auto points=prepare_depth_cloud_cuda(cuda_ctx_,depth_ptr,camera_intrin_,camera_pose_,filter_cfg_);
+            visualization_msgs::msg::Marker region;
+            region.header.stamp=stamp; region.header.frame_id=camera_parent_frame_;
+            region.ns="cloth_filter_prediction"; region.id=0;
+            region.type=visualization_msgs::msg::Marker::SPHERE;
+            region.pose.orientation.w=1.0;
+            float px=0,py=0,pz=0;
+            const bool protect=ballistic_tracker_.state==TrackerState::TRACKING &&
+                ballistic_tracker_.launch_displacement_confirmed &&
+                ballistic_tracker_.get_prediction(stamp.seconds(),px,py,pz);
+            region.action=protect ? visualization_msgs::msg::Marker::ADD : visualization_msgs::msg::Marker::DELETE;
+            region.pose.position.x=px; region.pose.position.y=py; region.pose.position.z=pz;
+            region.scale.x=region.scale.y=region.scale.z=external_keep_radius_m_*2;
+            region.color.a=0.2; region.color.r=1.0;
+            pub_filter_prediction_->publish(region);
+            MarkerVisualizer::publish_point_cloud(pub_cropped_cloud_,points,stamp,camera_parent_frame_);
+        } catch (const std::exception& error) {
+            publish_background_state("EXTERNAL_EXPORT_ERROR",false);
+            RCLCPP_ERROR_THROTTLE(get_logger(),*get_clock(),1000,"Point export: %s",error.what());
+        }
+        return;
+    }
     if (!prepare_map_frame(stamp)) return;
 
     std::vector<float3> debug_cluster_pts;
@@ -727,6 +775,13 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
         return;
     }
 
+    publish_tracking_result(raw_res,stamp,debug_cluster_pts,debug_filtered_pts);
+}
+
+void ClothTrackerCudaNode::publish_tracking_result(const ClothTrackingResult& raw_res,
+    const rclcpp::Time& stamp,const std::vector<float3>& debug_cluster_pts,
+    const std::vector<float3>& debug_filtered_pts) {
+    const double now_sec=stamp.seconds();
     // Phase 2: Ballistic State Tracking (Filter out stationary walls/ceiling & robot shaking)
     ClothTrackingResult res;
     bool is_actively_tracked = false;
@@ -737,7 +792,7 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
         is_actively_tracked = raw_res.valid;
     }
 
-    publish_background_state("MAP_READY", ballistic_tracker_.state != TrackerState::TRACKING);
+    publish_background_state(external_dynamic_cloud_ ? "EXTERNAL_READY" : "MAP_READY", ballistic_tracker_.state != TrackerState::TRACKING);
 
     // Publish Debug Point Clouds & ROI Markers after tracker state update
     if (publish_debug_cloud_) {
