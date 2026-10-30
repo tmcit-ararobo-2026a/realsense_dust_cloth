@@ -226,3 +226,33 @@ YAML の変更後はノードを再起動する。調整中は変更値と試射
 `/esdf_map` と MID360 の生点群は、RViz に追加すると地図と自己位置の照合に使える。ただし `/esdf_map` の表示を追加しても、追跡側が差分に使う地図は変更されない。違う実験場所では対応する地図を選び、PCD を使う場合は追跡側用に対応する ESDF を準備する（追跡側の直接入力は JSON / ESDF）。
 
 Jetson 全体の負荷と最後まで追える割合は実機で測定する。カメラ設定の FPS は処理性能の保証ではない。
+
+## 11. localization側で地図差分する実験モード（別ブランチ）
+
+`tracking_input_mode: external_dynamic_cloud` では、RealSenseの深度からROI・Voxel処理後の点群を `/realsense/cropped_cloud` に送り、gn10 localizationの `/realsense/dynamic_cloud` を受け取ってクラスタ選択・予測追跡します。追跡側のESDFは読み込まず、地図と自己位置はlocalization側で管理します。RealSense点群は自己位置の探索には使用しません。
+
+両リポジトリの対応する新方式ブランチをビルドして使用します。
+
+```bash
+# 実機：通常のMID360・IMUの起動後、localizationを1つだけ起動
+ros2 launch gn10_pointcloud_localization localization.launch.py \
+  params_file:=/absolute/path/to/gn10-pointcloud-localization/config/realsense_filter_params.yaml
+# 別ターミナル：RealSenseを開く追跡ノードも1つだけ起動
+ros2 launch realsense_dust_cloth cloth_tracker.launch.py \
+  params_file:=localization_cloud_params.yaml enable_analyzer:=false
+```
+
+Unityではlocalization用YAMLを `unity_realsense_filter_params.yaml` にし、localizationのlaunchへ `use_sim_time:=true` を指定します。追跡側は次の設定で起動します。
+
+```bash
+ros2 launch realsense_dust_cloth cloth_tracker.launch.py \
+  params_file:=unity_localization_cloud_params.yaml enable_analyzer:=false rviz:=true
+```
+
+既存の引数なし起動は従来どおり追跡側で地図差分する方式です。新方式へ自動で切り替わりません。実機での負荷・追跡率の確認後に通常運用への採用を判断します。
+
+確認トピック：`/realsense/filter_status`、`/cloth/background_status`、`/cloth/tracking_state`。準備完了は `EXTERNAL_READY`、入力途絶は `EXTERNAL_RESULT_TIMEOUT`。空の点群も観測として扱い、入力が途切れた場合はwatchdogで見失いを処理します。
+
+追跡確定後は予測位置の球を `/cloth/filter_prediction`（Marker）に配信します。深度の撮影時刻と同じstampで、ADDは保護あり、DELETEは保護なしを表します。localizationは同じ時刻の点群と対応付け、球内の点を地図差分で消さずに残します。球の半径は追跡側YAMLの `external_tracking_keep_radius_m` で管理します。
+
+地図差分で消えた点を追跡側で復元することはできません。また、保護範囲の静的な点も残るため、壁・床付近で誤った塊に移らないか確認が必要です。点群の往復転送と待ち時間を含めた軽量化は実測が必要です。
