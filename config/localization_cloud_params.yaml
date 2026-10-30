@@ -1,85 +1,125 @@
-# External map filtering by gn10 localization; all tuning values live here.
+# ==============================================================================
+# realsense_dust_cloth: 実機動作用設定パラメータ (Real Robot / Jetson Orin)
+# 自己位置推定ノード (gn10_pointcloud_localization) との ESDF 動的背景除去連携プロファイル
+# ==============================================================================
+
 /**:
   ros__parameters:
-    observed_landing_only: true
-    use_sim_time: false
-    depth_topic: /camera/camera/depth/image_rect_raw
-    camera_info_topic: /camera/camera/depth/camera_info
-    color_topic: /camera/camera/color/image_raw
-    use_direct_realsense: true
-    publish_debug_cloud: false
-    publish_static_tf: true
-    camera_parent_frame: base_link
-    camera_frame: camera_link
-    camera_x_offset_m: 0.5
-    camera_height_offset_m: 1.0
-    camera_pitch_deg: 20.0
-    camera_roll_deg: 90.0
-    camera_width: 640
-    camera_height: 480
-    min_x_m: 0.6
-    max_x_m: 6.0
-    min_y_m: -0.6
-    max_y_m: 0.6
-    min_z_m: 0.05
-    max_z_m: 3.1
-    min_depth_m: 0.25
-    max_depth_m: 5.5
-    enable_ballistic_filter: true
-    launch_min_x: 0.8
-    launch_max_x: 1.35
-    launch_min_y: -0.25
-    launch_max_y: 0.18
-    launch_min_z: 1.45
-    launch_max_z: 2.1
-    min_launch_vx: 0.3
-    min_launch_move_m: 0.05
-    pending_reset_sec: 0.25
-    gate_radius_m: 0.7
-    max_lost_frames: 8
-    min_tracking_points: 12
-    landing_min_z: 0.15
-    drag_coeff: 0.4
-    vel_smoothing_beta: 0.5
-    min_flight_vx_m_s: -1.5
-    max_vx_m_s: 15.0
-    max_abs_vy_m_s: 3.5
-    min_vz_m_s: -10.0
-    max_vz_m_s: 12.0
-    max_flight_duration_sec: 2.5
-    min_stationary_move_m: 0.12
-    max_stationary_frames: 5
-    voxel_size_m: 0.02
-    cluster_eps_m: 0.1
-    min_cluster_points: 45
-    max_cluster_points: 12000
-    min_cloth_size_m: 0.05
-    max_cloth_size_m: 0.8
-    continuity_thresh_m: 0.08
-    continuity_min_neighbors: 3
-    trajectory_history_sec: 15.0
-    enable_color_stream: true
-    color_fps: 30
-    jpeg_quality: 65
-    color_rotation_deg: 90
-    depth_fps: 60
-    rs_laser_power: -1.0
-    rs_exposure_us: -1
-    enable_cmd_vel_watch: true
-    cmd_vel_topic: /robot/operation/cmd_vel
-    cmd_vel_deadband_linear: 0.02
-    cmd_vel_deadband_angular: 0.02
-    cmd_vel_timeout_sec: 0.25
-    stop_settle_sec: 0.1
-    landing_position_topic: /cloth/landing_position
-    map_frame: map
-    map_max_image_age_sec: 0.25
-    map_depth_queue_size: 8
-    tracking_input_mode: external_dynamic_cloud
-    cropped_cloud_topic: /realsense/cropped_cloud
-    dynamic_cloud_topic: /realsense/dynamic_cloud
-    external_filter_status_topic: /realsense/filter_status
-    external_result_timeout_sec: 0.25
-    external_poll_sec: 0.02
-    external_tracking_keep_radius_m: 0.3
-    external_prediction_topic: /cloth/filter_prediction
+
+    # --------------------------------------------------------------------------
+    # 1. 基本実行設定 (Core Execution)
+    # --------------------------------------------------------------------------
+    use_sim_time: false                     # 実機ハードウェア時刻を使用 (シミュレーション時は true)
+    observed_landing_only: true             # 実測点群が着地高度に達した時のみ landing_position を発行
+
+    # --------------------------------------------------------------------------
+    # 2. カメラ入力・Direct RealSense 設定 (Camera & Hardware Native C++)
+    # --------------------------------------------------------------------------
+    use_direct_realsense: true              # librealsense2 C++ Native API から直接キャプチャ (実機: true)
+    depth_topic: /camera/camera/depth/image_rect_raw    # 深度トピック名 (ROS 2 互換用)
+    camera_info_topic: /camera/camera/depth/camera_info # カメラ内部パラメータトピック
+    color_topic: /camera/camera/color/image_raw         # カラー画像トピック名
+    depth_fps: 60                           # 深度フレームレート [Hz] (高速飛翔体の追跡には 60fps 推奨)
+    color_fps: 30                           # カラーフレームレート [Hz]
+    jpeg_quality: 65                        # RViz 配信向け JPEG 圧縮品質 (1-100)
+    color_rotation_deg: 90                  # カメラ縦置き設置に合わせた画像回転角 [deg]
+    rs_laser_power: -1.0                    # プロジェクターレーザー出力 (-1 で自動/既定)
+    rs_exposure_us: -1                      # 露光時間 [us] (-1 で自動露出)
+    enable_color_stream: true               # RViz 可視化用カラー画像の配信有効化
+
+    # --------------------------------------------------------------------------
+    # 3. カメラ設置姿勢 (Static TF Extrinsics: base_link -> camera_link)
+    # --------------------------------------------------------------------------
+    publish_static_tf: true                 # カメラ固定 TF をトラッカーノードから配信
+    camera_parent_frame: base_link          # 親座標系 (機体原点)
+    camera_frame: camera_link               # カメラ座標系名
+    camera_x_offset_m: 0.50                 # 機体前方オフセット [m]
+    camera_height_offset_m: 1.00            # 機体床上高さオフセット [m]
+    camera_pitch_deg: 20.0                  # 仰角 [deg] (上向き 20度傾斜)
+    camera_roll_deg: 90.0                   # ロール回転角 [deg] (縦置き 90度回転)
+    camera_width: 640                       # 深度画像幅 [px]
+    camera_height: 480                      # 深度画像高さ [px]
+
+    # --------------------------------------------------------------------------
+    # 4. 追跡対象空間 (ROI Bounding Box: base_link 基準)
+    # --------------------------------------------------------------------------
+    min_x_m: 0.60                           # 追跡空間 X 下限 (前方) [m]
+    max_x_m: 6.00                           # 追跡空間 X 上限 (前方) [m]
+    min_y_m: -0.60                          # 追跡空間 Y 下限 (右側) [m]
+    max_y_m: 0.60                           # 追跡空間 Y 上限 (左側) [m]
+    min_z_m: 0.05                           # 追跡空間 Z 下限 (床上) [m]
+    max_z_m: 3.10                           # 追跡空間 Z 上限 (天井下) [m]
+    min_depth_m: 0.25                       # カメラ最小計測深度 [m]
+    max_depth_m: 5.50                       # カメラ最大計測深度 [m]
+
+    # --------------------------------------------------------------------------
+    # 5. 射出検出ゲート (Launch Detection Gate)
+    # --------------------------------------------------------------------------
+    enable_ballistic_filter: true           # 弾道フィルタ・射出ゲート判定の有効化
+    launch_min_x: 0.80                      # 発射判定領域 X 下限 [m]
+    launch_max_x: 1.35                      # 発射判定領域 X 上限 [m]
+    launch_min_y: -0.25                     # 発射判定領域 Y 下限 [m]
+    launch_max_y: 0.18                      # 発射判定領域 Y 上限 [m]
+    launch_min_z: 1.45                      # 発射判定領域 Z 下限 [m]
+    launch_max_z: 2.10                      # 発射判定領域 Z 上限 [m]
+    min_launch_vx: 0.30                     # 射出認定最小前方初速 [m/s]
+    min_launch_move_m: 0.05                 # 射出認定最小移動距離 [m]
+    pending_reset_sec: 0.25                 # ゲート内待機リセットタイムアウト [s]
+
+    # --------------------------------------------------------------------------
+    # 6. 弾道物理推定 & カルマンフィルタ (Ballistic Tracking)
+    # --------------------------------------------------------------------------
+    gate_radius_m: 0.70                     # 予測位置からの追跡ゲート半径 [m]
+    max_lost_frames: 8                      # 追跡ロスト認定までの最大連続見失いフレーム数
+    min_tracking_points: 12                 # 弾道有効認定に必要な最小追跡点数
+    landing_min_z: 0.15                     # 着地認定高さ [m] (この高さ以下で LANDED)
+    drag_coeff: 0.40                        # 空気抵抗係数 [1/m] (布の空気抵抗モデル)
+    vel_smoothing_beta: 0.50                # 速度平滑化フィルタ係数 (0.0 - 1.0)
+    min_flight_vx_m_s: -1.50                # 許容最小飛翔速度 Vx [m/s]
+    max_vx_m_s: 15.00                       # 許容最大飛翔速度 Vx [m/s]
+    max_abs_vy_m_s: 3.50                    # 許容最大横方向速度 |Vy| [m/s]
+    min_vz_m_s: -10.00                      # 許容最小鉛直速度 Vz [m/s] (落下方向)
+    max_vz_m_s: 12.00                       # 許容最大鉛直速度 Vz [m/s] (上昇方向)
+    max_flight_duration_sec: 2.50           # 最大許容飛翔時間 [s]
+    landing_position_topic: /cloth/landing_position # 着地推定位置パブリッシュトピック
+    trajectory_history_sec: 15.0            # RViz 軌跡描画履歴保持時間 [s]
+    publish_debug_cloud: false              # デバッグ用点群パブリッシュ (通常運用は false)
+
+    # --------------------------------------------------------------------------
+    # 7. GPU クラスタリング (CUDA DBSCAN & 雑巾サイズ判定)
+    # --------------------------------------------------------------------------
+    voxel_size_m: 0.02                      # GPU ダウンサンプリングボクセルサイズ [m]
+    cluster_eps_m: 0.10                     # DBSCAN クラスタリング近傍探索距離 [m]
+    min_cluster_points: 45                  # 有効クラスタ認定最小点数
+    max_cluster_points: 12000               # 有効クラスタ認定最大点数
+    min_cloth_size_m: 0.05                  # 雑巾最小径 [m]
+    max_cloth_size_m: 0.80                  # 雑巾最大径 [m]
+    continuity_thresh_m: 0.08               # 点群連続性判定距離閾値 [m]
+    continuity_min_neighbors: 3             # 連続性認定最小近傍点数
+    min_stationary_move_m: 0.12             # 静止判定移動量閾値 [m]
+    max_stationary_frames: 5                # 静止判定フレーム数
+
+    # --------------------------------------------------------------------------
+    # 8. 自己位置推定 ESDF 動的背景除去連携 (External Filter Interface)
+    # --------------------------------------------------------------------------
+    tracking_input_mode: external_dynamic_cloud # 入力モード: 外部動的点群を使用
+    cropped_cloud_topic: /realsense/cropped_cloud # 自己位置ノードへ送信するクロップ点群
+    dynamic_cloud_topic: /realsense/dynamic_cloud # 自己位置ノードから受信する動的点群
+    external_filter_status_topic: /realsense/filter_status # 自己位置フィルタ状態トピック
+    external_prediction_topic: /cloth/filter_prediction    # 自己位置ノードへ送る予測マーカー
+    external_result_timeout_sec: 0.25       # 動的抽出結果待機タイムアウト [s]
+    external_poll_sec: 0.02                 # ポーリング周期 [s]
+    external_tracking_keep_radius_m: 0.50   # 予測マーカー周辺の動的点保護半径 [m]
+    map_frame: map                          # 静的マップ座標系名
+    map_max_image_age_sec: 0.25             # 画像タイムスタンプ最大許容遅延 [s]
+    map_depth_queue_size: 8                 # 内部キューサイズ
+
+    # --------------------------------------------------------------------------
+    # 9. 台車連動・射出前停止判定 (Robot Stop & Shoot)
+    # --------------------------------------------------------------------------
+    enable_cmd_vel_watch: true              # 台車走行指令 (/robot/operation/cmd_vel) の監視有効化
+    cmd_vel_topic: /robot/operation/cmd_vel # 走行速度指令トピック
+    cmd_vel_deadband_linear: 0.02           # 直進速度不感帯 [m/s]
+    cmd_vel_deadband_angular: 0.02          # 旋回角速度不感帯 [rad/s]
+    cmd_vel_timeout_sec: 0.25               # 指令途絶判定タイムアウト [s]
+    stop_settle_sec: 0.10                   # 走行停止後の揺れ収束待ち時間 [s]

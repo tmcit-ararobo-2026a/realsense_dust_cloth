@@ -43,9 +43,6 @@ def _create_tracker_node(context):
 
     context.launch_configurations['resolved_use_sim_time'] = str(effective_sim_time).lower()
     overrides = {}
-    if is_sim:
-        overrides['use_sim_time'] = True
-        overrides['use_direct_realsense'] = False
     if use_sim_time_str != '':
         overrides['use_sim_time'] = use_sim_time_str.lower() == 'true'
     if use_direct_rs_str != '':
