@@ -11,8 +11,18 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 def _create_tracker_node(context):
     params_file = LaunchConfiguration('params_file').perform(context)
+    sim_str = LaunchConfiguration('sim').perform(context).lower()
+    is_sim = sim_str == 'true'
+
+    pkg_share = get_package_share_directory('realsense_dust_cloth')
+    default_config_file = os.path.join(pkg_share, 'config', 'tracker_params.yaml')
+
+    if is_sim and params_file in ('', default_config_file, 'tracker_params.yaml'):
+        candidate = os.path.join(pkg_share, 'config', 'unity_localization_cloud_params.yaml')
+        if os.path.exists(candidate):
+            params_file = candidate
+
     if not os.path.isabs(params_file) and not os.path.exists(params_file):
-        pkg_share = get_package_share_directory('realsense_dust_cloth')
         candidate = os.path.join(pkg_share, 'config', params_file)
         if os.path.exists(candidate):
             params_file = candidate
@@ -24,9 +34,17 @@ def _create_tracker_node(context):
         config = yaml.safe_load(stream) or {}
     values = dict(config.get('/**', {}).get('ros__parameters', {}))
     values.update(config.get('cloth_tracker_cuda_node', {}).get('ros__parameters', {}))
-    effective_sim_time = values.get('use_sim_time', False) if use_sim_time_str == '' else use_sim_time_str.lower() == 'true'
+    effective_sim_time = values.get('use_sim_time', False)
+    if is_sim:
+        effective_sim_time = True
+    if use_sim_time_str != '':
+        effective_sim_time = use_sim_time_str.lower() == 'true'
+
     context.launch_configurations['resolved_use_sim_time'] = str(effective_sim_time).lower()
     overrides = {}
+    if is_sim:
+        overrides['use_sim_time'] = True
+        overrides['use_direct_realsense'] = False
     if use_sim_time_str != '':
         overrides['use_sim_time'] = use_sim_time_str.lower() == 'true'
     if use_direct_rs_str != '':
@@ -56,6 +74,12 @@ def generate_launch_description():
         'params_file',
         default_value=default_config_file,
         description='Path to tracker parameter YAML file (tracker_params.yaml or test_bag_params.yaml)'
+    )
+
+    declare_sim = DeclareLaunchArgument(
+        'sim',
+        default_value='false',
+        description='Simulation mode (automatically sets use_sim_time:=true, use_direct_realsense:=false, and unity config)'
     )
 
     declare_use_direct_rs = DeclareLaunchArgument(
@@ -140,6 +164,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         declare_params_file,
+        declare_sim,
         declare_use_direct_rs,
         declare_use_sim_time,
         declare_rviz,
