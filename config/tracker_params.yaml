@@ -1,6 +1,6 @@
 # ==============================================================================
-# realsense_dust_cloth: 実機事前地図背景除去設定パラメータ (Competition Field Map)
-# 事前作成した ESDF 静的背景マップ (nhk2026_map.json) を直接読み込み背景除去するプロファイル
+# realsense_dust_cloth: 実機追跡設定パラメータ (Competition Field / External Cloud)
+# 自己位置推定ノード (gn10_pointcloud_localization) との動的背景除去連携プロファイル
 # ==============================================================================
 #
 # ------------------------------------------------------------------------------
@@ -125,26 +125,16 @@
     max_stationary_frames: 5                # 静止判定フレーム数
 
     # --------------------------------------------------------------------------
-    # 8. 事前 ESDF 背景マップ設定 (Prior Map Matching)
+    # 8. 自己位置推定 ESDF 動的背景除去連携 (External Filter Interface)
     # --------------------------------------------------------------------------
-    map_file_path: package://gn10_pointcloud_localization/map/nhk2026_map.json # 大会本番フィールドマップファイル
+    tracking_input_mode: external_dynamic_cloud # 入力モード: 外部動的点群を使用 (マップ背景除去は自己位置ノード側が担当)
+    cropped_cloud_topic: /realsense/cropped_cloud # 自己位置ノードへ送信するクロップ点群トピック
+    dynamic_cloud_topic: /realsense/dynamic_cloud # 自己位置ノードから受信する動的点群トピック
+    external_filter_status_topic: /realsense/filter_status # 自己位置フィルタ状態トピック
+    external_prediction_topic: /cloth/filter_prediction    # 自己位置ノードへ送る予測保護球マーカー
+    external_result_timeout_sec: 0.25       # 動的抽出結果待機タイムアウト [s]
+    external_poll_sec: 0.02                 # ポーリング周期 [s]
+    external_tracking_keep_radius_m: 0.50   # 予測マーカー周辺の動的点保護半径 [m]
     map_frame: map                          # 静的マップ座標系名
-    map_resolution_m: 0.05                  # マップボクセル解像度 [m]
-    map_max_distance_m: 0.50                # ESDF 距離場最大計算距離 [m]
-    map_min_x_m: -5.50                      # マップ X 下限 [m]
-    map_max_x_m: 5.50                       # マップ X 上限 [m]
-    map_min_y_m: -6.00                      # マップ Y 下限 [m]
-    map_max_y_m: 6.00                       # マップ Y 上限 [m]
-    map_min_z_m: -0.20                      # マップ Z 下限 [m]
-    map_max_z_m: 4.00                       # マップ Z 上限 [m]
-    map_max_memory_mb: 128                  # マップメモリ上限 [MB]
-    map_exclusion_distance_m: 0.08          # 静止壁面からの除外マージン [m]
-    map_tracking_keep_radius_m: 0.30        # 追跡中の布周辺保護半径 [m]
-    map_reject_unknown: true                # マップ未定義領域の点群を除外
-    map_use_floor: true                     # 床面モデル除外を適用
-    map_floor_z_m: 0.00                     # 床面基準高さ [m]
-    map_tf_wait_sec: 0.15                   # TF 受信待ちタイムアウト [s]
-    map_tf_poll_sec: 0.002                  # TF ポーリング間隔 [s]
-    map_max_image_age_sec: 0.25             # 画像遅延許容時間 [s]
-    map_pose_loss_reset_sec: 0.25           # 自己位置喪失時リセット時間 [s]
-    map_depth_queue_size: 8                 # 深度キューサイズ
+    map_max_image_age_sec: 0.25             # 画像タイムスタンプ最大許容遅延 [s]
+    map_depth_queue_size: 8                 # 内部キューサイズ
