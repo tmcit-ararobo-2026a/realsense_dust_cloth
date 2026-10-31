@@ -43,7 +43,7 @@
     landing_min_z: 0.15
     drag_coeff: 0.4
     vel_smoothing_beta: 0.5
-    min_flight_vx_m_s: -1.5
+    min_flight_vx_m_s: 0.0
     max_vx_m_s: 15.0
     max_abs_vy_m_s: 3.5
     min_vz_m_s: -10.0
@@ -67,12 +67,6 @@
     depth_fps: 60
     rs_laser_power: -1.0
     rs_exposure_us: -1
-    enable_cmd_vel_watch: true
-    cmd_vel_topic: /robot/operation/cmd_vel
-    cmd_vel_deadband_linear: 0.02
-    cmd_vel_deadband_angular: 0.02
-    cmd_vel_timeout_sec: 0.25
-    stop_settle_sec: 0.1
     landing_position_topic: /cloth/landing_position
     map_file_path: package://gn10_pointcloud_localization/map/nhk2026_map.json
     map_frame: map

@@ -65,7 +65,7 @@ public:
 
     // Velocity Smoothing & Physical Velocity Bounds (Loaded via ROS 2 tracker_params.yaml)
     double vel_smoothing_beta{0.30};      ///< Velocity measurement blend weight (0..1)
-    double min_flight_vx_m_s{-1.50};      ///< Minimum allowed forward velocity in flight (m/s)
+    double min_flight_vx_m_s{0.00};       ///< Minimum allowed forward velocity in flight (m/s, strictly non-negative)
     double max_vx_m_s{15.00};             ///< Maximum physical forward velocity (m/s)
     double max_abs_vy_m_s{2.50};          ///< Maximum physical lateral velocity (m/s)
     double min_vz_m_s{-10.00};            ///< Minimum physical vertical velocity (m/s)

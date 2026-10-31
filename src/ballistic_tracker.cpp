@@ -177,10 +177,13 @@ bool BallisticTracker::update(
         double new_vz = dz_prev / dt_vel;
 
         // A projectile in free forward flight must remain within the 3D ballistic gate
+        // Optical noise / IR flicker moving backward beyond measurement tolerance is strictly rejected
+        constexpr double MAX_BACKWARD_JITTER_M = 0.03;
         double effective_gate = gate_radius_m + std::min(lost_count * LOST_FRAME_GATE_EXPANSION_M, MAX_GATE_EXPANSION_M);
         double max_step_dist = effective_gate + max_vx_m_s * dt_safe;
         if (dist_pred <= effective_gate &&
             dist_prev <= max_step_dist &&
+            raw.cx >= x - MAX_BACKWARD_JITTER_M &&
             new_vx >= min_flight_vx_m_s && new_vx <= max_vx_m_s &&
             std::abs(new_vy) <= max_abs_vy_m_s &&
             new_vz >= min_vz_m_s && new_vz <= max_vz_m_s)

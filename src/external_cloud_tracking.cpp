@@ -23,10 +23,6 @@ void ClothTrackerCudaNode::setup_external_cloud() {
         });
     external_watchdog_=create_wall_timer(std::chrono::duration<double>(external_poll_sec_),[this] {
         std::lock_guard<std::recursive_mutex> guard(processing_mutex_);
-        check_robot_motion_state(now());
-        if (enable_cmd_vel_watch_ && is_robot_moving_) {
-            publish_background_state("MOVING_OR_SETTLING",false); return;
-        }
         if (last_external_wall_sec_<0 || wall_seconds()-last_external_wall_sec_>external_result_timeout_sec_) {
             if (ballistic_tracker_.state==TrackerState::TRACKING) {
                 publish_tracking_result(ClothTrackingResult{},now(),{},{});
@@ -45,10 +41,6 @@ void ClothTrackerCudaNode::dynamic_cloud_callback(const sensor_msgs::msg::PointC
     if (std::abs((now()-stamp).seconds())>map_max_image_age_sec_ ||
         stamp.seconds()<=last_external_stamp_sec_) {
         publish_background_state("EXTERNAL_TIME_INVALID",false); return;
-    }
-    check_robot_motion_state(stamp);
-    if (enable_cmd_vel_watch_ && is_robot_moving_) {
-        publish_background_state("MOVING_OR_SETTLING",false); return;
     }
     const sensor_msgs::msg::PointField *xf=nullptr,*yf=nullptr,*zf=nullptr;
     for (const auto& f : msg->fields) {

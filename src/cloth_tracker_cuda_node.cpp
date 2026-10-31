@@ -93,20 +93,6 @@ ClothTrackerCudaNode::ClothTrackerCudaNode(const rclcpp::NodeOptions& options)
     pub_path_ = this->create_publisher<nav_msgs::msg::Path>("/cloth/measured_path", DEFAULT_QOS_DEPTH);
     pub_rotated_color_ = this->create_publisher<sensor_msgs::msg::Image>("/cloth/camera_view", DEFAULT_QOS_DEPTH);
 
-    if (enable_cmd_vel_watch_) {
-        sub_cmd_vel_ = this->create_subscription<geometry_msgs::msg::Twist>(
-            cmd_vel_topic_, rclcpp::QoS(10),
-            std::bind(&ClothTrackerCudaNode::cmd_vel_callback, this, std::placeholders::_1));
-        RCLCPP_INFO(this->get_logger(), "Robot motion monitoring enabled on topic: %s", cmd_vel_topic_.c_str());
-
-        if (cmd_vel_topic_ != "/cmd_vel") {
-            sub_fallback_cmd_vel_ = this->create_subscription<geometry_msgs::msg::Twist>(
-                "/cmd_vel", rclcpp::QoS(10),
-                std::bind(&ClothTrackerCudaNode::cmd_vel_callback, this, std::placeholders::_1));
-            RCLCPP_INFO(this->get_logger(), "Robot motion monitoring fallback enabled on topic: /cmd_vel");
-        }
-    }
-
     // Debug publishers (always available for RViz visualization & verification)
     pub_roi_markers_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("/cloth/debug/roi_markers", DEFAULT_QOS_DEPTH);
     pub_cluster_cloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloth/debug/cluster_points", DEFAULT_QOS_DEPTH);
@@ -317,16 +303,9 @@ void ClothTrackerCudaNode::declare_and_load_parameters() {
     filter_cfg_.launch_max_z = static_cast<float>(ballistic_tracker_.launch_max_z);
     filter_cfg_.gate_radius_m = static_cast<float>(ballistic_tracker_.gate_radius_m);
 
-    // 7. Robot Motion Monitoring & Stop-and-Shoot
-    enable_cmd_vel_watch_ = this->declare_parameter("enable_cmd_vel_watch", true);
-    cmd_vel_topic_ = this->declare_parameter("cmd_vel_topic", "/robot/operation/cmd_vel");
     landing_position_topic_ = this->declare_parameter("landing_position_topic", "/cloth/landing_position");
-    cmd_vel_deadband_linear_ = this->declare_parameter("cmd_vel_deadband_linear", 0.02);
-    cmd_vel_deadband_angular_ = this->declare_parameter("cmd_vel_deadband_angular", 0.02);
-    cmd_vel_timeout_sec_ = this->declare_parameter("cmd_vel_timeout_sec", 0.25);
-    stop_settle_sec_ = this->declare_parameter("stop_settle_sec", 0.10);
 
-    // 8. Prior-Map ESDF Background Parameters
+    // 7. Prior-Map ESDF Background Parameters
     this->declare_parameter("map_file_path", "");
     this->declare_parameter("map_frame", "map");
     this->declare_parameter("map_resolution_m", 0.05);
@@ -657,49 +636,6 @@ void ClothTrackerCudaNode::publish_roi_markers(const rclcpp::Time& stamp, const 
     pub_roi_markers_->publish(markers);
 }
 
-void ClothTrackerCudaNode::cmd_vel_callback(const geometry_msgs::msg::Twist::SharedPtr msg) {
-    std::lock_guard<std::recursive_mutex> lock(processing_mutex_);
-    if (!enable_cmd_vel_watch_) return;
-    last_cmd_vel_time_ = this->now();
-
-    double speed_lin = std::hypot(msg->linear.x, msg->linear.y);
-    double speed_ang = std::abs(msg->angular.z);
-    bool moving = (speed_lin >= cmd_vel_deadband_linear_ || speed_ang >= cmd_vel_deadband_angular_);
-
-    if (moving) {
-        is_robot_moving_ = true;
-        stop_detected_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
-    } else {
-        if (is_robot_moving_ && stop_detected_time_.nanoseconds() == 0) {
-            stop_detected_time_ = this->now();
-        }
-    }
-}
-
-void ClothTrackerCudaNode::check_robot_motion_state(const rclcpp::Time& current_time) {
-    if (!enable_cmd_vel_watch_) return;
-
-    // Timeout check: if no cmd_vel received for > cmd_vel_timeout_sec_, treat as zero command
-    if (last_cmd_vel_time_.nanoseconds() > 0) {
-        double elapsed_since_cmd = (current_time - last_cmd_vel_time_).seconds();
-        if (elapsed_since_cmd > cmd_vel_timeout_sec_ && is_robot_moving_) {
-            if (stop_detected_time_.nanoseconds() == 0) {
-                stop_detected_time_ = current_time;
-            }
-        }
-    }
-
-    // Check if robot has stayed below deadband for at least stop_settle_sec_
-    if (is_robot_moving_ && stop_detected_time_.nanoseconds() > 0) {
-        double stop_duration = (current_time - stop_detected_time_).seconds();
-        if (stop_duration >= stop_settle_sec_) {
-            is_robot_moving_ = false;
-            stop_detected_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
-            RCLCPP_INFO(this->get_logger(), "[ClothTracker] Robot stopped & settled: Ready to shoot.");
-        }
-    }
-}
-
 void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const rclcpp::Time& stamp) {
     std::lock_guard<std::recursive_mutex> lock(processing_mutex_);
     double now_sec = stamp.seconds();
@@ -712,19 +648,6 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
         last_external_wall_sec_ = -1.0;
     }
     last_frame_stamp_sec_ = now_sec;
-
-    // Check motion state when monitoring cmd_vel
-    check_robot_motion_state(stamp);
-
-    if (enable_cmd_vel_watch_ && is_robot_moving_) {
-        // Suppress cloth detection while robot is in motion to prevent false triggers
-        ballistic_tracker_.reset();
-        prev_state_ = TrackerState::IDLE;
-        trajectory_points_.clear();
-        has_cloth_pose_ = false;
-        publish_background_state("MOVING_OR_SETTLING", false);
-        return;
-    }
 
     if (external_dynamic_cloud_) {
         if (std::abs((now()-stamp).seconds())>map_max_image_age_sec_) {

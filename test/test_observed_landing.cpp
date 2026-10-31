@@ -58,6 +58,26 @@ int main() {
     assert(jitter_tracker.state == TrackerState::TRACKING);
     assert(jitter_tracker.launch_displacement_confirmed);
 
+    // In-flight optical noise jumping backward must be rejected
+    ClothTrackingResult backward_noise;
+    backward_noise.valid = true;
+    backward_noise.cluster_points_count = 25;
+    backward_noise.cx = 1.10; // Behind current position 1.16m (dx = -0.06m)
+    backward_noise.cy = 0.0;
+    backward_noise.cz = 1.75;
+    assert(!jitter_tracker.update(backward_noise, 2.04, out));
+    // Tracker should retain last known state and increment lost_count instead of jumping backward
+    assert(jitter_tracker.lost_count == 1);
+    assert(std::abs(jitter_tracker.x - 1.16) < 1e-4);
+
+    // Real cloth continuing forward is matched smoothly
+    real_cloth.cx = 1.30; real_cloth.cz = 1.74; // forward progress
+    assert(jitter_tracker.update(real_cloth, 2.06, out));
+    assert(jitter_tracker.state == TrackerState::TRACKING);
+    assert(jitter_tracker.lost_count == 0);
+    assert(std::abs(jitter_tracker.x - 1.30) < 1e-4);
+
     std::cout << "Map mode distinguishes an observed landing from loss; legacy default preserved\n";
     std::cout << "Optical jitter noise in launch gate rejected; genuine launch verified\n";
+    std::cout << "In-flight backward optical noise rejected; monotonic forward tracking verified\n";
 }

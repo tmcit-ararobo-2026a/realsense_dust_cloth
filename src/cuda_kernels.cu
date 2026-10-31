@@ -395,10 +395,10 @@ namespace realsense_dust_cloth
                             continue; // Out of tracking gate
                         }
 
-                        // Close to ballistic prediction: highest priority
+                        // Close to ballistic prediction: highest priority (proximity strictly dominates over cluster size)
                         constexpr float PRED_BASE_SCORE = 3000.0f;
                         constexpr float PRED_DIST_PENALTY = 1000.0f;
-                        constexpr float CLUSTER_SIZE_WEIGHT = 0.1f;
+                        constexpr float CLUSTER_SIZE_WEIGHT = 0.01f;
                         score = PRED_BASE_SCORE - dist * PRED_DIST_PENALTY + static_cast<float>(sz) * CLUSTER_SIZE_WEIGHT;
                     }
                     else

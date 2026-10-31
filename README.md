@@ -95,7 +95,6 @@ ros2 launch realsense_dust_cloth cloth_tracker.launch.py sim:=true rviz:=true
 ### 入力トピック
 * `/realsense/dynamic_cloud` (`sensor_msgs/msg/PointCloud2`): 自己位置推定ノードから送られる背景除去済み動的点群
 * `/realsense/filter_status` (`std_msgs/msg/String`): 自己位置フィルタの状態 (`READY` 等)
-* `/robot/operation/cmd_vel` (`geometry_msgs/msg/Twist`): ロボット台車の走行速度指令（停止後 0.1s 判定に使用）
 * `/camera/camera/color/image_raw` (`sensor_msgs/msg/Image`): カラー画像 (Unity/rosbag時)
 
 ### 出力トピック

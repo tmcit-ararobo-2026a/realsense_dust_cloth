@@ -154,25 +154,7 @@ private:
     int rs_exposure_us_{-1};
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_rotated_color_;
     TrackerState prev_state_{TrackerState::IDLE};
-
-    // Robot Motion Monitoring & Stop-and-Shoot Fast Background Relearn
-    bool enable_cmd_vel_watch_{false};
-    std::string cmd_vel_topic_{"/robot/operation/cmd_vel"};
     std::string landing_position_topic_{"/cloth/landing_position"};
-    double cmd_vel_deadband_linear_{0.02};
-    double cmd_vel_deadband_angular_{0.02};
-    double cmd_vel_timeout_sec_{0.25};
-    double stop_settle_sec_{0.10};
-
-    bool is_robot_moving_{false};
-    rclcpp::Time last_cmd_vel_time_{0, 0, RCL_ROS_TIME};
-    rclcpp::Time stop_detected_time_{0, 0, RCL_ROS_TIME};
-
-    rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_cmd_vel_;
-    rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_fallback_cmd_vel_;
-
-    void cmd_vel_callback(const geometry_msgs::msg::Twist::SharedPtr msg);
-    void check_robot_motion_state(const rclcpp::Time& current_time);
 
     // Direct RealSense Thread
     std::atomic<bool> is_running_{false};

@@ -154,8 +154,7 @@ def generate_launch_description():
              '/camera/camera/depth/image_rect_raw',
              '/camera/camera/depth/camera_info',
              '/camera/camera/color/image_raw/compressed',
-             '/camera/camera/color/camera_info',
-             '/robot/operation/cmd_vel'],
+             '/camera/camera/color/camera_info'],
         output='screen',
         condition=IfCondition(LaunchConfiguration('record'))
     )
