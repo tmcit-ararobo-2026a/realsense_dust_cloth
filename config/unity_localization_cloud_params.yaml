@@ -97,20 +97,24 @@
     tube_radius_m: 0.35                     # 弾道予測チューブ半径 [m] (この円筒外の机・人を100%遮断)
     max_total_accel_m_s2: 25.0              # 許容最大全加速度 [m/s^2] (約2.5G: 異常な急加速・急停止を遮断)
     min_vertical_accel_m_s2: -20.0          # 許容下向き最大加速度 [m/s^2] (約-2G: 異常な垂直急降下ダイブを遮断)
+    max_lateral_accel_m_s2: 8.0             # 許容横方向最大加速度 [m/s^2] (横飛びノイズ・急カーブを遮断し直進性を強制)
     max_heading_deg: 45.0                   # 許容最大進行偏向角 [deg] (45度以上の直角折れ曲がりを遮断)
     reject_ascent_after_apex: true          # 頂点通過後の再上昇禁止 (落下開始後の再浮遊を物理的に100%遮断)
     backward_jitter_tolerance_m: 0.02       # 飛翔中の許容最大後退ジッター [m]
     vertical_jitter_tolerance_m: 0.03       # 頂点通過後の許容鉛直ジッター [m]
-    enable_coast_prediction_tf: true        # 一時見失い時の物理予測補間 TF 配信 (オクルージョン時も滑らかに放物線を維持)
+    abort_on_anomaly: true                  # 異常軌道（急降下・急偏向・再浮遊・管外逸脱）検出時の即時追跡打ち切り
+    max_anomaly_frames: 1                   # 追跡打ち切りまでの連続異常フレーム許容数 (1: 即座に切る)
+    publish_cutoff_as_landing: true         # 空中で追跡が切れた場合も最終位置を着地位置としてパブリッシュ
+    enable_coast_prediction_tf: false       # 見失い時の仮想放物線補間を無効化 (見失った時点で追跡を切る)
     gate_radius_m: 0.35                     # 予測位置からの追跡ゲート球半径 [m] (tube_radius_m と連動)
-    max_lost_frames: 8                      # 追跡ロスト認定までの最大連続見失いフレーム数
+    max_lost_frames: 4                      # 追跡ロスト認定までの最大連続見失いフレーム数
     min_tracking_points: 8                  # 飛翔中に追跡継続と認める最小点数
     landing_min_z: 0.15                     # 着地認定高さ [m]
     drag_coeff: 0.40                        # 空気抵抗係数 [1/m]
     vel_smoothing_beta: 0.50                # 速度平滑化フィルタ係数 (0.0: 予測重視 〜 1.0: 観測重視)
     min_flight_vx_m_s: 0.00                 # 許容最小飛翔速度 Vx [m/s] (前進のみ許可、後退完全排除)
     max_vx_m_s: 15.00                       # 許容最大飛翔速度 Vx [m/s]
-    max_abs_vy_m_s: 3.50                    # 許容最大横方向速度 |Vy| [m/s]
+    max_abs_vy_m_s: 0.80                    # 許容最大横方向速度 |Vy| [m/s] (0.80に引き締め、直進軌道を強制)
     min_vz_m_s: -10.00                      # 許容最小鉛直速度 Vz [m/s]
     max_vz_m_s: 12.00                       # 許容最大鉛直速度 Vz [m/s]
     max_flight_duration_sec: 2.50           # 最大許容飛翔時間 [s]

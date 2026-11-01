@@ -67,7 +67,7 @@ public:
     double vel_smoothing_beta{0.30};      ///< Velocity measurement blend weight (0..1)
     double min_flight_vx_m_s{0.00};       ///< Minimum allowed forward velocity in flight (m/s, strictly non-negative)
     double max_vx_m_s{15.00};             ///< Maximum physical forward velocity (m/s)
-    double max_abs_vy_m_s{2.50};          ///< Maximum physical lateral velocity (m/s)
+    double max_abs_vy_m_s{0.80};          ///< Maximum physical lateral velocity (m/s, tightened for trajectory straightness)
     double min_vz_m_s{-10.00};            ///< Minimum physical vertical velocity (m/s)
     double max_vz_m_s{8.00};              ///< Maximum physical vertical velocity (m/s)
 
@@ -85,18 +85,27 @@ public:
     static constexpr double DEFAULT_TUBE_RADIUS_M = 0.35;               ///< Flight tube search radius [m]
     static constexpr double DEFAULT_MAX_TOTAL_ACCEL_M_S2 = 25.0;        ///< Maximum allowable physical 3D acceleration [m/s^2] (~2.5G)
     static constexpr double DEFAULT_MIN_VERTICAL_ACCEL_M_S2 = -20.0;    ///< Maximum allowable downward vertical acceleration [m/s^2] (~-2G)
+    static constexpr double DEFAULT_MAX_LATERAL_ACCEL_M_S2 = 8.0;       ///< Maximum allowable lateral acceleration [m/s^2]
     static constexpr double DEFAULT_MAX_HEADING_DEG = 45.0;             ///< Maximum allowable heading deflection angle [deg]
     static constexpr double DEFAULT_BACKWARD_JITTER_TOL_M = 0.02;       ///< Forward flight backward tolerance [m]
     static constexpr double DEFAULT_VERTICAL_JITTER_TOL_M = 0.03;       ///< Post-apex vertical measurement tolerance [m]
+    static constexpr int DEFAULT_MAX_ANOMALY_FRAMES = 1;                ///< Consecutive anomalous frames before tracking is aborted
 
     double tube_radius_m{DEFAULT_TUBE_RADIUS_M};
     double max_total_accel_m_s2{DEFAULT_MAX_TOTAL_ACCEL_M_S2};
     double min_vertical_accel_m_s2{DEFAULT_MIN_VERTICAL_ACCEL_M_S2};
+    double max_lateral_accel_m_s2{DEFAULT_MAX_LATERAL_ACCEL_M_S2};
     double max_heading_deg{DEFAULT_MAX_HEADING_DEG};
     double backward_jitter_tolerance_m{DEFAULT_BACKWARD_JITTER_TOL_M};
     double vertical_jitter_tolerance_m{DEFAULT_VERTICAL_JITTER_TOL_M};
     bool reject_ascent_after_apex{true};
     bool enable_coast_prediction_tf{false};
+
+    // Early Tracking Cutoff & Anomaly Abort Controls
+    bool abort_on_anomaly{true};          ///< Cut off tracking immediately if physical anomaly detected
+    int max_anomaly_frames{DEFAULT_MAX_ANOMALY_FRAMES}; ///< Consecutive anomaly frames threshold before aborting
+    bool publish_cutoff_as_landing{true}; ///< Publish final cutoff position as landing position
+    int anomaly_count{0};                 ///< Consecutive physical anomaly frame counter
 
     // Flight Phase Physical State
     bool has_reached_apex{false};       ///< True once cloth has reached apex and started descending

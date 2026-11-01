@@ -19,6 +19,7 @@ void BallisticTracker::reset() {
     tracked_count = 0;
     lost_count = 0;
     stationary_count = 0;
+    anomaly_count = 0;
     launch_displacement_confirmed = false;
     is_pending_launch = false;
     has_reached_apex = false;
@@ -147,7 +148,7 @@ bool BallisticTracker::update(
     // =========================================================================
     if (max_flight_duration_sec > 0.0 && (stamp_sec - launch_stamp) > max_flight_duration_sec) {
         if (launch_displacement_confirmed && x > launch_max_x) {
-            state = observed_landing_only ? TrackerState::LOST : TrackerState::LANDED;
+            state = publish_cutoff_as_landing ? TrackerState::LANDED : (observed_landing_only ? TrackerState::LOST : TrackerState::LANDED);
             lost_count = 0;
             stationary_count = 0;
         } else {
@@ -202,13 +203,13 @@ bool BallisticTracker::update(
             }
         }
 
-        // 3. Physical 3D Acceleration limits: gravity is -9.8 m/s^2; extreme downward or total acceleration is impossible
+        // 3. Physical 3D Acceleration limits: gravity is -9.8 m/s^2; extreme downward, lateral, or total acceleration is impossible
         if (physically_plausible) {
             double ax = (new_vx - vx) / dt_safe;
             double ay = (new_vy - vy) / dt_safe;
             double az = (new_vz - vz) / dt_safe;
             double total_accel = std::sqrt(ax * ax + ay * ay + az * az);
-            if (total_accel > max_total_accel_m_s2 || az < min_vertical_accel_m_s2) {
+            if (total_accel > max_total_accel_m_s2 || az < min_vertical_accel_m_s2 || std::abs(ay) > max_lateral_accel_m_s2) {
                 physically_plausible = false;
             }
         }
@@ -234,6 +235,7 @@ bool BallisticTracker::update(
             new_vz >= min_vz_m_s && new_vz <= max_vz_m_s)
         {
             matched = true;
+            anomaly_count = 0;
 
             // Detect mid-air or pole-hooked resting state
             double ref_dx = raw.cx - stationary_ref_x;
@@ -289,6 +291,15 @@ bool BallisticTracker::update(
                 stationary_count = 0;
             }
             return true;
+        } else {
+            // An unphysical or out-of-tube candidate was detected
+            anomaly_count++;
+            if (abort_on_anomaly && anomaly_count >= max_anomaly_frames) {
+                state = publish_cutoff_as_landing ? TrackerState::LANDED : (observed_landing_only ? TrackerState::LOST : TrackerState::LANDED);
+                lost_count = 0;
+                stationary_count = 0;
+                return false;
+            }
         }
     }
 
@@ -298,7 +309,7 @@ bool BallisticTracker::update(
     if (!matched) {
         lost_count++;
         if (lost_count > max_lost_frames || (!observed_landing_only && pred_z <= landing_min_z)) {
-            state = observed_landing_only ? TrackerState::LOST : TrackerState::LANDED;
+            state = publish_cutoff_as_landing ? TrackerState::LANDED : (observed_landing_only ? TrackerState::LOST : TrackerState::LANDED);
             lost_count = 0;
             stationary_count = 0;
             return false;

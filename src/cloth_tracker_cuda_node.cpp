@@ -297,11 +297,15 @@ void ClothTrackerCudaNode::declare_and_load_parameters() {
     ballistic_tracker_.tube_radius_m = this->declare_parameter("tube_radius_m", BallisticTracker::DEFAULT_TUBE_RADIUS_M);
     ballistic_tracker_.max_total_accel_m_s2 = this->declare_parameter("max_total_accel_m_s2", BallisticTracker::DEFAULT_MAX_TOTAL_ACCEL_M_S2);
     ballistic_tracker_.min_vertical_accel_m_s2 = this->declare_parameter("min_vertical_accel_m_s2", BallisticTracker::DEFAULT_MIN_VERTICAL_ACCEL_M_S2);
+    ballistic_tracker_.max_lateral_accel_m_s2 = this->declare_parameter("max_lateral_accel_m_s2", BallisticTracker::DEFAULT_MAX_LATERAL_ACCEL_M_S2);
     ballistic_tracker_.max_heading_deg = this->declare_parameter("max_heading_deg", BallisticTracker::DEFAULT_MAX_HEADING_DEG);
     ballistic_tracker_.backward_jitter_tolerance_m = this->declare_parameter("backward_jitter_tolerance_m", BallisticTracker::DEFAULT_BACKWARD_JITTER_TOL_M);
     ballistic_tracker_.vertical_jitter_tolerance_m = this->declare_parameter("vertical_jitter_tolerance_m", BallisticTracker::DEFAULT_VERTICAL_JITTER_TOL_M);
     ballistic_tracker_.reject_ascent_after_apex = this->declare_parameter("reject_ascent_after_apex", true);
-    ballistic_tracker_.enable_coast_prediction_tf = this->declare_parameter("enable_coast_prediction_tf", true);
+    ballistic_tracker_.enable_coast_prediction_tf = this->declare_parameter("enable_coast_prediction_tf", false);
+    ballistic_tracker_.abort_on_anomaly = this->declare_parameter("abort_on_anomaly", true);
+    ballistic_tracker_.max_anomaly_frames = this->declare_parameter("max_anomaly_frames", BallisticTracker::DEFAULT_MAX_ANOMALY_FRAMES);
+    ballistic_tracker_.publish_cutoff_as_landing = this->declare_parameter("publish_cutoff_as_landing", true);
 
     // Synchronize CUDA filter launch gate & tracking points with tracker parameters
     filter_cfg_.min_tracking_points = ballistic_tracker_.min_track_points_limit;
@@ -767,7 +771,13 @@ void ClothTrackerCudaNode::publish_tracking_result(const ClothTrackingResult& ra
 
         RCLCPP_INFO(this->get_logger(),
                     "========================================================================\n"
-                    "*** CLOTH LANDED at (%.2f, %.2f, %.2f)! Recorded %zu flight points. ***\n"
+                    "*** CLOTH TRACKING FINISHED/LANDED at (%.2f, %.2f, %.2f)! Recorded %zu flight points. ***\n"
+                    "========================================================================",
+                    last_cloth_x_, last_cloth_y_, last_cloth_z_, trajectory_points_.size());
+    } else if (prev_state_ == TrackerState::TRACKING && ballistic_tracker_.state == TrackerState::LOST) {
+        RCLCPP_INFO(this->get_logger(),
+                    "========================================================================\n"
+                    "*** CLOTH TRACKING CUT OFF (LOST) at (%.2f, %.2f, %.2f)! Recorded %zu flight points. ***\n"
                     "========================================================================",
                     last_cloth_x_, last_cloth_y_, last_cloth_z_, trajectory_points_.size());
     }
@@ -787,9 +797,9 @@ void ClothTrackerCudaNode::publish_tracking_result(const ClothTrackingResult& ra
             trajectory_points_.clear(); // Brand new launch: clear previous trajectory line
             if (enable_ballistic_filter_) {
                 geometry_msgs::msg::Point launch_pt;
-                launch_pt.x = ballistic_tracker_.launch_x;
-                launch_pt.y = ballistic_tracker_.launch_y;
-                launch_pt.z = ballistic_tracker_.launch_z;
+                launch_pt.x = res.cx;
+                launch_pt.y = res.cy;
+                launch_pt.z = res.cz;
                 trajectory_points_.emplace_back(ballistic_tracker_.launch_stamp, launch_pt);
             }
             RCLCPP_INFO(this->get_logger(),
