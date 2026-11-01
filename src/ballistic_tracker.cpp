@@ -6,9 +6,12 @@ namespace {
 constexpr double DEFAULT_FRAME_DT_SEC = 0.016;
 constexpr double MIN_VELOCITY_DT_SEC = 0.025;
 constexpr double DEFAULT_LAUNCH_VX_M_S = 2.0;
-constexpr double LOST_FRAME_GATE_EXPANSION_M = 0.08;
-constexpr double MAX_GATE_EXPANSION_M = 0.35;
+constexpr double LOST_FRAME_GATE_EXPANSION_M = 0.04;
+constexpr double MAX_GATE_EXPANSION_M = 0.10;
 constexpr double HALF_GRAVITY_FACTOR = 0.5;
+constexpr double MIN_HEADING_SPEED_THRESHOLD_M_S = 0.20;
+constexpr double MIN_HEADING_STEP_THRESHOLD_M = 0.05;
+constexpr double DEG_TO_RAD_FACTOR = 180.0 / M_PI;
 } // namespace
 
 void BallisticTracker::reset() {
@@ -18,6 +21,8 @@ void BallisticTracker::reset() {
     stationary_count = 0;
     launch_displacement_confirmed = false;
     is_pending_launch = false;
+    has_reached_apex = false;
+    apex_z = 0.0;
     last_stamp = 0.0;
     launch_stamp = 0.0;
     first_detect_stamp = 0.0;
@@ -118,6 +123,8 @@ bool BallisticTracker::update(
             vx = std::clamp(current_vx, min_flight_vx_m_s, max_vx_m_s);
             vy = std::clamp((raw.cy - anchor_y) / dt_safe, -max_abs_vy_m_s, max_abs_vy_m_s);
             vz = std::clamp((raw.cz - anchor_z) / dt_safe, min_vz_m_s, max_vz_m_s);
+            apex_z = raw.cz;
+            has_reached_apex = (vz <= 0.0);
             last_stamp = stamp_sec;
             tracked_count = 1;
             lost_count = 0;
@@ -155,6 +162,9 @@ bool BallisticTracker::update(
     double pred_y = static_cast<double>(pred_yf);
     double pred_z = static_cast<double>(pred_zf);
 
+    double dt_raw = stamp_sec - last_stamp;
+    double dt_safe = (dt_raw > 0.0) ? dt_raw : launch_timeout_sec;
+
     bool matched = false;
     int min_track_pts = std::min(min_cluster_points, min_track_points_limit);
 
@@ -169,22 +179,57 @@ bool BallisticTracker::update(
         double dz_prev = raw.cz - z;
         double dist_prev = std::sqrt(dx_prev * dx_prev + dy_prev * dy_prev + dz_prev * dz_prev);
 
-        double dt_raw = stamp_sec - last_stamp;
-        double dt_safe = (dt_raw > 0.0) ? dt_raw : launch_timeout_sec;
         double dt_vel = std::max(dt_safe, MIN_VELOCITY_DT_SEC);
         double new_vx = dx_prev / dt_vel;
         double new_vy = dy_prev / dt_vel;
         double new_vz = dz_prev / dt_vel;
 
-        // A projectile in free forward flight must remain within the 3D ballistic gate
-        // Optical noise / IR flicker moving backward beyond measurement tolerance is strictly rejected
-        constexpr double MAX_BACKWARD_JITTER_M = 0.03;
-        double effective_gate = gate_radius_m + std::min(lost_count * LOST_FRAME_GATE_EXPANSION_M, MAX_GATE_EXPANSION_M);
+        // A projectile in free forward flight must remain within the 3D ballistic tube
+        double effective_gate = tube_radius_m + std::min(lost_count * LOST_FRAME_GATE_EXPANSION_M, MAX_GATE_EXPANSION_M);
         double max_step_dist = effective_gate + max_vx_m_s * dt_safe;
+
+        bool physically_plausible = true;
+
+        // 1. Strict forward monotonic progress (no backward velocity or displacement beyond jitter tolerance)
+        if (raw.cx < x - backward_jitter_tolerance_m || new_vx < min_flight_vx_m_s || new_vx > max_vx_m_s) {
+            physically_plausible = false;
+        }
+
+        // 2. No ascent after apex: once descending, a free projectile cannot gain altitude in mid-air
+        if (physically_plausible && reject_ascent_after_apex && has_reached_apex) {
+            if (raw.cz > z + vertical_jitter_tolerance_m || new_vz > 0.0) {
+                physically_plausible = false;
+            }
+        }
+
+        // 3. Physical 3D Acceleration limits: gravity is -9.8 m/s^2; extreme downward or total acceleration is impossible
+        if (physically_plausible) {
+            double ax = (new_vx - vx) / dt_safe;
+            double ay = (new_vy - vy) / dt_safe;
+            double az = (new_vz - vz) / dt_safe;
+            double total_accel = std::sqrt(ax * ax + ay * ay + az * az);
+            if (total_accel > max_total_accel_m_s2 || az < min_vertical_accel_m_s2) {
+                physically_plausible = false;
+            }
+        }
+
+        // 4. Heading deviation angle: projectile momentum prevents sharp orthogonal turns into desks/obstacles
+        if (physically_plausible) {
+            double prev_speed = std::sqrt(vx * vx + vy * vy + vz * vz);
+            double step_dist = std::sqrt(dx_prev * dx_prev + dy_prev * dy_prev + dz_prev * dz_prev);
+            if (prev_speed > MIN_HEADING_SPEED_THRESHOLD_M_S && step_dist > MIN_HEADING_STEP_THRESHOLD_M) {
+                double dot = (vx * dx_prev + vy * dy_prev + vz * dz_prev) / (prev_speed * step_dist);
+                double cos_clamped = std::clamp(dot, -1.0, 1.0);
+                double deviation_deg = std::acos(cos_clamped) * DEG_TO_RAD_FACTOR;
+                if (deviation_deg > max_heading_deg) {
+                    physically_plausible = false;
+                }
+            }
+        }
+
         if (dist_pred <= effective_gate &&
             dist_prev <= max_step_dist &&
-            raw.cx >= x - MAX_BACKWARD_JITTER_M &&
-            new_vx >= min_flight_vx_m_s && new_vx <= max_vx_m_s &&
+            physically_plausible &&
             std::abs(new_vy) <= max_abs_vy_m_s &&
             new_vz >= min_vz_m_s && new_vz <= max_vz_m_s)
         {
@@ -227,6 +272,11 @@ bool BallisticTracker::update(
             y = raw.cy;
             z = raw.cz;
 
+            apex_z = std::max(apex_z, z);
+            if (vz <= 0.0 || z < apex_z - vertical_jitter_tolerance_m) {
+                has_reached_apex = true;
+            }
+
             last_stamp = stamp_sec;
             lost_count = 0;
             tracked_count++;
@@ -253,6 +303,37 @@ bool BallisticTracker::update(
             stationary_count = 0;
             return false;
         }
+
+        // Coast Tracking: Maintain smooth physical trajectory through temporary occlusion
+        if (enable_coast_prediction_tf && pred_z > landing_min_z) {
+            double drag_factor = std::clamp(1.0 - drag_coeff * dt_safe, 0.0, 1.0);
+            double pred_vx = vx * drag_factor;
+            double pred_vy = vy * drag_factor;
+            double pred_vz = vz - gravity_m_s2 * dt_safe;
+
+            x = pred_x;
+            y = pred_y;
+            z = pred_z;
+            vx = pred_vx;
+            vy = pred_vy;
+            vz = pred_vz;
+
+            apex_z = std::max(apex_z, z);
+            if (vz <= 0.0 || z < apex_z - vertical_jitter_tolerance_m) {
+                has_reached_apex = true;
+            }
+
+            last_stamp = stamp_sec;
+            tracked_count++;
+
+            out.valid = true;
+            out.cx = static_cast<float>(pred_x);
+            out.cy = static_cast<float>(pred_y);
+            out.cz = static_cast<float>(pred_z);
+            out.cluster_points_count = min_track_pts;
+            return true;
+        }
+
         return false;
     }
 

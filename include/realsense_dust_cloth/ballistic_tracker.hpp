@@ -79,6 +79,29 @@ public:
     int max_stationary_frames{8};         ///< Consecutive stationary frames in mid-air before auto-reset
     int min_track_points_limit{8};        ///< Lower bound for in-flight minimum cluster points
 
+    // =========================================================================
+    // Physical Anomaly & Ballistic Tube Guard Constants (Configurable via YAML)
+    // =========================================================================
+    static constexpr double DEFAULT_TUBE_RADIUS_M = 0.35;               ///< Flight tube search radius [m]
+    static constexpr double DEFAULT_MAX_TOTAL_ACCEL_M_S2 = 25.0;        ///< Maximum allowable physical 3D acceleration [m/s^2] (~2.5G)
+    static constexpr double DEFAULT_MIN_VERTICAL_ACCEL_M_S2 = -20.0;    ///< Maximum allowable downward vertical acceleration [m/s^2] (~-2G)
+    static constexpr double DEFAULT_MAX_HEADING_DEG = 45.0;             ///< Maximum allowable heading deflection angle [deg]
+    static constexpr double DEFAULT_BACKWARD_JITTER_TOL_M = 0.02;       ///< Forward flight backward tolerance [m]
+    static constexpr double DEFAULT_VERTICAL_JITTER_TOL_M = 0.03;       ///< Post-apex vertical measurement tolerance [m]
+
+    double tube_radius_m{DEFAULT_TUBE_RADIUS_M};
+    double max_total_accel_m_s2{DEFAULT_MAX_TOTAL_ACCEL_M_S2};
+    double min_vertical_accel_m_s2{DEFAULT_MIN_VERTICAL_ACCEL_M_S2};
+    double max_heading_deg{DEFAULT_MAX_HEADING_DEG};
+    double backward_jitter_tolerance_m{DEFAULT_BACKWARD_JITTER_TOL_M};
+    double vertical_jitter_tolerance_m{DEFAULT_VERTICAL_JITTER_TOL_M};
+    bool reject_ascent_after_apex{true};
+    bool enable_coast_prediction_tf{false};
+
+    // Flight Phase Physical State
+    bool has_reached_apex{false};       ///< True once cloth has reached apex and started descending
+    double apex_z{0.0};                 ///< Maximum recorded flight altitude [m]
+
     /**
      * @brief Reset tracker state machine to IDLE and clear tracking history.
      */

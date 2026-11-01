@@ -284,7 +284,7 @@ void ClothTrackerCudaNode::declare_and_load_parameters() {
     ballistic_tracker_.landing_min_z = this->declare_parameter("landing_min_z", 0.15);
     ballistic_tracker_.drag_coeff = this->declare_parameter("drag_coeff", 0.40);
     ballistic_tracker_.vel_smoothing_beta = this->declare_parameter("vel_smoothing_beta", 0.50);
-    ballistic_tracker_.min_flight_vx_m_s = this->declare_parameter("min_flight_vx_m_s", -1.50);
+    ballistic_tracker_.min_flight_vx_m_s = this->declare_parameter("min_flight_vx_m_s", 0.00);
     ballistic_tracker_.max_vx_m_s = this->declare_parameter("max_vx_m_s", 15.0);
     ballistic_tracker_.max_abs_vy_m_s = this->declare_parameter("max_abs_vy_m_s", 3.50);
     ballistic_tracker_.min_vz_m_s = this->declare_parameter("min_vz_m_s", -10.0);
@@ -292,6 +292,16 @@ void ClothTrackerCudaNode::declare_and_load_parameters() {
     ballistic_tracker_.max_flight_duration_sec = this->declare_parameter("max_flight_duration_sec", 2.50);
     ballistic_tracker_.min_stationary_move_m = this->declare_parameter("min_stationary_move_m", 0.12);
     ballistic_tracker_.max_stationary_frames = this->declare_parameter("max_stationary_frames", 5);
+
+    // 6. Physical Anomaly & Ballistic Tube Guard Controls
+    ballistic_tracker_.tube_radius_m = this->declare_parameter("tube_radius_m", BallisticTracker::DEFAULT_TUBE_RADIUS_M);
+    ballistic_tracker_.max_total_accel_m_s2 = this->declare_parameter("max_total_accel_m_s2", BallisticTracker::DEFAULT_MAX_TOTAL_ACCEL_M_S2);
+    ballistic_tracker_.min_vertical_accel_m_s2 = this->declare_parameter("min_vertical_accel_m_s2", BallisticTracker::DEFAULT_MIN_VERTICAL_ACCEL_M_S2);
+    ballistic_tracker_.max_heading_deg = this->declare_parameter("max_heading_deg", BallisticTracker::DEFAULT_MAX_HEADING_DEG);
+    ballistic_tracker_.backward_jitter_tolerance_m = this->declare_parameter("backward_jitter_tolerance_m", BallisticTracker::DEFAULT_BACKWARD_JITTER_TOL_M);
+    ballistic_tracker_.vertical_jitter_tolerance_m = this->declare_parameter("vertical_jitter_tolerance_m", BallisticTracker::DEFAULT_VERTICAL_JITTER_TOL_M);
+    ballistic_tracker_.reject_ascent_after_apex = this->declare_parameter("reject_ascent_after_apex", true);
+    ballistic_tracker_.enable_coast_prediction_tf = this->declare_parameter("enable_coast_prediction_tf", true);
 
     // Synchronize CUDA filter launch gate & tracking points with tracker parameters
     filter_cfg_.min_tracking_points = ballistic_tracker_.min_track_points_limit;
@@ -301,7 +311,7 @@ void ClothTrackerCudaNode::declare_and_load_parameters() {
     filter_cfg_.launch_max_y = static_cast<float>(ballistic_tracker_.launch_max_y);
     filter_cfg_.launch_min_z = static_cast<float>(ballistic_tracker_.launch_min_z);
     filter_cfg_.launch_max_z = static_cast<float>(ballistic_tracker_.launch_max_z);
-    filter_cfg_.gate_radius_m = static_cast<float>(ballistic_tracker_.gate_radius_m);
+    filter_cfg_.gate_radius_m = static_cast<float>(ballistic_tracker_.tube_radius_m);
 
     landing_position_topic_ = this->declare_parameter("landing_position_topic", "/cloth/landing_position");
 
