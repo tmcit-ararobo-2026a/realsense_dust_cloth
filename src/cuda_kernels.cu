@@ -1,5 +1,6 @@
 #include "realsense_dust_cloth/cuda_kernels.cuh"
 #include <cuda_runtime.h>
+#include <math_constants.h>
 #include <device_launch_parameters.h>
 #include <cmath>
 #include <stdexcept>
@@ -67,10 +68,6 @@ namespace realsense_dust_cloth
             CameraIntrinsics intrin,
             CameraPoseConfig pose,
             FilterConfig filter,
-            float3 pred_pos,
-            bool has_prediction,
-            MapFilterView map,
-            bool apply_tracking_gate,
             float3 *__restrict__ valid_points,
             int *__restrict__ valid_count,
             int max_valid_points)
@@ -93,12 +90,13 @@ namespace realsense_dust_cloth
             // 2D Depth Continuity Check (Parameterizable via FilterConfig / YAML)
             if (filter.continuity_min_neighbors > 0)
             {
-                if (u < 2 || u >= intrin.width - 2 || v < 2 || v >= intrin.height - 2)
+                const int radius = filter.continuity_radius_px;
+                if (u < radius || u >= intrin.width - radius || v < radius || v >= intrin.height - radius)
                     return;
-                float z_up = depth[(v - 2) * intrin.width + u] * intrin.depth_scale;
-                float z_dn = depth[(v + 2) * intrin.width + u] * intrin.depth_scale;
-                float z_lf = depth[v * intrin.width + (u - 2)] * intrin.depth_scale;
-                float z_rt = depth[v * intrin.width + (u + 2)] * intrin.depth_scale;
+                float z_up = depth[(v - radius) * intrin.width + u] * intrin.depth_scale;
+                float z_dn = depth[(v + radius) * intrin.width + u] * intrin.depth_scale;
+                float z_lf = depth[v * intrin.width + (u - radius)] * intrin.depth_scale;
+                float z_rt = depth[v * intrin.width + (u + radius)] * intrin.depth_scale;
                 int valid_neighbors = 0;
                 if (z_up > 0.0f && fabsf(z_raw - z_up) <= filter.continuity_thresh_m) valid_neighbors++;
                 if (z_dn > 0.0f && fabsf(z_raw - z_dn) <= filter.continuity_thresh_m) valid_neighbors++;
@@ -132,7 +130,6 @@ namespace realsense_dust_cloth
             float z_rob = pose.height_offset_m + (z_cam * sin_p + z_roll * cos_p);
 
 
-            if (!retain_map_point(map, make_float3(x_rob,y_rob,z_rob), pred_pos)) return;
 
             // PassThrough in base_link
             if (x_rob < filter.min_x_m || x_rob > filter.max_x_m ||
@@ -140,31 +137,6 @@ namespace realsense_dust_cloth
                 z_rob < filter.min_z_m || z_rob > filter.max_z_m)
             {
                 return;
-            }
-
-            // Restrict points to the active 3D gate (padded by max_cloth_size_m so large objects
-            // crossing the gate boundary are not artificially sliced into small cloth-sized clusters,
-            // while far background/wall noise cannot overflow the voxel buffer or chain-merge).
-            if (apply_tracking_gate && has_prediction)
-            {
-                float dx = x_rob - pred_pos.x;
-                float dy = y_rob - pred_pos.y;
-                float dz = z_rob - pred_pos.z;
-                float max_gate_r = filter.gate_radius_m + filter.max_cloth_size_m;
-                if (dx * dx + dy * dy + dz * dz > max_gate_r * max_gate_r)
-                {
-                    return;
-                }
-            }
-            else if (apply_tracking_gate)
-            {
-                float pad = filter.max_cloth_size_m;
-                if (x_rob < filter.launch_min_x - pad || x_rob > filter.launch_max_x + pad ||
-                    y_rob < filter.launch_min_y - pad || y_rob > filter.launch_max_y + pad ||
-                    z_rob < filter.launch_min_z - pad || z_rob > filter.launch_max_z + pad)
-                {
-                    return;
-                }
             }
 
             int out_idx = atomicAdd(valid_count, 1);
@@ -355,7 +327,7 @@ namespace realsense_dust_cloth
 
                 int best_count = 0;
                 int best_idx = -1;
-                float best_score = -1e9f;
+                float best_score = -CUDART_INF_F;
 
                 int min_pts = has_prediction ? filter.min_tracking_points : filter.min_cluster_points;
                 for (int i = 0; i < count; ++i)
@@ -396,10 +368,8 @@ namespace realsense_dust_cloth
                         }
 
                         // Close to ballistic prediction: highest priority (proximity strictly dominates over cluster size)
-                        constexpr float PRED_BASE_SCORE = 3000.0f;
-                        constexpr float PRED_DIST_PENALTY = 1000.0f;
-                        constexpr float CLUSTER_SIZE_WEIGHT = 0.01f;
-                        score = PRED_BASE_SCORE - dist * PRED_DIST_PENALTY + static_cast<float>(sz) * CLUSTER_SIZE_WEIGHT;
+
+                        score = -dist * filter.prediction_distance_weight + static_cast<float>(sz) * filter.cluster_size_weight;
                     }
                     else
                     {
@@ -409,10 +379,9 @@ namespace realsense_dust_cloth
                             c_cz >= filter.launch_min_z && c_cz <= filter.launch_max_z)
                         {
                             // Favor the most forward cluster (away from hand/launcher); size is only a tiebreaker so a large hand cannot outrank the cloth
-                            constexpr float LAUNCH_BASE_SCORE = 1000.0f;
-                            constexpr float LAUNCH_FORWARD_WEIGHT = 50.0f;
-                            constexpr float CLUSTER_SIZE_WEIGHT = 0.1f;
-                            score = LAUNCH_BASE_SCORE + c_cx * LAUNCH_FORWARD_WEIGHT + static_cast<float>(sz) * CLUSTER_SIZE_WEIGHT;
+
+
+                            score = c_cx * filter.launch_forward_weight + static_cast<float>(sz) * filter.cluster_size_weight;
                         }
                         else
                         {
@@ -458,15 +427,15 @@ namespace realsense_dust_cloth
         cudaMalloc(&ctx.d_valid_points, ctx.max_pixels * sizeof(float3));
         cudaMalloc(&ctx.d_valid_count, sizeof(int));
 
-        cudaMalloc(&ctx.d_voxel_points, CudaTrackerContext::MAX_VOXEL_POINTS * sizeof(float3));
+        cudaMalloc(&ctx.d_voxel_points, ctx.max_voxel_points * sizeof(float3));
         cudaMalloc(&ctx.d_voxel_count, sizeof(int));
-        cudaMalloc(&ctx.d_hash_keys, CudaTrackerContext::HASH_TABLE_SIZE * sizeof(uint64_t));
+        cudaMalloc(&ctx.d_hash_keys, ctx.hash_table_size * sizeof(uint64_t));
 
-        cudaMalloc(&ctx.d_parent, CudaTrackerContext::MAX_VOXEL_POINTS * sizeof(int));
-        cudaMalloc(&ctx.d_cluster_sizes, CudaTrackerContext::MAX_VOXEL_POINTS * sizeof(int));
-        cudaMalloc(&ctx.d_cluster_min, CudaTrackerContext::MAX_VOXEL_POINTS * sizeof(float3));
-        cudaMalloc(&ctx.d_cluster_max, CudaTrackerContext::MAX_VOXEL_POINTS * sizeof(float3));
-        cudaMalloc(&ctx.d_cluster_sum, CudaTrackerContext::MAX_VOXEL_POINTS * sizeof(float3));
+        cudaMalloc(&ctx.d_parent, ctx.max_voxel_points * sizeof(int));
+        cudaMalloc(&ctx.d_cluster_sizes, ctx.max_voxel_points * sizeof(int));
+        cudaMalloc(&ctx.d_cluster_min, ctx.max_voxel_points * sizeof(float3));
+        cudaMalloc(&ctx.d_cluster_max, ctx.max_voxel_points * sizeof(float3));
+        cudaMalloc(&ctx.d_cluster_sum, ctx.max_voxel_points * sizeof(float3));
 
         cudaMalloc(&ctx.d_result, sizeof(ClothTrackingResult));
         cudaMallocHost(&ctx.h_result_pinned, sizeof(ClothTrackingResult));
@@ -588,94 +557,6 @@ namespace realsense_dust_cloth
         return final_res;
     }
 
-    ClothTrackingResult process_depth_frame_cuda(
-        CudaTrackerContext &ctx,
-        const uint16_t *host_depth_ptr,
-        const CameraIntrinsics &intrin,
-        const CameraPoseConfig &pose,
-        const FilterConfig &filter,
-        std::vector<float3> *out_cluster_points,
-        std::vector<float3> *out_filtered_points,
-        float pred_x,
-        float pred_y,
-        float pred_z,
-        bool has_prediction,
-        const MapFilterView& map)
-    {
-        ClothTrackingResult empty_res;
-        if (!ctx.initialized || host_depth_ptr == nullptr)
-            return empty_res;
-
-        int total_pixels = intrin.width * intrin.height;
-        if (total_pixels > ctx.max_pixels)
-            return empty_res;
-
-        // 1. Copy Depth Frame to Device asynchronously
-        cudaMemcpyAsync(ctx.d_depth, host_depth_ptr, total_pixels * sizeof(uint16_t), cudaMemcpyHostToDevice, ctx.stream);
-        cudaMemsetAsync(ctx.d_valid_count, 0, sizeof(int), ctx.stream);
-
-        // 2. Kernel 1: Back-project & PassThrough with Background Subtraction
-        dim3 block2d(32, 16);
-        dim3 grid2d((intrin.width + block2d.x - 1) / block2d.x, (intrin.height + block2d.y - 1) / block2d.y);
-
-        kernel_backproject_and_passthrough<<<grid2d, block2d, 0, ctx.stream>>>(
-            ctx.d_depth,
-            intrin,
-            pose,
-            filter,
-            make_float3(pred_x, pred_y, pred_z),
-            has_prediction,
-            map,
-            true,
-            ctx.d_valid_points,
-            ctx.d_valid_count,
-            ctx.max_pixels);
-
-        // Check count of valid points
-        int h_valid_count = 0;
-        cudaMemcpyAsync(&h_valid_count, ctx.d_valid_count, sizeof(int), cudaMemcpyDeviceToHost, ctx.stream);
-        cudaStreamSynchronize(ctx.stream);
-
-        int min_pts = has_prediction ? filter.min_tracking_points : filter.min_cluster_points;
-        if (h_valid_count < min_pts)
-        {
-            return empty_res;
-        }
-
-        int active_valid = (h_valid_count > ctx.max_pixels) ? ctx.max_pixels : h_valid_count;
-
-        // 3. Kernel 2: Voxel Downsample
-        cudaMemsetAsync(ctx.d_voxel_count, 0, sizeof(int), ctx.stream);
-        cudaMemsetAsync(ctx.d_hash_keys, 0xFF, CudaTrackerContext::HASH_TABLE_SIZE * sizeof(uint64_t), ctx.stream);
-
-        int block1d = 256;
-        int grid_voxel = (active_valid + block1d - 1) / block1d;
-
-        kernel_voxel_downsample<<<grid_voxel, block1d, 0, ctx.stream>>>(
-            ctx.d_valid_points,
-            active_valid,
-            filter.voxel_size_m,
-            ctx.d_hash_keys,
-            ctx.d_voxel_points,
-            ctx.d_voxel_count,
-            CudaTrackerContext::MAX_VOXEL_POINTS,
-            CudaTrackerContext::HASH_TABLE_SIZE);
-
-        int h_voxel_count = 0;
-        cudaMemcpyAsync(&h_voxel_count, ctx.d_voxel_count, sizeof(int), cudaMemcpyDeviceToHost, ctx.stream);
-        cudaStreamSynchronize(ctx.stream);
-
-        if (h_voxel_count < min_pts)
-        {
-            return empty_res;
-        }
-
-        int num_points = (h_voxel_count > CudaTrackerContext::MAX_VOXEL_POINTS) ? CudaTrackerContext::MAX_VOXEL_POINTS : h_voxel_count;
-
-        return cluster_voxels(ctx, num_points, filter, out_cluster_points, out_filtered_points,
-            pred_x, pred_y, pred_z, has_prediction);
-    }
-
     std::vector<float3> prepare_depth_cloud_cuda(CudaTrackerContext& ctx, const uint16_t* depth,
         const CameraIntrinsics& intrin, const CameraPoseConfig& pose, const FilterConfig& filter) {
         const int pixels=intrin.width*intrin.height;
@@ -684,7 +565,6 @@ namespace realsense_dust_cloth
         cudaMemsetAsync(ctx.d_valid_count,0,sizeof(int),ctx.stream);
         dim3 block(32,16), grid((intrin.width+31)/32,(intrin.height+15)/16);
         kernel_backproject_and_passthrough<<<grid,block,0,ctx.stream>>>(ctx.d_depth,intrin,pose,filter,
-            make_float3(0,0,0),false,MapFilterView{},false,
             ctx.d_valid_points,ctx.d_valid_count,ctx.max_pixels);
         int count=0;
         cudaMemcpyAsync(&count,ctx.d_valid_count,sizeof(int),cudaMemcpyDeviceToHost,ctx.stream);
@@ -692,14 +572,14 @@ namespace realsense_dust_cloth
         if (count<=0) return {};
         if (count>ctx.max_pixels) throw std::runtime_error("ROI point capacity exceeded");
         cudaMemsetAsync(ctx.d_voxel_count,0,sizeof(int),ctx.stream);
-        cudaMemsetAsync(ctx.d_hash_keys,0xFF,CudaTrackerContext::HASH_TABLE_SIZE*sizeof(uint64_t),ctx.stream);
+        cudaMemsetAsync(ctx.d_hash_keys,0xFF,ctx.hash_table_size*sizeof(uint64_t),ctx.stream);
         kernel_voxel_downsample<<<(count+255)/256,256,0,ctx.stream>>>(ctx.d_valid_points,count,
             filter.voxel_size_m,ctx.d_hash_keys,ctx.d_voxel_points,ctx.d_voxel_count,
-            CudaTrackerContext::MAX_VOXEL_POINTS,CudaTrackerContext::HASH_TABLE_SIZE);
+            ctx.max_voxel_points,ctx.hash_table_size);
         int voxels=0;
         cudaMemcpyAsync(&voxels,ctx.d_voxel_count,sizeof(int),cudaMemcpyDeviceToHost,ctx.stream);
         cudaStreamSynchronize(ctx.stream);
-        if (voxels>CudaTrackerContext::MAX_VOXEL_POINTS)
+        if (voxels>ctx.max_voxel_points)
             throw std::runtime_error("ROI voxel capacity exceeded; increase voxel_size_m or narrow ROI");
         std::vector<float3> output(voxels);
         if (voxels) cudaMemcpy(output.data(),ctx.d_voxel_points,voxels*sizeof(float3),cudaMemcpyDeviceToHost);
@@ -731,7 +611,7 @@ namespace realsense_dust_cloth
         if (filtered) *filtered=selected;
         const int minimum=predicted?filter.min_tracking_points:filter.min_cluster_points;
         if (selected.size()<static_cast<size_t>(minimum)) return {};
-        if (selected.size()>CudaTrackerContext::MAX_VOXEL_POINTS)
+        if (selected.size()>ctx.max_voxel_points)
             throw std::runtime_error("Dynamic point capacity exceeded");
         cudaMemcpyAsync(ctx.d_voxel_points,selected.data(),selected.size()*sizeof(float3),
             cudaMemcpyHostToDevice,ctx.stream);

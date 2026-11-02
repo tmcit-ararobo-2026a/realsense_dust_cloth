@@ -3,7 +3,6 @@
 #include <cstdint>
 #include <vector>
 #include <cuda_runtime.h>
-#include "realsense_dust_cloth/map_background.hpp"
 
 namespace realsense_dust_cloth
 {
@@ -51,6 +50,7 @@ namespace realsense_dust_cloth
 
         // 2D Edge Continuity (Configurable via YAML)
         float continuity_thresh_m{0.30f};       // エッジ連続性チェックの許容深度差 (m)
+        int continuity_radius_px{2};
         int continuity_min_neighbors{2};        // 4近傍のうち必要な連続ピクセル数 (0: 無効, 1〜4)
 
         // Launch Gate Bounds & Ballistic Prioritization
@@ -61,6 +61,9 @@ namespace realsense_dust_cloth
         float launch_min_z{0.50f};
         float launch_max_z{2.00f};
         float gate_radius_m{0.80f};
+        float prediction_distance_weight{1000.0f};
+        float cluster_size_weight{0.1f};
+        float launch_forward_weight{50.0f};
     };
 
     struct ClothTrackingResult
@@ -85,12 +88,12 @@ namespace realsense_dust_cloth
         int *d_valid_count{nullptr};
 
         // Voxel downsampled points
-        static constexpr int MAX_VOXEL_POINTS = 8192;
+        int max_voxel_points{8192};
         float3 *d_voxel_points{nullptr};
         int *d_voxel_count{nullptr};
 
         // Spatial hash table for fast voxelization
-        static constexpr int HASH_TABLE_SIZE = 32768; // Power of 2
+        int hash_table_size{32768}; // Power of 2, configured before allocation
         uint64_t *d_hash_keys{nullptr};
 
         // Clustering Union-Find & labels
@@ -118,19 +121,5 @@ namespace realsense_dust_cloth
     ClothTrackingResult process_point_cloud_cuda(CudaTrackerContext&, const std::vector<float3>&,
         const FilterConfig&, std::vector<float3>*, std::vector<float3>*,
         float, float, float, bool);
-
-    ClothTrackingResult process_depth_frame_cuda(
-        CudaTrackerContext &ctx,
-        const uint16_t *host_depth_ptr,
-        const CameraIntrinsics &intrin,
-        const CameraPoseConfig &pose,
-        const FilterConfig &filter,
-        std::vector<float3> *out_cluster_points = nullptr,
-        std::vector<float3> *out_filtered_points = nullptr,
-        float pred_x = 0.0f,
-        float pred_y = 0.0f,
-        float pred_z = 0.0f,
-        bool has_prediction = false,
-        const MapFilterView& map = MapFilterView{});
 
 } // namespace realsense_dust_cloth

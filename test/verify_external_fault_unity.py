@@ -6,7 +6,7 @@ import rclpy
 from geometry_msgs.msg import PointStamped,Twist
 from std_msgs.msg import Bool,Float32,String
 p=argparse.ArgumentParser();p.add_argument('--params-file',required=True);p.add_argument('--localization-pid',type=int,required=True);p.add_argument('--output',required=True);a=p.parse_args()
-assert os.environ.get('ROS_DOMAIN_ID')=='91','Dedicated Unity test domain required'
+assert os.environ.get('ROS_DOMAIN_ID', '0') != '0', 'Use a dedicated nonzero test domain'
 out=Path(a.output);out.mkdir(parents=True,exist_ok=True)
 rclpy.init();node=rclpy.create_node('external_cloud_fault_test')
 points=[];landings=[];states=[];ready=[False];tracking=['IDLE']
@@ -27,7 +27,7 @@ def wait(pred,sec):
         run(.02)
         if pred():return True
     return False
-f=(out/'tracker.log').open('w');proc=subprocess.Popen(['ros2','launch','realsense_dust_cloth','cloth_tracker.launch.py','params_file:='+str(Path(a.params_file).resolve()),'enable_analyzer:=false'],stdout=f,stderr=subprocess.STDOUT,start_new_session=True)
+f=(out/'tracker.log').open('w');proc=subprocess.Popen(['ros2','launch','realsense_dust_cloth','cloth_tracker.launch.py','params_file:='+str(Path(a.params_file).resolve())],stdout=f,stderr=subprocess.STDOUT,start_new_session=True)
 suspended=False;result={'passed':False}
 try:
     assert wait(lambda:ready[0],15),'External input not ready'
@@ -42,7 +42,7 @@ try:
     before=len(points);start=len(states)
     os.kill(a.localization_pid,signal.SIGSTOP);suspended=True
     run(.9)
-    assert 'EXTERNAL_RESULT_TIMEOUT' in states[start:],'Missing external timeout status'
+    assert 'RESULT_TIMEOUT' in states[start:],'Missing external timeout status'
     assert not ready[0],'Ready stayed true during localization outage'
     assert tracking[0]=='LOST',f'Outage did not end tracking: {tracking[0]}'
     assert not landings,'Outage falsely published landing'

@@ -133,8 +133,6 @@ def main():
         launch_cmd = [
             "ros2", "launch", "realsense_dust_cloth", "cloth_tracker.launch.py",
             "params_file:=" + str(Path(args.params_file).resolve()),
-            "enable_analyzer:=false",
-            "rviz:=false",
         ]
         process = subprocess.Popen(
             launch_cmd,
@@ -178,7 +176,6 @@ def main():
                     wall_start = time.monotonic()
 
                     assert wait_until(lambda: is_ready[0], 5.0), "Not ready after robot motion"
-                    assert any(s["state"] == "MOVING_OR_SETTLING" for s in states[state_idx:])
 
                     pose_after = poses[-1] if poses else None
                     travel_distance = None

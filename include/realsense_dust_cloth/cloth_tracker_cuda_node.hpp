@@ -16,13 +16,10 @@
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
-#include <geometry_msgs/msg/twist.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <tf2_ros/transform_broadcaster.h>
-#include <tf2_ros/buffer.h>
-#include <tf2_ros/transform_listener.h>
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <tf2_ros/static_transform_broadcaster.h>
@@ -46,8 +43,11 @@ public:
 
 private:
     void declare_and_load_parameters();
-    void setup_map_background();
-    bool external_dynamic_cloud_{false};
+    void setup_tracking_status();
+    std::string input_source_;
+    std::string cropped_replay_topic_;
+    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_cropped_replay_;
+    void publish_filter_input(const std::vector<float3>&, const rclcpp::Time&);
     std::string cropped_cloud_topic_, dynamic_cloud_topic_;
     double external_keep_radius_m_{0.3};
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_filter_prediction_;
@@ -62,22 +62,18 @@ private:
     void publish_tracking_result(const ClothTrackingResult&, const rclcpp::Time&,
         const std::vector<float3>&, const std::vector<float3>&);
 
-    bool prepare_map_frame(const rclcpp::Time& stamp);
     void publish_background_state(const std::string&, bool);
     std::recursive_mutex processing_mutex_;
-    std::string map_frame_;
-    MapBackground map_background_;
-    MapFilterView map_filter_;
-    std::shared_ptr<tf2_ros::Buffer> map_tf_buffer_;
-    std::shared_ptr<tf2_ros::TransformListener> map_tf_listener_;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_background_status_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr pub_ready_;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_tracking_state_;
-    double map_tf_wait_sec_{0.15}, map_max_image_age_sec_{0.25};
-    double map_tf_poll_sec_{0.002};
-    double map_pose_loss_reset_sec_{0.25}, map_last_pose_sec_{-1.0};
-    int map_depth_queue_size_{8};
-    bool map_processing_failed_{false};
+    double bag_rewind_tolerance_sec_{};
+    double min_trajectory_step_m_{}, static_marker_interval_sec_{};
+    int max_trajectory_points_{}, publisher_queue_size_{}, color_queue_size_{};
+    int warning_log_throttle_ms_{}, status_log_throttle_ms_{}, realsense_wait_timeout_ms_{};
+    std::string depth_optical_frame_, color_optical_frame_, cloth_tf_frame_;
+    double image_max_age_sec_{};
+    int depth_queue_size_{};
     void publish_static_transforms();
 
     void camera_info_callback(const sensor_msgs::msg::CameraInfo::ConstSharedPtr msg);
@@ -96,7 +92,6 @@ private:
     bool intrinsics_ready_{false};
     bool publish_debug_cloud_{false};
     bool use_direct_realsense_{false};
-    bool enable_ballistic_filter_{true};
     double trajectory_history_sec_{3.0};
 
     // Trajectory history

@@ -1,23 +1,26 @@
 #include "realsense_dust_cloth/cloth_tracker_cuda_node.hpp"
 #include <sensor_msgs/point_cloud2_iterator.hpp>
+#include <type_traits>
 
 namespace realsense_dust_cloth {
 
 namespace {
-constexpr float DEFAULT_DEPTH_FOCAL_LENGTH_PX = 425.0f;
-constexpr double DEFAULT_COLOR_FOCAL_LENGTH_PX = 600.0;
+template<class T> T required_parameter(rclcpp::Node& node, const std::string& name) {
+    rclcpp::ParameterType type;
+    if constexpr (std::is_same_v<T, bool>) type = rclcpp::ParameterType::PARAMETER_BOOL;
+    else if constexpr (std::is_same_v<T, int>) type = rclcpp::ParameterType::PARAMETER_INTEGER;
+    else if constexpr (std::is_same_v<T, double>) type = rclcpp::ParameterType::PARAMETER_DOUBLE;
+    else type = rclcpp::ParameterType::PARAMETER_STRING;
+    node.declare_parameter(name, type);
+    const auto value = node.get_parameter(name).get_value<T>();
+    if constexpr (std::is_same_v<T, double>) {
+        if (!std::isfinite(value)) throw std::invalid_argument("Non-finite parameter: " + name);
+    }
+    return value;
+}
 constexpr float METERS_TO_MM = 1000.0f;
 constexpr float MAX_UINT16_DEPTH_MM = 65535.0f;
-constexpr double BAG_LOOP_RESET_TOLERANCE_SEC = 0.5;
-constexpr double MIN_TRAJECTORY_STEP_M = 0.005;
-constexpr size_t MAX_TRAJECTORY_POINTS = 1000;
-constexpr double STATIC_MARKER_PUBLISH_INTERVAL_SEC = 0.10;
-constexpr unsigned int RS_WAIT_TIMEOUT_MS = 1000;
 
-constexpr size_t DEFAULT_QOS_DEPTH = 10;
-constexpr size_t SENSOR_QOS_DEPTH = 250;
-constexpr int WARN_THROTTLE_MS = 5000;
-constexpr int STATUS_LOG_THROTTLE_MS = 1000;
 
 constexpr int ROTATION_90_CW_DEG = 90;
 constexpr int ROTATION_180_DEG = 180;
@@ -25,9 +28,6 @@ constexpr int ROTATION_270_CW_DEG = 270;
 constexpr double DEG_TO_RAD = M_PI / 180.0;
 constexpr size_t PLUMB_BOB_COEFF_COUNT = 5;
 
-constexpr const char* COLOR_OPTICAL_FRAME = "camera_color_optical_frame";
-constexpr const char* DEPTH_OPTICAL_FRAME = "camera_depth_optical_frame";
-constexpr const char* CLOTH_TF_FRAME = "flying_cloth";
 
 sensor_msgs::msg::Image mat_to_image_msg(const cv::Mat& mat, const rclcpp::Time& stamp, const std::string& frame_id) {
     sensor_msgs::msg::Image img;
@@ -82,56 +82,54 @@ sensor_msgs::msg::CameraInfo build_camera_info_msg(
 ClothTrackerCudaNode::ClothTrackerCudaNode(const rclcpp::NodeOptions& options)
     : Node("cloth_tracker_cuda_node", options) {
     declare_and_load_parameters();
-    setup_map_background();
+    setup_tracking_status();
 
     tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
     tf_static_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
     publish_static_transforms();
-    pub_point_ = this->create_publisher<geometry_msgs::msg::PointStamped>("/cloth/position", DEFAULT_QOS_DEPTH);
-    pub_landing_pos_ = this->create_publisher<geometry_msgs::msg::PointStamped>(landing_position_topic_, DEFAULT_QOS_DEPTH);
-    pub_marker_ = this->create_publisher<visualization_msgs::msg::Marker>("/cloth/trajectory_marker", DEFAULT_QOS_DEPTH);
-    pub_path_ = this->create_publisher<nav_msgs::msg::Path>("/cloth/measured_path", DEFAULT_QOS_DEPTH);
-    pub_rotated_color_ = this->create_publisher<sensor_msgs::msg::Image>("/cloth/camera_view", DEFAULT_QOS_DEPTH);
+    pub_point_ = this->create_publisher<geometry_msgs::msg::PointStamped>("/cloth/position", publisher_queue_size_);
+    pub_landing_pos_ = this->create_publisher<geometry_msgs::msg::PointStamped>(landing_position_topic_, publisher_queue_size_);
+    pub_marker_ = this->create_publisher<visualization_msgs::msg::Marker>("/cloth/trajectory_marker", publisher_queue_size_);
+    pub_path_ = this->create_publisher<nav_msgs::msg::Path>("/cloth/measured_path", publisher_queue_size_);
+    pub_rotated_color_ = this->create_publisher<sensor_msgs::msg::Image>("/cloth/camera_view", publisher_queue_size_);
 
     // Debug publishers (always available for RViz visualization & verification)
-    pub_roi_markers_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("/cloth/debug/roi_markers", DEFAULT_QOS_DEPTH);
-    pub_cluster_cloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloth/debug/cluster_points", DEFAULT_QOS_DEPTH);
-    pub_filtered_cloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloth/debug/filtered_points", DEFAULT_QOS_DEPTH);
+    pub_roi_markers_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("/cloth/debug/roi_markers", publisher_queue_size_);
+    pub_cluster_cloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloth/debug/cluster_points", publisher_queue_size_);
+    pub_filtered_cloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloth/debug/filtered_points", publisher_queue_size_);
 
-    if (external_dynamic_cloud_) setup_external_cloud();
+    setup_external_cloud();
 
     // Initialize CUDA memory and stream
     if (!init_cuda_tracker(cuda_ctx_, camera_intrin_.width, camera_intrin_.height)) {
-        RCLCPP_ERROR(this->get_logger(), "Failed to initialize CUDA tracker context!");
-        return;
+        throw std::runtime_error("Failed to initialize CUDA tracker context");
     }
 
+    if (input_source_ == "depth") {
     const std::string depth_topic = this->get_parameter("depth_topic").as_string();
     const std::string camera_info_topic = this->get_parameter("camera_info_topic").as_string();
     const std::string color_topic = this->get_parameter("color_topic").as_string();
 
     if (use_direct_realsense_) {
 #ifdef HAVE_REALSENSE2
-        pub_raw_depth_ = this->create_publisher<sensor_msgs::msg::Image>(depth_topic, DEFAULT_QOS_DEPTH);
-        pub_depth_info_ = this->create_publisher<sensor_msgs::msg::CameraInfo>(camera_info_topic, DEFAULT_QOS_DEPTH);
-        pub_raw_color_ = this->create_publisher<sensor_msgs::msg::Image>(color_topic, DEFAULT_QOS_DEPTH);
-        pub_compressed_color_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("/camera/camera/color/image_raw/compressed", DEFAULT_QOS_DEPTH);
-        pub_color_info_ = this->create_publisher<sensor_msgs::msg::CameraInfo>("/camera/camera/color/camera_info", DEFAULT_QOS_DEPTH);
+        pub_raw_depth_ = this->create_publisher<sensor_msgs::msg::Image>(depth_topic, publisher_queue_size_);
+        pub_depth_info_ = this->create_publisher<sensor_msgs::msg::CameraInfo>(camera_info_topic, publisher_queue_size_);
+        pub_raw_color_ = this->create_publisher<sensor_msgs::msg::Image>(color_topic, publisher_queue_size_);
+        pub_compressed_color_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("/camera/camera/color/image_raw/compressed", publisher_queue_size_);
+        pub_color_info_ = this->create_publisher<sensor_msgs::msg::CameraInfo>("/camera/camera/color/camera_info", publisher_queue_size_);
 
         RCLCPP_INFO(this->get_logger(), "Starting Direct librealsense2 C++ API loop (Hardware Native)...");
         is_running_ = true;
         realsense_thread_ = std::thread(&ClothTrackerCudaNode::run_direct_realsense_loop, this);
 #else
-        RCLCPP_WARN(this->get_logger(), "librealsense2 library not compiled in! Falling back to ROS 2 Image subscription.");
-        use_direct_realsense_ = false;
+        throw std::runtime_error("use_direct_realsense=true requires a librealsense2 build; select the Unity/rosbag YAML for topic input");
 #endif
     }
 
     if (!use_direct_realsense_) {
-        rclcpp::QoS depth_qos(map_depth_queue_size_);
-        depth_qos.reliable();
+        auto depth_qos = rclcpp::SensorDataQoS().keep_last(depth_queue_size_);
 
-        rclcpp::QoS color_qos(SENSOR_QOS_DEPTH);
+        rclcpp::QoS color_qos(color_queue_size_);
         color_qos.best_effort();
 
         depth_cb_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
@@ -144,7 +142,7 @@ ClothTrackerCudaNode::ClothTrackerCudaNode(const rclcpp::NodeOptions& options)
         color_sub_opts.callback_group = color_cb_group_;
 
         sub_camera_info_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
-            camera_info_topic, DEFAULT_QOS_DEPTH,
+            camera_info_topic, rclcpp::SensorDataQoS(),
             std::bind(&ClothTrackerCudaNode::camera_info_callback, this, std::placeholders::_1)
         );
 
@@ -172,6 +170,8 @@ ClothTrackerCudaNode::ClothTrackerCudaNode(const rclcpp::NodeOptions& options)
                     depth_topic.c_str(), color_topic.c_str());
     }
 
+    } // depth input
+
     // Start asynchronous color worker thread
     color_worker_running_ = enable_color_stream_;
     if (enable_color_stream_) color_worker_thread_ = std::thread(&ClothTrackerCudaNode::color_worker_loop, this);
@@ -198,114 +198,137 @@ ClothTrackerCudaNode::~ClothTrackerCudaNode() {
 // =============================================================================
 
 void ClothTrackerCudaNode::declare_and_load_parameters() {
+    bag_rewind_tolerance_sec_ = required_parameter<double>(*this, "bag_rewind_tolerance_sec");
+    min_trajectory_step_m_ = required_parameter<double>(*this, "min_trajectory_step_m");
+    max_trajectory_points_ = required_parameter<int>(*this, "max_trajectory_points");
+    static_marker_interval_sec_ = required_parameter<double>(*this, "static_marker_interval_sec");
+    realsense_wait_timeout_ms_ = required_parameter<int>(*this, "realsense_wait_timeout_ms");
+    publisher_queue_size_ = required_parameter<int>(*this, "publisher_queue_size");
+    color_queue_size_ = required_parameter<int>(*this, "color_queue_size");
+    warning_log_throttle_ms_ = required_parameter<int>(*this, "warning_log_throttle_ms");
+    status_log_throttle_ms_ = required_parameter<int>(*this, "status_log_throttle_ms");
+    color_optical_frame_ = required_parameter<std::string>(*this, "color_optical_frame");
+    depth_optical_frame_ = required_parameter<std::string>(*this, "depth_optical_frame");
+    cloth_tf_frame_ = required_parameter<std::string>(*this, "cloth_tf_frame");
+
     // 1. Topic Names & Connection Mode
-    this->declare_parameter("tracking_mode", "map");
-    this->declare_parameter("points_topic", "/camera/camera/depth/color/points");
-    this->declare_parameter("depth_topic", "/camera/camera/depth/image_rect_raw");
-    this->declare_parameter("camera_info_topic", "/camera/camera/depth/camera_info");
-    this->declare_parameter("color_topic", "/camera/camera/color/image_raw");
-    use_direct_realsense_ = this->declare_parameter("use_direct_realsense", false);
+    required_parameter<std::string>(*this, "depth_topic");
+    required_parameter<std::string>(*this, "camera_info_topic");
+    required_parameter<std::string>(*this, "color_topic");
+    use_direct_realsense_ = required_parameter<bool>(*this, "use_direct_realsense");
 
     // 2. Camera Frames & Physical Mount Offsets
-    camera_parent_frame_ = this->declare_parameter("camera_parent_frame", "base_link");
-    camera_frame_ = this->declare_parameter("camera_frame", "camera_link");
-    publish_static_tf_ = this->declare_parameter("publish_static_tf", true);
-    camera_intrin_.width = this->declare_parameter("camera_width", 848);
-    camera_intrin_.height = this->declare_parameter("camera_height", 480);
-    camera_pose_.pitch_deg = static_cast<float>(this->declare_parameter("camera_pitch_deg", 20.0));
-    camera_pose_.roll_deg = static_cast<float>(this->declare_parameter("camera_roll_deg", 90.0));
-    camera_pose_.x_offset_m = static_cast<float>(this->declare_parameter("camera_x_offset_m", 0.50));
-    camera_pose_.height_offset_m = static_cast<float>(this->declare_parameter("camera_height_offset_m", 1.00));
-    color_rotation_deg_ = this->declare_parameter("color_rotation_deg", 90);
-    depth_fps_ = this->declare_parameter("depth_fps", 60);
-    rs_laser_power_ = this->declare_parameter("rs_laser_power", -1.0);
-    rs_exposure_us_ = this->declare_parameter("rs_exposure_us", -1);
+    camera_parent_frame_ = required_parameter<std::string>(*this, "camera_parent_frame");
+    camera_frame_ = required_parameter<std::string>(*this, "camera_frame");
+    publish_static_tf_ = required_parameter<bool>(*this, "publish_static_tf");
+    camera_intrin_.width = required_parameter<int>(*this, "camera_width");
+    camera_intrin_.height = required_parameter<int>(*this, "camera_height");
+    camera_pose_.pitch_deg = static_cast<float>(required_parameter<double>(*this, "camera_pitch_deg"));
+    camera_pose_.roll_deg = static_cast<float>(required_parameter<double>(*this, "camera_roll_deg"));
+    camera_pose_.x_offset_m = static_cast<float>(required_parameter<double>(*this, "camera_x_offset_m"));
+    camera_pose_.height_offset_m = static_cast<float>(required_parameter<double>(*this, "camera_height_offset_m"));
+    color_rotation_deg_ = required_parameter<int>(*this, "color_rotation_deg");
+    depth_fps_ = required_parameter<int>(*this, "depth_fps");
+    rs_laser_power_ = required_parameter<double>(*this, "rs_laser_power");
+    rs_exposure_us_ = required_parameter<int>(*this, "rs_exposure_us");
 
     // 3. 3D Spatial ROI Filter Bounds
-    const auto input_mode = declare_parameter("tracking_input_mode", std::string("depth_map"));
-    if (input_mode!="depth_map" && input_mode!="external_dynamic_cloud")
-        throw std::invalid_argument("Unknown tracking_input_mode");
-    external_dynamic_cloud_ = input_mode=="external_dynamic_cloud";
-    cropped_cloud_topic_ = declare_parameter("cropped_cloud_topic", std::string("/realsense/cropped_cloud"));
-    dynamic_cloud_topic_ = declare_parameter("dynamic_cloud_topic", std::string("/realsense/dynamic_cloud"));
-    external_result_timeout_sec_ = declare_parameter("external_result_timeout_sec",0.25);
-    external_poll_sec_ = declare_parameter("external_poll_sec",0.02);
-    external_keep_radius_m_ = declare_parameter("external_tracking_keep_radius_m",0.3);
-    declare_parameter("external_prediction_topic",std::string("/cloth/filter_prediction"));
+    input_source_ = required_parameter<std::string>(*this, "input_source");
+    cropped_replay_topic_ = required_parameter<std::string>(*this, "cropped_replay_topic");
+    if (input_source_ != "depth" && input_source_ != "cropped_cloud" && input_source_ != "dynamic_cloud")
+        throw std::invalid_argument("input_source must be depth, cropped_cloud or dynamic_cloud");
+    if (input_source_ != "depth" && use_direct_realsense_)
+        throw std::invalid_argument("Point-cloud replay requires use_direct_realsense=false");
+    cropped_cloud_topic_ = required_parameter<std::string>(*this, "cropped_cloud_topic");
+    dynamic_cloud_topic_ = required_parameter<std::string>(*this, "dynamic_cloud_topic");
+    external_result_timeout_sec_ = required_parameter<double>(*this, "external_result_timeout_sec");
+    external_poll_sec_ = required_parameter<double>(*this, "external_poll_sec");
+    external_keep_radius_m_ = required_parameter<double>(*this, "external_tracking_keep_radius_m");
+    required_parameter<std::string>(*this, "external_prediction_topic");
     if (!std::isfinite(external_keep_radius_m_) || external_keep_radius_m_<0)
         throw std::invalid_argument("Invalid tracking protection radius");
-    declare_parameter("external_filter_status_topic",std::string("/realsense/filter_status"));
+    required_parameter<std::string>(*this, "external_filter_status_topic");
     if (!std::isfinite(external_result_timeout_sec_) || external_result_timeout_sec_<=0 ||
         !std::isfinite(external_poll_sec_) || external_poll_sec_<=0)
         throw std::invalid_argument("Invalid external cloud timing");
 
-    filter_cfg_.min_depth_m = static_cast<float>(this->declare_parameter("min_depth_m", 0.25));
-    filter_cfg_.max_depth_m = static_cast<float>(this->declare_parameter("max_depth_m", 6.00));
-    filter_cfg_.min_x_m = static_cast<float>(this->declare_parameter("min_x_m", 0.35));
-    filter_cfg_.max_x_m = static_cast<float>(this->declare_parameter("max_x_m", 6.00));
-    filter_cfg_.min_y_m = static_cast<float>(this->declare_parameter("min_y_m", -0.60));
-    filter_cfg_.max_y_m = static_cast<float>(this->declare_parameter("max_y_m", 0.60));
-    filter_cfg_.min_z_m = static_cast<float>(this->declare_parameter("min_z_m", 0.05));
-    filter_cfg_.max_z_m = static_cast<float>(this->declare_parameter("max_z_m", 2.40));
+    filter_cfg_.min_depth_m = static_cast<float>(required_parameter<double>(*this, "min_depth_m"));
+    filter_cfg_.max_depth_m = static_cast<float>(required_parameter<double>(*this, "max_depth_m"));
+    filter_cfg_.min_x_m = static_cast<float>(required_parameter<double>(*this, "min_x_m"));
+    filter_cfg_.max_x_m = static_cast<float>(required_parameter<double>(*this, "max_x_m"));
+    filter_cfg_.min_y_m = static_cast<float>(required_parameter<double>(*this, "min_y_m"));
+    filter_cfg_.max_y_m = static_cast<float>(required_parameter<double>(*this, "max_y_m"));
+    filter_cfg_.min_z_m = static_cast<float>(required_parameter<double>(*this, "min_z_m"));
+    filter_cfg_.max_z_m = static_cast<float>(required_parameter<double>(*this, "max_z_m"));
 
     // 4. Voxel Downsampling & DBSCAN Clustering
-    filter_cfg_.voxel_size_m = static_cast<float>(this->declare_parameter("voxel_size_m", 0.02));
-    filter_cfg_.cluster_eps_m = static_cast<float>(this->declare_parameter("cluster_eps_m", 0.08));
-    filter_cfg_.min_cluster_points = this->declare_parameter("min_cluster_points", 45);
-    filter_cfg_.max_cluster_points = this->declare_parameter("max_cluster_points", 12000);
-    filter_cfg_.min_cloth_size_m = static_cast<float>(this->declare_parameter("min_cloth_size_m", 0.05));
-    filter_cfg_.max_cloth_size_m = static_cast<float>(this->declare_parameter("max_cloth_size_m", 0.80));
-    filter_cfg_.continuity_thresh_m = static_cast<float>(this->declare_parameter("continuity_thresh_m", 0.08));
-    filter_cfg_.continuity_min_neighbors = this->declare_parameter("continuity_min_neighbors", 3);
+    filter_cfg_.voxel_size_m = static_cast<float>(required_parameter<double>(*this, "voxel_size_m"));
+    filter_cfg_.cluster_eps_m = static_cast<float>(required_parameter<double>(*this, "cluster_eps_m"));
+    filter_cfg_.min_cluster_points = required_parameter<int>(*this, "min_cluster_points");
+    filter_cfg_.max_cluster_points = required_parameter<int>(*this, "max_cluster_points");
+    filter_cfg_.min_cloth_size_m = static_cast<float>(required_parameter<double>(*this, "min_cloth_size_m"));
+    filter_cfg_.max_cloth_size_m = static_cast<float>(required_parameter<double>(*this, "max_cloth_size_m"));
+    filter_cfg_.continuity_thresh_m = static_cast<float>(required_parameter<double>(*this, "continuity_thresh_m"));
+    filter_cfg_.continuity_min_neighbors = required_parameter<int>(*this, "continuity_min_neighbors");
 
     // 5. Debug Point Clouds & Streaming Options
-    publish_debug_cloud_ = this->declare_parameter("publish_debug_cloud", false);
-    trajectory_history_sec_ = this->declare_parameter("trajectory_history_sec", 15.0);
-    enable_color_stream_ = this->declare_parameter("enable_color_stream", true);
-    color_fps_ = this->declare_parameter("color_fps", 30);
-    jpeg_quality_ = this->declare_parameter("jpeg_quality", 65);
+    publish_debug_cloud_ = required_parameter<bool>(*this, "publish_debug_cloud");
+    trajectory_history_sec_ = required_parameter<double>(*this, "trajectory_history_sec");
+    enable_color_stream_ = required_parameter<bool>(*this, "enable_color_stream");
+    color_fps_ = required_parameter<int>(*this, "color_fps");
+    jpeg_quality_ = required_parameter<int>(*this, "jpeg_quality");
 
     // 6. Ballistic Tracking & Launch Gate Parameters
-    enable_ballistic_filter_ = this->declare_parameter("enable_ballistic_filter", true);
-    ballistic_tracker_.observed_landing_only = this->declare_parameter("observed_landing_only", true);
-    ballistic_tracker_.launch_min_x = this->declare_parameter("launch_min_x", 0.80);
-    ballistic_tracker_.launch_max_x = this->declare_parameter("launch_max_x", 1.35);
-    ballistic_tracker_.launch_min_y = this->declare_parameter("launch_min_y", -0.25);
-    ballistic_tracker_.launch_max_y = this->declare_parameter("launch_max_y", 0.18);
-    ballistic_tracker_.launch_min_z = this->declare_parameter("launch_min_z", 1.45);
-    ballistic_tracker_.launch_max_z = this->declare_parameter("launch_max_z", 2.10);
-    ballistic_tracker_.gate_radius_m = this->declare_parameter("gate_radius_m", 0.70);
-    ballistic_tracker_.max_lost_frames = this->declare_parameter("max_lost_frames", 8);
-    ballistic_tracker_.min_launch_vx = this->declare_parameter("min_launch_vx", 0.30);
-    ballistic_tracker_.min_launch_move_m = this->declare_parameter("min_launch_move_m", 0.05);
-    ballistic_tracker_.launch_timeout_sec = this->declare_parameter("pending_reset_sec", 0.25);
-    ballistic_tracker_.min_track_points_limit = this->declare_parameter("min_tracking_points", 12);
+    ballistic_tracker_.launch_min_x = required_parameter<double>(*this, "launch_min_x");
+    ballistic_tracker_.launch_max_x = required_parameter<double>(*this, "launch_max_x");
+    ballistic_tracker_.launch_min_y = required_parameter<double>(*this, "launch_min_y");
+    ballistic_tracker_.launch_max_y = required_parameter<double>(*this, "launch_max_y");
+    ballistic_tracker_.launch_min_z = required_parameter<double>(*this, "launch_min_z");
+    ballistic_tracker_.launch_max_z = required_parameter<double>(*this, "launch_max_z");
+    ballistic_tracker_.max_lost_frames = required_parameter<int>(*this, "max_lost_frames");
+    ballistic_tracker_.min_launch_vx = required_parameter<double>(*this, "min_launch_vx");
+    ballistic_tracker_.min_launch_move_m = required_parameter<double>(*this, "min_launch_move_m");
+    ballistic_tracker_.launch_timeout_sec = required_parameter<double>(*this, "pending_reset_sec");
+    ballistic_tracker_.min_track_points_limit = required_parameter<int>(*this, "min_tracking_points");
     ballistic_tracker_.min_cluster_points = filter_cfg_.min_cluster_points;
-    ballistic_tracker_.landing_min_z = this->declare_parameter("landing_min_z", 0.15);
-    ballistic_tracker_.drag_coeff = this->declare_parameter("drag_coeff", 0.40);
-    ballistic_tracker_.vel_smoothing_beta = this->declare_parameter("vel_smoothing_beta", 0.50);
-    ballistic_tracker_.min_flight_vx_m_s = this->declare_parameter("min_flight_vx_m_s", 0.00);
-    ballistic_tracker_.max_vx_m_s = this->declare_parameter("max_vx_m_s", 15.0);
-    ballistic_tracker_.max_abs_vy_m_s = this->declare_parameter("max_abs_vy_m_s", 3.50);
-    ballistic_tracker_.min_vz_m_s = this->declare_parameter("min_vz_m_s", -10.0);
-    ballistic_tracker_.max_vz_m_s = this->declare_parameter("max_vz_m_s", 12.0);
-    ballistic_tracker_.max_flight_duration_sec = this->declare_parameter("max_flight_duration_sec", 2.50);
-    ballistic_tracker_.min_stationary_move_m = this->declare_parameter("min_stationary_move_m", 0.12);
-    ballistic_tracker_.max_stationary_frames = this->declare_parameter("max_stationary_frames", 5);
+    ballistic_tracker_.landing_min_z = required_parameter<double>(*this, "landing_min_z");
+    ballistic_tracker_.drag_coeff = required_parameter<double>(*this, "drag_coeff");
+    ballistic_tracker_.vel_smoothing_beta = required_parameter<double>(*this, "vel_smoothing_beta");
+    ballistic_tracker_.min_flight_vx_m_s = required_parameter<double>(*this, "min_flight_vx_m_s");
+    ballistic_tracker_.max_vx_m_s = required_parameter<double>(*this, "max_vx_m_s");
+    ballistic_tracker_.max_abs_vy_m_s = required_parameter<double>(*this, "max_abs_vy_m_s");
+    ballistic_tracker_.min_vz_m_s = required_parameter<double>(*this, "min_vz_m_s");
+    ballistic_tracker_.max_vz_m_s = required_parameter<double>(*this, "max_vz_m_s");
+    ballistic_tracker_.max_flight_duration_sec = required_parameter<double>(*this, "max_flight_duration_sec");
+    ballistic_tracker_.min_stationary_move_m = required_parameter<double>(*this, "min_stationary_move_m");
+    ballistic_tracker_.max_stationary_frames = required_parameter<int>(*this, "max_stationary_frames");
 
     // 6. Physical Anomaly & Ballistic Tube Guard Controls
-    ballistic_tracker_.tube_radius_m = this->declare_parameter("tube_radius_m", BallisticTracker::DEFAULT_TUBE_RADIUS_M);
-    ballistic_tracker_.max_total_accel_m_s2 = this->declare_parameter("max_total_accel_m_s2", BallisticTracker::DEFAULT_MAX_TOTAL_ACCEL_M_S2);
-    ballistic_tracker_.min_vertical_accel_m_s2 = this->declare_parameter("min_vertical_accel_m_s2", BallisticTracker::DEFAULT_MIN_VERTICAL_ACCEL_M_S2);
-    ballistic_tracker_.max_lateral_accel_m_s2 = this->declare_parameter("max_lateral_accel_m_s2", BallisticTracker::DEFAULT_MAX_LATERAL_ACCEL_M_S2);
-    ballistic_tracker_.max_heading_deg = this->declare_parameter("max_heading_deg", BallisticTracker::DEFAULT_MAX_HEADING_DEG);
-    ballistic_tracker_.backward_jitter_tolerance_m = this->declare_parameter("backward_jitter_tolerance_m", BallisticTracker::DEFAULT_BACKWARD_JITTER_TOL_M);
-    ballistic_tracker_.vertical_jitter_tolerance_m = this->declare_parameter("vertical_jitter_tolerance_m", BallisticTracker::DEFAULT_VERTICAL_JITTER_TOL_M);
-    ballistic_tracker_.reject_ascent_after_apex = this->declare_parameter("reject_ascent_after_apex", true);
-    ballistic_tracker_.enable_coast_prediction_tf = this->declare_parameter("enable_coast_prediction_tf", false);
-    ballistic_tracker_.abort_on_anomaly = this->declare_parameter("abort_on_anomaly", true);
-    ballistic_tracker_.max_anomaly_frames = this->declare_parameter("max_anomaly_frames", BallisticTracker::DEFAULT_MAX_ANOMALY_FRAMES);
-    ballistic_tracker_.publish_cutoff_as_landing = this->declare_parameter("publish_cutoff_as_landing", true);
+    ballistic_tracker_.tube_radius_m = required_parameter<double>(*this, "tube_radius_m");
+    ballistic_tracker_.max_total_accel_m_s2 = required_parameter<double>(*this, "max_total_accel_m_s2");
+    ballistic_tracker_.centroid_position_tolerance_m = required_parameter<double>(*this, "centroid_position_tolerance_m");
+    ballistic_tracker_.min_vertical_accel_m_s2 = required_parameter<double>(*this, "min_vertical_accel_m_s2");
+    ballistic_tracker_.max_lateral_accel_m_s2 = required_parameter<double>(*this, "max_lateral_accel_m_s2");
+    ballistic_tracker_.max_heading_deg = required_parameter<double>(*this, "max_heading_deg");
+    ballistic_tracker_.backward_jitter_tolerance_m = required_parameter<double>(*this, "backward_jitter_tolerance_m");
+    ballistic_tracker_.vertical_jitter_tolerance_m = required_parameter<double>(*this, "vertical_jitter_tolerance_m");
+    ballistic_tracker_.reject_ascent_after_apex = required_parameter<bool>(*this, "reject_ascent_after_apex");
+    ballistic_tracker_.abort_on_anomaly = required_parameter<bool>(*this, "abort_on_anomaly");
+    ballistic_tracker_.max_anomaly_frames = required_parameter<int>(*this, "max_anomaly_frames");
+
+    ballistic_tracker_.gravity_m_s2 = required_parameter<double>(*this, "gravity_m_s2");
+    ballistic_tracker_.lost_frame_gate_expansion_m = required_parameter<double>(*this, "lost_frame_gate_expansion_m");
+    ballistic_tracker_.max_gate_expansion_m = required_parameter<double>(*this, "max_gate_expansion_m");
+    ballistic_tracker_.heading_min_speed_m_s = required_parameter<double>(*this, "heading_min_speed_m_s");
+    ballistic_tracker_.heading_min_step_m = required_parameter<double>(*this, "heading_min_step_m");
+    ballistic_tracker_.pending_max_drop_m = required_parameter<double>(*this, "pending_max_drop_m");
+
+    filter_cfg_.continuity_radius_px = required_parameter<int>(*this, "continuity_radius_px");
+    filter_cfg_.prediction_distance_weight = required_parameter<double>(*this, "prediction_distance_weight");
+    filter_cfg_.cluster_size_weight = required_parameter<double>(*this, "cluster_size_weight");
+    filter_cfg_.launch_forward_weight = required_parameter<double>(*this, "launch_forward_weight");
+    cuda_ctx_.max_voxel_points = required_parameter<int>(*this, "max_voxel_points");
+    cuda_ctx_.hash_table_size = required_parameter<int>(*this, "voxel_hash_table_size");
 
     // Synchronize CUDA filter launch gate & tracking points with tracker parameters
     filter_cfg_.min_tracking_points = ballistic_tracker_.min_track_points_limit;
@@ -317,30 +340,29 @@ void ClothTrackerCudaNode::declare_and_load_parameters() {
     filter_cfg_.launch_max_z = static_cast<float>(ballistic_tracker_.launch_max_z);
     filter_cfg_.gate_radius_m = static_cast<float>(ballistic_tracker_.tube_radius_m);
 
-    landing_position_topic_ = this->declare_parameter("landing_position_topic", "/cloth/landing_position");
+    landing_position_topic_ = required_parameter<std::string>(*this, "landing_position_topic");
 
-    // 7. Prior-Map ESDF Background Parameters
-    this->declare_parameter("map_file_path", "");
-    this->declare_parameter("map_frame", "map");
-    this->declare_parameter("map_resolution_m", 0.05);
-    this->declare_parameter("map_max_distance_m", 0.50);
-    this->declare_parameter("map_min_x_m", -5.50);
-    this->declare_parameter("map_max_x_m", 5.50);
-    this->declare_parameter("map_min_y_m", -6.00);
-    this->declare_parameter("map_max_y_m", 6.00);
-    this->declare_parameter("map_min_z_m", -0.20);
-    this->declare_parameter("map_max_z_m", 4.00);
-    this->declare_parameter("map_max_memory_mb", 128);
-    this->declare_parameter("map_exclusion_distance_m", 0.08);
-    this->declare_parameter("map_tracking_keep_radius_m", 0.30);
-    this->declare_parameter("map_reject_unknown", true);
-    this->declare_parameter("map_use_floor", true);
-    this->declare_parameter("map_floor_z_m", 0.00);
-    this->declare_parameter("map_tf_wait_sec", 0.15);
-    this->declare_parameter("map_tf_poll_sec", 0.002);
-    this->declare_parameter("map_max_image_age_sec", 0.25);
-    this->declare_parameter("map_pose_loss_reset_sec", 0.25);
-    this->declare_parameter("map_depth_queue_size", 8);
+    image_max_age_sec_ = required_parameter<double>(*this, "image_max_age_sec");
+    depth_queue_size_ = required_parameter<int>(*this, "depth_queue_size");
+    if (camera_intrin_.width <= 0 || camera_intrin_.height <= 0 ||
+        image_max_age_sec_ <= 0 || depth_queue_size_ <= 0 || publisher_queue_size_ <= 0 ||
+        color_queue_size_ <= 0 || max_trajectory_points_ <= 0 || min_trajectory_step_m_ < 0 ||
+        static_marker_interval_sec_ <= 0 || realsense_wait_timeout_ms_ <= 0 || bag_rewind_tolerance_sec_ <= 0 ||
+        filter_cfg_.voxel_size_m <= 0 || filter_cfg_.cluster_eps_m <= 0 ||
+        filter_cfg_.min_x_m >= filter_cfg_.max_x_m || filter_cfg_.min_y_m >= filter_cfg_.max_y_m ||
+        filter_cfg_.min_z_m >= filter_cfg_.max_z_m || filter_cfg_.min_depth_m >= filter_cfg_.max_depth_m ||
+        filter_cfg_.continuity_radius_px < 1 || filter_cfg_.continuity_min_neighbors < 0 ||
+        filter_cfg_.continuity_min_neighbors > 4 || cuda_ctx_.max_voxel_points <= 0 ||
+        cuda_ctx_.hash_table_size < cuda_ctx_.max_voxel_points ||
+        (cuda_ctx_.hash_table_size & (cuda_ctx_.hash_table_size - 1)) != 0 ||
+        ballistic_tracker_.centroid_position_tolerance_m < 0 ||
+        ballistic_tracker_.gravity_m_s2 <= 0 || ballistic_tracker_.tube_radius_m <= 0 ||
+        ballistic_tracker_.min_track_points_limit <= 0 || ballistic_tracker_.min_cluster_points <= 0 ||
+        ballistic_tracker_.max_anomaly_frames <= 0 || ballistic_tracker_.max_lost_frames < 0 ||
+        ballistic_tracker_.vel_smoothing_beta < 0 || ballistic_tracker_.vel_smoothing_beta > 1)
+        throw std::invalid_argument("Invalid camera/ROI/GPU/tracking parameters in YAML");
+
+
 }
 
 // =============================================================================
@@ -382,7 +404,7 @@ void ClothTrackerCudaNode::publish_static_transforms() {
     geometry_msgs::msg::TransformStamped tf_color_opt;
     tf_color_opt.header.stamp = rclcpp::Time(0);
     tf_color_opt.header.frame_id = camera_frame_;
-    tf_color_opt.child_frame_id = COLOR_OPTICAL_FRAME;
+    tf_color_opt.child_frame_id = color_optical_frame_;
     tf_color_opt.transform.rotation.x = q_opt.x();
     tf_color_opt.transform.rotation.y = q_opt.y();
     tf_color_opt.transform.rotation.z = q_opt.z();
@@ -390,7 +412,7 @@ void ClothTrackerCudaNode::publish_static_transforms() {
     transforms.push_back(tf_color_opt);
 
     geometry_msgs::msg::TransformStamped tf_depth_opt = tf_color_opt;
-    tf_depth_opt.child_frame_id = DEPTH_OPTICAL_FRAME;
+    tf_depth_opt.child_frame_id = depth_optical_frame_;
     transforms.push_back(tf_depth_opt);
 
     tf_static_broadcaster_->sendTransform(transforms);
@@ -426,7 +448,7 @@ void ClothTrackerCudaNode::depth_image_callback(const sensor_msgs::msg::Image::C
     camera_intrin_.width = msg->width;
     camera_intrin_.height = msg->height;
     if (!intrinsics_ready_) {
-        publish_background_state("MAP_WAITING_FOR_CAMERA_INFO", false);
+        publish_background_state("WAITING_FOR_CAMERA_INFO", false);
         return;
     }
 
@@ -458,7 +480,7 @@ void ClothTrackerCudaNode::depth_image_callback(const sensor_msgs::msg::Image::C
         }
         depth_ptr = depth_u16_buf.data();
     } else {
-        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), WARN_THROTTLE_MS,
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), warning_log_throttle_ms_,
                              "Expected 16UC1/mono16 or 32FC1 depth encoding, got: %s", msg->encoding.c_str());
         return;
     }
@@ -521,7 +543,7 @@ void ClothTrackerCudaNode::color_worker_loop() {
 
             // 1. Raw color publication if requested
             if (pub_raw_color_ && pub_raw_color_->get_subscription_count() > 0) {
-                pub_raw_color_->publish(mat_to_image_msg(task.bgr_frame, task.stamp, COLOR_OPTICAL_FRAME));
+                pub_raw_color_->publish(mat_to_image_msg(task.bgr_frame, task.stamp, color_optical_frame_));
             }
 
             // 2. Rotation
@@ -537,7 +559,7 @@ void ClothTrackerCudaNode::color_worker_loop() {
 
             // 3. Rotated uncompressed color (/cloth/camera_view)
             if (pub_rotated_color_ && pub_rotated_color_->get_subscription_count() > 0) {
-                pub_rotated_color_->publish(mat_to_image_msg(rotated_frame, task.stamp, COLOR_OPTICAL_FRAME));
+                pub_rotated_color_->publish(mat_to_image_msg(rotated_frame, task.stamp, color_optical_frame_));
             }
 
             // 4. JPEG Compressed Color (/camera/camera/color/image_raw/compressed)
@@ -548,7 +570,7 @@ void ClothTrackerCudaNode::color_worker_loop() {
 
                 sensor_msgs::msg::CompressedImage comp_msg;
                 comp_msg.header.stamp = task.stamp;
-                comp_msg.header.frame_id = COLOR_OPTICAL_FRAME;
+                comp_msg.header.frame_id = color_optical_frame_;
                 comp_msg.format = "jpeg";
                 comp_msg.data = std::move(compressed_buf);
                 pub_compressed_color_->publish(comp_msg);
@@ -558,21 +580,12 @@ void ClothTrackerCudaNode::color_worker_loop() {
             if (pub_color_info_) {
                 if (task.has_color_info) {
                     task.color_info.header.stamp = task.stamp;
-                    task.color_info.header.frame_id = COLOR_OPTICAL_FRAME;
+                    task.color_info.header.frame_id = color_optical_frame_;
                     pub_color_info_->publish(task.color_info);
-                } else {
-                    const double fx = (camera_intrin_.fx > 0.0f) ? camera_intrin_.fx : DEFAULT_COLOR_FOCAL_LENGTH_PX;
-                    const double fy = (camera_intrin_.fy > 0.0f) ? camera_intrin_.fy : DEFAULT_COLOR_FOCAL_LENGTH_PX;
-                    auto cinfo = build_camera_info_msg(
-                        task.bgr_frame.cols, task.bgr_frame.rows,
-                        fx, fy, task.bgr_frame.cols * 0.5, task.bgr_frame.rows * 0.5,
-                        COLOR_OPTICAL_FRAME);
-                    cinfo.header.stamp = task.stamp;
-                    pub_color_info_->publish(cinfo);
                 }
             }
         } catch (const std::exception& e) {
-            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), WARN_THROTTLE_MS,
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), warning_log_throttle_ms_,
                                  "Color worker loop error: %s", e.what());
         }
     }
@@ -601,7 +614,7 @@ void ClothTrackerCudaNode::color_image_callback(const sensor_msgs::msg::Image::C
         }
         push_color_frame(frame, stamp);
     } catch (const std::exception& e) {
-        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), WARN_THROTTLE_MS,
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), warning_log_throttle_ms_,
                              "Color decode error: %s", e.what());
     }
 }
@@ -636,7 +649,7 @@ void ClothTrackerCudaNode::publish_roi_markers(const rclcpp::Time& stamp, const 
                              ballistic_tracker_.vz * ballistic_tracker_.vz);
 
     auto markers = MarkerVisualizer::create_roi_markers(
-        stamp, filter_cfg_, enable_ballistic_filter_,
+        stamp, filter_cfg_, true,
         ballistic_tracker_.launch_min_x, ballistic_tracker_.launch_max_x,
         ballistic_tracker_.launch_min_y, ballistic_tracker_.launch_max_y,
         ballistic_tracker_.launch_min_z, ballistic_tracker_.launch_max_z,
@@ -653,7 +666,7 @@ void ClothTrackerCudaNode::publish_roi_markers(const rclcpp::Time& stamp, const 
 void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const rclcpp::Time& stamp) {
     std::lock_guard<std::recursive_mutex> lock(processing_mutex_);
     double now_sec = stamp.seconds();
-    if (last_frame_stamp_sec_ > 0.0 && now_sec < last_frame_stamp_sec_ - BAG_LOOP_RESET_TOLERANCE_SEC) {
+    if (last_frame_stamp_sec_ > 0.0 && now_sec < last_frame_stamp_sec_ - bag_rewind_tolerance_sec_) {
         // Rosbag looped back to the beginning: clear all trajectory history and reset tracker
         trajectory_points_.clear();
         ballistic_tracker_.reset();
@@ -663,56 +676,17 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr, const 
     }
     last_frame_stamp_sec_ = now_sec;
 
-    if (external_dynamic_cloud_) {
-        if (std::abs((now()-stamp).seconds())>map_max_image_age_sec_) {
-            publish_background_state("MAP_IMAGE_TIME_INVALID",false); return;
-        }
-        try {
-            const auto points=prepare_depth_cloud_cuda(cuda_ctx_,depth_ptr,camera_intrin_,camera_pose_,filter_cfg_);
-            visualization_msgs::msg::Marker region;
-            region.header.stamp=stamp; region.header.frame_id=camera_parent_frame_;
-            region.ns="cloth_filter_prediction"; region.id=0;
-            region.type=visualization_msgs::msg::Marker::SPHERE;
-            region.pose.orientation.w=1.0;
-            float px=0,py=0,pz=0;
-            const bool protect=ballistic_tracker_.state==TrackerState::TRACKING &&
-                ballistic_tracker_.launch_displacement_confirmed &&
-                ballistic_tracker_.get_prediction(stamp.seconds(),px,py,pz);
-            region.action=protect ? visualization_msgs::msg::Marker::ADD : visualization_msgs::msg::Marker::DELETE;
-            region.pose.position.x=px; region.pose.position.y=py; region.pose.position.z=pz;
-            region.scale.x=region.scale.y=region.scale.z=external_keep_radius_m_*2;
-            region.color.a=0.2; region.color.r=1.0;
-            pub_filter_prediction_->publish(region);
-            MarkerVisualizer::publish_point_cloud(pub_cropped_cloud_,points,stamp,camera_parent_frame_);
-        } catch (const std::exception& error) {
-            publish_background_state("EXTERNAL_EXPORT_ERROR",false);
-            RCLCPP_ERROR_THROTTLE(get_logger(),*get_clock(),1000,"Point export: %s",error.what());
-        }
+    if (std::abs((now()-stamp).seconds()) > image_max_age_sec_) {
+        publish_background_state("IMAGE_TIME_INVALID",false);
         return;
     }
-    if (!prepare_map_frame(stamp)) return;
-
-    std::vector<float3> debug_cluster_pts;
-    std::vector<float3> debug_filtered_pts;
-
-    float pred_x = 0.0f, pred_y = 0.0f, pred_z = 0.0f;
-    bool has_pred = ballistic_tracker_.get_prediction(stamp.seconds(), pred_x, pred_y, pred_z);
-
-    ClothTrackingResult raw_res = process_depth_frame_cuda(
-        cuda_ctx_, depth_ptr, camera_intrin_, camera_pose_, filter_cfg_,
-        publish_debug_cloud_ ? &debug_cluster_pts : nullptr, publish_debug_cloud_ ? &debug_filtered_pts : nullptr,
-        pred_x, pred_y, pred_z, has_pred, map_filter_
-    );
-
-    auto error = cudaGetLastError();
-    if (error != cudaSuccess) {
-        map_processing_failed_ = true;
-        publish_background_state("MAP_PROCESSING_ERROR", false);
-        RCLCPP_ERROR(get_logger(), "Map tracking CUDA failure: %s", cudaGetErrorString(error));
-        return;
+    try {
+        const auto points = prepare_depth_cloud_cuda(cuda_ctx_,depth_ptr,camera_intrin_,camera_pose_,filter_cfg_);
+        publish_filter_input(points, stamp);
+    } catch (const std::exception& error) {
+        publish_background_state("FILTER_INPUT_ERROR",false);
+        RCLCPP_ERROR_THROTTLE(get_logger(),*get_clock(),status_log_throttle_ms_,"Point export: %s",error.what());
     }
-
-    publish_tracking_result(raw_res,stamp,debug_cluster_pts,debug_filtered_pts);
 }
 
 void ClothTrackerCudaNode::publish_tracking_result(const ClothTrackingResult& raw_res,
@@ -721,15 +695,9 @@ void ClothTrackerCudaNode::publish_tracking_result(const ClothTrackingResult& ra
     const double now_sec=stamp.seconds();
     // Phase 2: Ballistic State Tracking (Filter out stationary walls/ceiling & robot shaking)
     ClothTrackingResult res;
-    bool is_actively_tracked = false;
-    if (enable_ballistic_filter_) {
-        is_actively_tracked = ballistic_tracker_.update(raw_res, stamp.seconds(), res);
-    } else {
-        res = raw_res;
-        is_actively_tracked = raw_res.valid;
-    }
+    const bool is_actively_tracked = ballistic_tracker_.update(raw_res, stamp.seconds(), res);
 
-    publish_background_state(external_dynamic_cloud_ ? "EXTERNAL_READY" : "MAP_READY", ballistic_tracker_.state != TrackerState::TRACKING);
+    publish_background_state("READY", ballistic_tracker_.state != TrackerState::TRACKING);
 
     // Publish Debug Point Clouds & ROI Markers after tracker state update
     if (publish_debug_cloud_) {
@@ -747,8 +715,8 @@ void ClothTrackerCudaNode::publish_tracking_result(const ClothTrackingResult& ra
 
     // Diagnostics to console every 1 second
     RCLCPP_INFO_THROTTLE(
-        this->get_logger(), *this->get_clock(), STATUS_LOG_THROTTLE_MS,
-        "[ClothTracker] ROI points: %zu | Candidate cluster: %d pts at (%.2f, %.2f, %.2f) | State: %s",
+        this->get_logger(), *this->get_clock(), status_log_throttle_ms_,
+        "[ClothTracker] Debug search points: %zu | Candidate cluster: %d pts at (%.2f, %.2f, %.2f) | State: %s",
         debug_filtered_pts.size(), raw_res.cluster_points_count, raw_res.cx, raw_res.cy, raw_res.cz,
         ballistic_tracker_.state == TrackerState::TRACKING ? "TRACKING" : "IDLE"
     );
@@ -775,6 +743,10 @@ void ClothTrackerCudaNode::publish_tracking_result(const ClothTrackingResult& ra
                     "========================================================================",
                     last_cloth_x_, last_cloth_y_, last_cloth_z_, trajectory_points_.size());
     } else if (prev_state_ == TrackerState::TRACKING && ballistic_tracker_.state == TrackerState::LOST) {
+        RCLCPP_INFO(get_logger(), "Tracking rejected: %s; candidate=(%.3f, %.3f, %.3f), points=%d; last=(%.3f, %.3f, %.3f), velocity=(%.3f, %.3f, %.3f)",
+            ballistic_tracker_.last_rejection_reason.c_str(), raw_res.cx,raw_res.cy,raw_res.cz,raw_res.cluster_points_count,
+            ballistic_tracker_.x,ballistic_tracker_.y,ballistic_tracker_.z,
+            ballistic_tracker_.vx,ballistic_tracker_.vy,ballistic_tracker_.vz);
         RCLCPP_INFO(this->get_logger(),
                     "========================================================================\n"
                     "*** CLOTH TRACKING CUT OFF (LOST) at (%.2f, %.2f, %.2f)! Recorded %zu flight points. ***\n"
@@ -795,7 +767,7 @@ void ClothTrackerCudaNode::publish_tracking_result(const ClothTrackingResult& ra
 
         if (ballistic_tracker_.tracked_count <= 1) {
             trajectory_points_.clear(); // Brand new launch: clear previous trajectory line
-            if (enable_ballistic_filter_) {
+            {
                 geometry_msgs::msg::Point launch_pt;
                 launch_pt.x = res.cx;
                 launch_pt.y = res.cy;
@@ -832,7 +804,7 @@ void ClothTrackerCudaNode::publish_tracking_result(const ClothTrackingResult& ra
             double dy = p_geom.y - prev_pt.y;
             double dz = p_geom.z - prev_pt.z;
             double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-            if (dist >= MIN_TRAJECTORY_STEP_M) {
+            if (dist >= min_trajectory_step_m_) {
                 trajectory_points_.emplace_back(now_sec, p_geom);
             }
         }
@@ -842,7 +814,7 @@ void ClothTrackerCudaNode::publish_tracking_result(const ClothTrackingResult& ra
                (now_sec - trajectory_points_.front().first) > trajectory_history_sec_) {
             trajectory_points_.erase(trajectory_points_.begin());
         }
-        if (trajectory_points_.size() > MAX_TRAJECTORY_POINTS) {
+        if (trajectory_points_.size() > max_trajectory_points_) {
             trajectory_points_.erase(trajectory_points_.begin());
         }
     }
@@ -852,7 +824,7 @@ void ClothTrackerCudaNode::publish_tracking_result(const ClothTrackingResult& ra
         geometry_msgs::msg::TransformStamped tf_msg;
         tf_msg.header.stamp = stamp;
         tf_msg.header.frame_id = camera_parent_frame_;
-        tf_msg.child_frame_id = CLOTH_TF_FRAME;
+        tf_msg.child_frame_id = cloth_tf_frame_;
         tf_msg.transform.translation.x = last_cloth_x_;
         tf_msg.transform.translation.y = last_cloth_y_;
         tf_msg.transform.translation.z = last_cloth_z_;
@@ -869,7 +841,7 @@ void ClothTrackerCudaNode::publish_tracking_result(const ClothTrackingResult& ra
     // 3. PERSISTENT VISUALIZATION: Strictly true measured flight trajectory (NO fake prediction lines!)
     // When actively tracking: publish every frame.
     // When landed/idle: publish at 10Hz so the line and markers stay solidly on RViz screen without disappearing.
-    bool should_publish_markers = is_actively_tracked || (std::abs(now_sec - last_static_publish_sec_) >= STATIC_MARKER_PUBLISH_INTERVAL_SEC);
+    bool should_publish_markers = is_actively_tracked || (std::abs(now_sec - last_static_publish_sec_) >= static_marker_interval_sec_);
 
     if (should_publish_markers && !trajectory_points_.empty()) {
         last_static_publish_sec_ = now_sec;
@@ -969,14 +941,10 @@ void ClothTrackerCudaNode::run_direct_realsense_loop() {
                 color_info_msg = build_camera_info_msg(
                     c_intrin.width, c_intrin.height,
                     c_intrin.fx, c_intrin.fy, c_intrin.ppx, c_intrin.ppy,
-                    COLOR_OPTICAL_FRAME, c_intrin.coeffs);
+                    color_optical_frame_, c_intrin.coeffs);
             } catch (const std::exception& e) {
                 RCLCPP_WARN(this->get_logger(), "Failed to extract color intrinsics: %s", e.what());
-                color_info_msg = build_camera_info_msg(
-                    camera_intrin_.width, camera_intrin_.height,
-                    DEFAULT_COLOR_FOCAL_LENGTH_PX, DEFAULT_COLOR_FOCAL_LENGTH_PX,
-                    camera_intrin_.width * 0.5, camera_intrin_.height * 0.5,
-                    COLOR_OPTICAL_FRAME);
+
             }
         }
 
@@ -987,10 +955,10 @@ void ClothTrackerCudaNode::run_direct_realsense_loop() {
         sensor_msgs::msg::CameraInfo depth_info_msg = build_camera_info_msg(
             intrin.width, intrin.height,
             intrin.fx, intrin.fy, intrin.ppx, intrin.ppy,
-            DEPTH_OPTICAL_FRAME, intrin.coeffs);
+            depth_optical_frame_, intrin.coeffs);
 
         while (rclcpp::ok() && is_running_) {
-            rs2::frameset frames = rs_pipe_->wait_for_frames(RS_WAIT_TIMEOUT_MS);
+            rs2::frameset frames = rs_pipe_->wait_for_frames(realsense_wait_timeout_ms_);
             rclcpp::Time now = this->get_clock()->now();
 
             // 1. Process Depth for CUDA cloth tracking (native GPU)
@@ -1005,7 +973,7 @@ void ClothTrackerCudaNode::run_direct_realsense_loop() {
                 if (depth_subscribed && pub_raw_depth_) {
                     sensor_msgs::msg::Image depth_img;
                     depth_img.header.stamp = now;
-                    depth_img.header.frame_id = DEPTH_OPTICAL_FRAME;
+                    depth_img.header.frame_id = depth_optical_frame_;
                     depth_img.height = depth.get_height();
                     depth_img.width = depth.get_width();
                     depth_img.encoding = "16UC1";
@@ -1029,7 +997,7 @@ void ClothTrackerCudaNode::run_direct_realsense_loop() {
                 if (color) {
                     cv::Mat color_mat(cv::Size(color.get_width(), color.get_height()), CV_8UC3,
                                       const_cast<void*>(color.get_data()), cv::Mat::AUTO_STEP);
-                    push_color_frame(color_mat, now, pub_color_info_ ? &color_info_msg : nullptr);
+                    push_color_frame(color_mat, now, pub_color_info_ && color_info_msg.width > 0 ? &color_info_msg : nullptr);
                 }
             }
         }

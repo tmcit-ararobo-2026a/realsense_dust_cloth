@@ -16,7 +16,6 @@ find_package(CUDAToolkit REQUIRED)
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
-find_package(ament_index_cpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -33,15 +32,14 @@ if(realsense2_FOUND)
   message(STATUS "Found librealsense2. Enabling direct hardware streaming API.")
   add_compile_definitions(HAVE_REALSENSE2)
 else()
-  message(STATUS "librealsense2 not found. Direct hardware API disabled; ROS 2 Depth subscription will be used.")
+  message(STATUS "librealsense2 not found. Direct mode is unavailable; topic input requires the Unity/rosbag profile.")
 endif()
 
 # Build C++ / CUDA Tracker Node
 add_executable(cloth_tracker_cuda_node
   src/cloth_tracker_cuda_node.cpp
   src/ballistic_tracker.cpp
-  src/map_background.cpp
-  src/map_tracking_control.cpp
+  src/tracking_status.cpp
   src/external_cloud_tracking.cpp
   src/cuda_kernels.cu
 )
@@ -57,7 +55,6 @@ target_link_libraries(cloth_tracker_cuda_node CUDA::cudart ${OpenCV_LIBRARIES})
 
 ament_target_dependencies(cloth_tracker_cuda_node
   rclcpp
-  ament_index_cpp
   std_msgs
   sensor_msgs
   geometry_msgs
@@ -104,12 +101,13 @@ install(DIRECTORY
 
 if(BUILD_TESTING)
   enable_testing()
-  add_executable(map_background_test test/test_map_background.cu src/map_background.cpp)
-  target_include_directories(map_background_test PRIVATE include ${OpenCV_INCLUDE_DIRS})
-  target_link_libraries(map_background_test CUDA::cudart ${OpenCV_LIBRARIES})
-  target_compile_options(map_background_test PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-UNDEBUG>)
-  add_test(NAME map_background COMMAND map_background_test)
-  set_tests_properties(map_background PROPERTIES SKIP_RETURN_CODE 77)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME launch_profiles COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_launch_profiles.py)
+  add_executable(point_cloud_io_test test/test_point_cloud_io.cpp)
+  target_include_directories(point_cloud_io_test PRIVATE include ${CUDAToolkit_INCLUDE_DIRS})
+  ament_target_dependencies(point_cloud_io_test sensor_msgs)
+  target_compile_options(point_cloud_io_test PRIVATE -UNDEBUG)
+  add_test(NAME point_cloud_io COMMAND point_cloud_io_test)
   add_executable(observed_landing_test test/test_observed_landing.cpp src/ballistic_tracker.cpp)
   target_include_directories(observed_landing_test PRIVATE include ${CUDAToolkit_INCLUDE_DIRS})
   target_link_libraries(observed_landing_test CUDA::cudart)

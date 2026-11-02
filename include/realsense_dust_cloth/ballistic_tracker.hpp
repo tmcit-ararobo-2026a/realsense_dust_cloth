@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string>
 #include "realsense_dust_cloth/cuda_kernels.cuh"
 
 namespace realsense_dust_cloth {
@@ -29,7 +30,6 @@ enum class TrackerState {
 class BallisticTracker {
 public:
     TrackerState state{TrackerState::IDLE};
-    bool observed_landing_only{false};
     double x{0.0}, y{0.0}, z{0.0};
     double vx{0.0}, vy{0.0}, vz{0.0};
     double last_stamp{0.0};
@@ -56,7 +56,6 @@ public:
     double launch_max_y{0.30};
     double launch_min_z{0.65};
     double launch_max_z{1.30};
-    double gate_radius_m{0.80};
     int max_lost_frames{15};
     double gravity_m_s2{9.81};
     int min_cluster_points{20};
@@ -91,21 +90,26 @@ public:
     static constexpr double DEFAULT_VERTICAL_JITTER_TOL_M = 0.03;       ///< Post-apex vertical measurement tolerance [m]
     static constexpr int DEFAULT_MAX_ANOMALY_FRAMES = 1;                ///< Consecutive anomalous frames before tracking is aborted
 
+    double lost_frame_gate_expansion_m{0.04};
+    double max_gate_expansion_m{0.10};
+    double heading_min_speed_m_s{0.20};
+    double heading_min_step_m{0.05};
+    double pending_max_drop_m{0.50};
     double tube_radius_m{DEFAULT_TUBE_RADIUS_M};
     double max_total_accel_m_s2{DEFAULT_MAX_TOTAL_ACCEL_M_S2};
+    double centroid_position_tolerance_m{0.04}; ///< Cluster centroid measurement uncertainty [m]
     double min_vertical_accel_m_s2{DEFAULT_MIN_VERTICAL_ACCEL_M_S2};
     double max_lateral_accel_m_s2{DEFAULT_MAX_LATERAL_ACCEL_M_S2};
     double max_heading_deg{DEFAULT_MAX_HEADING_DEG};
     double backward_jitter_tolerance_m{DEFAULT_BACKWARD_JITTER_TOL_M};
     double vertical_jitter_tolerance_m{DEFAULT_VERTICAL_JITTER_TOL_M};
     bool reject_ascent_after_apex{true};
-    bool enable_coast_prediction_tf{false};
 
     // Early Tracking Cutoff & Anomaly Abort Controls
     bool abort_on_anomaly{true};          ///< Cut off tracking immediately if physical anomaly detected
     int max_anomaly_frames{DEFAULT_MAX_ANOMALY_FRAMES}; ///< Consecutive anomaly frames threshold before aborting
-    bool publish_cutoff_as_landing{true}; ///< Publish final cutoff position as landing position
-    int anomaly_count{0};                 ///< Consecutive physical anomaly frame counter
+    int anomaly_count{0};
+    std::string last_rejection_reason;                 ///< Consecutive physical anomaly frame counter
 
     // Flight Phase Physical State
     bool has_reached_apex{false};       ///< True once cloth has reached apex and started descending
