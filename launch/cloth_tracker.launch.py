@@ -1,161 +1,58 @@
+"""Select one YAML; camera mode, clock and optional helpers all follow that file."""
 import os
+
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction
-from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from launch_ros.parameter_descriptions import ParameterValue
 
 
-def _create_tracker_node(context):
-    params_file = LaunchConfiguration('params_file').perform(context)
-    if not os.path.isabs(params_file) and not os.path.exists(params_file):
-        pkg_share = get_package_share_directory('realsense_dust_cloth')
-        candidate = os.path.join(pkg_share, 'config', params_file)
-        if os.path.exists(candidate):
-            params_file = candidate
-
-    use_sim_time_str = LaunchConfiguration('use_sim_time').perform(context)
-    use_direct_rs_str = LaunchConfiguration('use_direct_realsense').perform(context)
-    use_bg_sub_str = LaunchConfiguration('use_bg_subtraction').perform(context)
-
-    overrides = {
-        'use_sim_time': use_sim_time_str.lower() == 'true',
-    }
-    if use_direct_rs_str != '':
-        overrides['use_direct_realsense'] = use_direct_rs_str.lower() == 'true'
-    if use_bg_sub_str != '':
-        overrides['use_bg_subtraction'] = use_bg_sub_str.lower() == 'true'
-
-    return [
-        Node(
-            package='realsense_dust_cloth',
-            executable='cloth_tracker_cuda_node',
-            name='cloth_tracker_cuda_node',
-            output='screen',
-            parameters=[params_file, overrides],
-        )
-    ]
+def _create_nodes(context):
+    package_dir = get_package_share_directory('realsense_dust_cloth')
+    requested = LaunchConfiguration('params_file').perform(context)
+    params_file = os.path.expanduser(requested)
+    if not os.path.isabs(params_file) and not os.path.isfile(params_file):
+        params_file = os.path.join(package_dir, 'config', params_file)
+    if not os.path.isfile(params_file):
+        raise FileNotFoundError(f'Parameter YAML not found: {requested}')
+    with open(params_file, encoding='utf-8') as stream:
+        values = yaml.safe_load(stream)['/**']['ros__parameters']
+    for key in ('use_sim_time', 'use_direct_realsense', 'start_rviz',
+                'start_analyzer', 'record_inputs'):
+        if type(values.get(key)) is not bool:
+            raise ValueError(f'{key} must be true or false in {params_file}')
+    clock = {'use_sim_time': values['use_sim_time']}
+    nodes = [Node(
+        package='realsense_dust_cloth', executable='cloth_tracker_cuda_node',
+        name='cloth_tracker_cuda_node', output='screen', parameters=[params_file],
+    )]
+    if values['start_analyzer']:
+        nodes.append(Node(
+            package='realsense_dust_cloth', executable='trajectory_probability_analyzer.py',
+            name='cloth_trajectory_analyzer', output='screen', parameters=[clock],
+        ))
+    if values['start_rviz']:
+        nodes.append(Node(
+            package='rviz2', executable='rviz2', name='rviz2', output='screen',
+            arguments=['-d', os.path.join(package_dir, 'rviz', 'cloth_tracker.rviz')],
+            parameters=[clock],
+        ))
+    if values['record_inputs']:
+        topics = values.get('record_topics')
+        if not isinstance(topics, list) or not topics or not all(isinstance(t, str) for t in topics):
+            raise ValueError('record_topics must be a nonempty topic list when recording')
+        record_cmd = ['ros2', 'bag', 'record']
+        if values['use_sim_time']:
+            record_cmd.append('--use-sim-time')
+        nodes.append(ExecuteProcess(cmd=[*record_cmd, *topics], output='screen'))
+    return nodes
 
 
 def generate_launch_description():
-    pkg_share = get_package_share_directory('realsense_dust_cloth')
-    default_config_file = os.path.join(pkg_share, 'config', 'tracker_params.yaml')
-    rviz_config = os.path.join(pkg_share, 'rviz', 'cloth_tracker.rviz')
-
-    # =========================================================================
-    # 実行モード切り替えスイッチ (Runtime Switches)
-    # 調整用パラメータ (TF含む) は config/tracker_params.yaml に一本化されています
-    # =========================================================================
-    declare_params_file = DeclareLaunchArgument(
-        'params_file',
-        default_value=default_config_file,
-        description='Path to tracker parameter YAML file (tracker_params.yaml or test_bag_params.yaml)'
-    )
-
-    declare_use_direct_rs = DeclareLaunchArgument(
-        'use_direct_realsense',
-        default_value='',
-        description='Optional override: true (direct librealsense2) or false (ROS 2 topics). Empty uses YAML.'
-    )
-
-    declare_use_sim_time = DeclareLaunchArgument(
-        'use_sim_time',
-        default_value='false',
-        description='Use simulation clock (Isaac Sim / rosbag)'
-    )
-
-    declare_use_bg_subtraction = DeclareLaunchArgument(
-        'use_bg_subtraction',
-        default_value='',
-        description='Optional override: Enable background subtraction. Empty uses YAML.'
-    )
-
-    declare_rviz = DeclareLaunchArgument(
-        'rviz',
-        default_value='false',
-        description='Launch RViz2 GUI window'
-    )
-
-    declare_record = DeclareLaunchArgument(
-        'record',
-        default_value='false',
-        description='Automatically record TF, cloth trajectory, and video to rosbag'
-    )
-
-    declare_enable_analyzer = DeclareLaunchArgument(
-        'enable_analyzer',
-        default_value='true',
-        description='Run trajectory probability analyzer & dataset logger'
-    )
-
-    # 1. Main CUDA Cloth Tracker Node
-    # (Static TF for base_link -> camera_link is published internally from params_file)
-    cuda_tracker_node = OpaqueFunction(function=_create_tracker_node)
-
-    # 2. Trajectory Probability Analyzer Node (Optional: enable_analyzer:=true)
-    analyzer_node = Node(
-        package='realsense_dust_cloth',
-        executable='trajectory_probability_analyzer.py',
-        name='cloth_trajectory_analyzer',
-        output='screen',
-        condition=IfCondition(LaunchConfiguration('enable_analyzer')),
-        parameters=[
-            {
-                'use_sim_time': ParameterValue(
-                    LaunchConfiguration('use_sim_time'), value_type=bool),
-            }
-        ]
-    )
-
-    # 3. RViz2 GUI Node (Optional: rviz:=true)
-    rviz_node = Node(
-        package='rviz2',
-        executable='rviz2',
-        name='rviz2',
-        arguments=['-d', rviz_config],
-        output='screen',
-        condition=IfCondition(LaunchConfiguration('rviz')),
-        parameters=[
-            {
-                'use_sim_time': ParameterValue(
-                    LaunchConfiguration('use_sim_time'), value_type=bool),
-            }
-        ]
-    )
-
-    # 4. Automatic Rosbag Recording (Optional: record:=true)
-    record_process = ExecuteProcess(
-        cmd=['ros2', 'bag', 'record',
-             '/tf', '/tf_static',
-             '/cloth/position',
-             '/cloth/trajectory_marker',
-             '/cloth/measured_path',
-             '/cloth/most_probable_path',
-             '/cloth/probability_markers',
-             '/cloth/predicted_landing_point',
-             '/cloth/debug/roi_markers',
-             '/cloth/debug/cluster_points',
-             '/cloth/debug/filtered_points',
-             '/camera/camera/depth/image_rect_raw',
-             '/camera/camera/depth/camera_info',
-             '/camera/camera/color/image_raw/compressed',
-             '/camera/camera/color/camera_info'],
-        output='screen',
-        condition=IfCondition(LaunchConfiguration('record'))
-    )
-
     return LaunchDescription([
-        declare_params_file,
-        declare_use_direct_rs,
-        declare_use_sim_time,
-        declare_use_bg_subtraction,
-        declare_rviz,
-        declare_record,
-        declare_enable_analyzer,
-        cuda_tracker_node,
-        analyzer_node,
-        rviz_node,
-        record_process,
+        DeclareLaunchArgument('params_file', default_value='tracker_params.yaml',
+                              description='tracker_params.yaml / unity_params.yaml / rosbag_params.yaml'),
+        OpaqueFunction(function=_create_nodes),
     ])

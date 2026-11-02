@@ -16,6 +16,7 @@ find_package(CUDAToolkit REQUIRED)
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
@@ -31,13 +32,15 @@ if(realsense2_FOUND)
   message(STATUS "Found librealsense2. Enabling direct hardware streaming API.")
   add_compile_definitions(HAVE_REALSENSE2)
 else()
-  message(STATUS "librealsense2 not found. Direct hardware API disabled; ROS 2 Depth subscription will be used.")
+  message(STATUS "librealsense2 not found. Direct mode is unavailable; topic input requires the Unity/rosbag profile.")
 endif()
 
 # Build C++ / CUDA Tracker Node
 add_executable(cloth_tracker_cuda_node
   src/cloth_tracker_cuda_node.cpp
   src/ballistic_tracker.cpp
+  src/tracking_status.cpp
+  src/external_cloud_tracking.cpp
   src/cuda_kernels.cu
 )
 
@@ -52,6 +55,7 @@ target_link_libraries(cloth_tracker_cuda_node CUDA::cudart ${OpenCV_LIBRARIES})
 
 ament_target_dependencies(cloth_tracker_cuda_node
   rclcpp
+  std_msgs
   sensor_msgs
   geometry_msgs
   visualization_msgs
@@ -91,7 +95,24 @@ install(DIRECTORY
   config
   rviz
   data
+  scripts
   DESTINATION share/${PROJECT_NAME}
 )
+
+if(BUILD_TESTING)
+  enable_testing()
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME launch_profiles COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_launch_profiles.py)
+  add_executable(point_cloud_io_test test/test_point_cloud_io.cpp)
+  target_include_directories(point_cloud_io_test PRIVATE include ${CUDAToolkit_INCLUDE_DIRS})
+  ament_target_dependencies(point_cloud_io_test sensor_msgs)
+  target_compile_options(point_cloud_io_test PRIVATE -UNDEBUG)
+  add_test(NAME point_cloud_io COMMAND point_cloud_io_test)
+  add_executable(observed_landing_test test/test_observed_landing.cpp src/ballistic_tracker.cpp)
+  target_include_directories(observed_landing_test PRIVATE include ${CUDAToolkit_INCLUDE_DIRS})
+  target_link_libraries(observed_landing_test CUDA::cudart)
+  target_compile_options(observed_landing_test PRIVATE -UNDEBUG)
+  add_test(NAME observed_landing COMMAND observed_landing_test)
+endif()
 
 ament_package()

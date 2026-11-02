@@ -16,11 +16,12 @@
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
-#include <geometry_msgs/msg/twist.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <tf2_ros/transform_broadcaster.h>
+#include <std_msgs/msg/string.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <tf2_ros/static_transform_broadcaster.h>
 #include <tf2/LinearMath/Quaternion.h>
 
@@ -41,8 +42,38 @@ public:
     ~ClothTrackerCudaNode() override;
 
 private:
-    void declare_parameters();
-    void load_parameters();
+    void declare_and_load_parameters();
+    void setup_tracking_status();
+    std::string input_source_;
+    std::string cropped_replay_topic_;
+    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_cropped_replay_;
+    void publish_filter_input(const std::vector<float3>&, const rclcpp::Time&);
+    std::string cropped_cloud_topic_, dynamic_cloud_topic_;
+    double external_keep_radius_m_{0.3};
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_filter_prediction_;
+    double external_result_timeout_sec_{0.25}, external_poll_sec_{0.02};
+    double last_external_wall_sec_{-1.0}, last_external_stamp_sec_{-1.0};
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_cropped_cloud_;
+    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_dynamic_cloud_;
+    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_filter_status_;
+    rclcpp::TimerBase::SharedPtr external_watchdog_;
+    void setup_external_cloud();
+    void dynamic_cloud_callback(const sensor_msgs::msg::PointCloud2::SharedPtr);
+    void publish_tracking_result(const ClothTrackingResult&, const rclcpp::Time&,
+        const std::vector<float3>&, const std::vector<float3>&);
+
+    void publish_background_state(const std::string&, bool);
+    std::recursive_mutex processing_mutex_;
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_background_status_;
+    rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr pub_ready_;
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_tracking_state_;
+    double bag_rewind_tolerance_sec_{};
+    double min_trajectory_step_m_{}, static_marker_interval_sec_{};
+    int max_trajectory_points_{}, publisher_queue_size_{}, color_queue_size_{};
+    int warning_log_throttle_ms_{}, status_log_throttle_ms_{}, realsense_wait_timeout_ms_{};
+    std::string depth_optical_frame_, color_optical_frame_, cloth_tf_frame_;
+    double image_max_age_sec_{};
+    int depth_queue_size_{};
     void publish_static_transforms();
 
     void camera_info_callback(const sensor_msgs::msg::CameraInfo::ConstSharedPtr msg);
@@ -61,10 +92,7 @@ private:
     bool intrinsics_ready_{false};
     bool publish_debug_cloud_{false};
     bool use_direct_realsense_{false};
-    bool enable_ballistic_filter_{true};
     double trajectory_history_sec_{3.0};
-    int bg_frames_collected_{0};
-    int bg_target_frames_{20};
 
     // Trajectory history
     std::vector<std::pair<double, geometry_msgs::msg::Point>> trajectory_points_;
@@ -121,27 +149,7 @@ private:
     int rs_exposure_us_{-1};
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_rotated_color_;
     TrackerState prev_state_{TrackerState::IDLE};
-
-    // Robot Motion Monitoring & Stop-and-Shoot Fast Background Relearn
-    bool enable_cmd_vel_watch_{false};
-    std::string cmd_vel_topic_{"/robot/operation/cmd_vel"};
     std::string landing_position_topic_{"/cloth/landing_position"};
-    double cmd_vel_deadband_linear_{0.02};
-    double cmd_vel_deadband_angular_{0.02};
-    double cmd_vel_timeout_sec_{0.25};
-    double stop_settle_sec_{0.10};
-    int bg_relearn_frames_{5};
-
-    bool is_robot_moving_{false};
-    bool needs_bg_relearn_{false};
-    int bg_relearn_counter_{0};
-    rclcpp::Time last_cmd_vel_time_{0, 0, RCL_ROS_TIME};
-    rclcpp::Time stop_detected_time_{0, 0, RCL_ROS_TIME};
-
-    rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_cmd_vel_;
-
-    void cmd_vel_callback(const geometry_msgs::msg::Twist::SharedPtr msg);
-    void check_robot_motion_state(const rclcpp::Time& current_time);
 
     // Direct RealSense Thread
     std::atomic<bool> is_running_{false};

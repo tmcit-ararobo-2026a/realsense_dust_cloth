@@ -3,12 +3,8 @@
 namespace realsense_dust_cloth {
 
 namespace {
-constexpr double DEFAULT_FRAME_DT_SEC = 0.016;
-constexpr double MIN_VELOCITY_DT_SEC = 0.025;
-constexpr double DEFAULT_LAUNCH_VX_M_S = 2.0;
-constexpr double LOST_FRAME_GATE_EXPANSION_M = 0.08;
-constexpr double MAX_GATE_EXPANSION_M = 0.35;
 constexpr double HALF_GRAVITY_FACTOR = 0.5;
+constexpr double DEG_TO_RAD_FACTOR = 180.0 / M_PI;
 } // namespace
 
 void BallisticTracker::reset() {
@@ -16,9 +12,17 @@ void BallisticTracker::reset() {
     tracked_count = 0;
     lost_count = 0;
     stationary_count = 0;
+    anomaly_count = 0;
     launch_displacement_confirmed = false;
+    is_pending_launch = false;
+    has_reached_apex = false;
+    apex_z = 0.0;
     last_stamp = 0.0;
     launch_stamp = 0.0;
+    first_detect_stamp = 0.0;
+    anchor_x = 0.0;
+    anchor_y = 0.0;
+    anchor_z = 0.0;
 }
 
 bool BallisticTracker::get_prediction(double stamp_sec, float& px, float& py, float& pz) const {
@@ -26,56 +30,109 @@ bool BallisticTracker::get_prediction(double stamp_sec, float& px, float& py, fl
         return false;
     }
     double dt = stamp_sec - last_stamp;
-    if (dt <= 0.0 || (max_flight_duration_sec > 0.0 && dt > max_flight_duration_sec)) {
-        dt = DEFAULT_FRAME_DT_SEC;
-    }
+    if (dt < 0.0 || (max_flight_duration_sec > 0.0 && dt > max_flight_duration_sec)) return false;
     double drag_factor = std::clamp(1.0 - drag_coeff * dt, 0.0, 1.0);
     px = static_cast<float>(x + vx * dt * drag_factor);
     py = static_cast<float>(y + vy * dt * drag_factor);
     pz = static_cast<float>(z + vz * dt - HALF_GRAVITY_FACTOR * gravity_m_s2 * dt * dt);
+    pz = std::max(pz,static_cast<float>(landing_min_z));
     return true;
 }
 
 bool BallisticTracker::update(
     const ClothTrackingResult& raw, double stamp_sec, ClothTrackingResult& out)
 {
+    if (!std::isfinite(stamp_sec) || (last_stamp > 0 && stamp_sec <= last_stamp)) return false;
     // =========================================================================
-    // Phase A: IDLE / LANDED -> Launch Candidate Acquisition
+    // Phase A: IDLE / LANDED / LOST -> Launch Candidate Acquisition & 2-Stage Verification
     // =========================================================================
-    if (state == TrackerState::IDLE || state == TrackerState::LANDED) {
-        if (!raw.valid) {
+    if (state != TrackerState::TRACKING) {
+        bool valid_candidate = (raw.valid && raw.cluster_points_count >= min_cluster_points);
+        if (!valid_candidate) {
+            is_pending_launch = false;
+            first_detect_stamp = 0.0;
             return false;
         }
 
-        // Candidate must be inside the configured launch gate with sufficient points
-        if (raw.cx >= launch_min_x && raw.cx <= launch_max_x &&
-            raw.cy >= launch_min_y && raw.cy <= launch_max_y &&
-            raw.cz >= launch_min_z && raw.cz <= launch_max_z &&
-            raw.cluster_points_count >= min_cluster_points)
+        if (!is_pending_launch) {
+            // First detection must originate strictly inside the configured launch gate
+            bool in_launch_gate = (raw.cx >= launch_min_x && raw.cx <= launch_max_x &&
+                                   raw.cy >= launch_min_y && raw.cy <= launch_max_y &&
+                                   raw.cz >= launch_min_z && raw.cz <= launch_max_z);
+            if (!in_launch_gate) {
+                return false;
+            }
+            is_pending_launch = true;
+            anchor_x = raw.cx;
+            anchor_y = raw.cy;
+            anchor_z = raw.cz;
+            first_detect_stamp = stamp_sec;
+            last_stamp = stamp_sec;
+            return false;
+        }
+
+        // We have an active pending anchor from the launch gate
+        double dt_pending = stamp_sec - first_detect_stamp;
+        if (dt_pending > launch_timeout_sec) {
+            // If candidate lingered or jiggled in the gate too long without moving forward,
+            // treat as stationary frame / optical jitter and reset anchor to prevent lock-in.
+            bool still_in_gate = (raw.cx >= launch_min_x && raw.cx <= launch_max_x &&
+                                  raw.cy >= launch_min_y && raw.cy <= launch_max_y &&
+                                  raw.cz >= launch_min_z && raw.cz <= launch_max_z);
+            if (still_in_gate) {
+                anchor_x = raw.cx;
+                anchor_y = raw.cy;
+                anchor_z = raw.cz;
+                first_detect_stamp = stamp_sec;
+            } else {
+                is_pending_launch = false;
+                first_detect_stamp = 0.0;
+            }
+            return false;
+        }
+
+        double dx_from_anchor = raw.cx - anchor_x;
+        double dz_from_anchor = raw.cz - anchor_z;
+        double dt_safe = dt_pending;
+        double current_vx = dx_from_anchor / dt_safe;
+
+        // Confirm genuine high-speed forward launch displacement and velocity
+        if (dx_from_anchor >= min_launch_move_m &&
+            current_vx >= min_launch_vx &&
+            dz_from_anchor >= -dx_from_anchor)
         {
             state = TrackerState::TRACKING;
             x = raw.cx;
             y = raw.cy;
             z = raw.cz;
-            launch_x = raw.cx;
-            launch_y = raw.cy;
-            launch_z = raw.cz;
+            launch_x = anchor_x;
+            launch_y = anchor_y;
+            launch_z = anchor_z;
             launch_stamp = stamp_sec;
             stationary_ref_x = raw.cx;
             stationary_ref_y = raw.cy;
             stationary_ref_z = raw.cz;
-            launch_displacement_confirmed = false;
-            vx = std::max(min_launch_vx, DEFAULT_LAUNCH_VX_M_S);
-            vy = 0.0;
-            vz = 0.0;
+            launch_displacement_confirmed = true;
+            vx = std::clamp(current_vx, min_flight_vx_m_s, max_vx_m_s);
+            vy = std::clamp((raw.cy - anchor_y) / dt_safe, -max_abs_vy_m_s, max_abs_vy_m_s);
+            vz = std::clamp((raw.cz - anchor_z) / dt_safe, min_vz_m_s, max_vz_m_s);
+            apex_z = raw.cz;
+            has_reached_apex = (vz <= 0.0);
             last_stamp = stamp_sec;
-            tracked_count = 0;
+            tracked_count = 1;
             lost_count = 0;
             stationary_count = 0;
-            return false;
-        } else {
-            return false;
+            is_pending_launch = false;
+            out = raw;
+            return true;
         }
+
+        // If candidate moved significantly backwards or dropped vertically below gate, cancel pending
+        if (dx_from_anchor < -min_launch_move_m || dz_from_anchor < -pending_max_drop_m) {
+            is_pending_launch = false;
+            first_detect_stamp = 0.0;
+        }
+        return false;
     }
 
     // =========================================================================
@@ -83,7 +140,7 @@ bool BallisticTracker::update(
     // =========================================================================
     if (max_flight_duration_sec > 0.0 && (stamp_sec - launch_stamp) > max_flight_duration_sec) {
         if (launch_displacement_confirmed && x > launch_max_x) {
-            state = TrackerState::LANDED;
+            state = TrackerState::LOST;
             lost_count = 0;
             stationary_count = 0;
         } else {
@@ -98,10 +155,15 @@ bool BallisticTracker::update(
     double pred_y = static_cast<double>(pred_yf);
     double pred_z = static_cast<double>(pred_zf);
 
+    double dt_raw = stamp_sec - last_stamp;
+    double dt_safe = dt_raw;
+
     bool matched = false;
+    last_rejection_reason = "NO_CANDIDATE";
     int min_track_pts = std::min(min_cluster_points, min_track_points_limit);
 
     if (raw.valid && raw.cluster_points_count >= min_track_pts) {
+        last_rejection_reason = "PREDICTION_GATE";
         double dx_pred = raw.cx - pred_x;
         double dy_pred = raw.cy - pred_y;
         double dz_pred = raw.cz - pred_z;
@@ -112,107 +174,136 @@ bool BallisticTracker::update(
         double dz_prev = raw.cz - z;
         double dist_prev = std::sqrt(dx_prev * dx_prev + dy_prev * dy_prev + dz_prev * dz_prev);
 
-        double dt_raw = stamp_sec - last_stamp;
-        double dt_safe = (dt_raw > 0.0) ? dt_raw : launch_timeout_sec;
-        double dt_vel = std::max(dt_safe, MIN_VELOCITY_DT_SEC);
+        double dt_vel = dt_safe;
         double new_vx = dx_prev / dt_vel;
         double new_vy = dy_prev / dt_vel;
         double new_vz = dz_prev / dt_vel;
 
-        // A projectile in free forward flight must remain within the 3D ballistic gate
-        // of both the predicted position and the last measured position (prevents free-fall
-        // prediction during occlusion after hooking on a pole from teleporting 1.5m onto a human below)
-        double effective_gate = gate_radius_m + std::min(lost_count * LOST_FRAME_GATE_EXPANSION_M, MAX_GATE_EXPANSION_M);
+        // A projectile in free forward flight must remain within the 3D ballistic tube
+        double effective_gate = tube_radius_m + std::min(lost_count * lost_frame_gate_expansion_m, max_gate_expansion_m);
         double max_step_dist = effective_gate + max_vx_m_s * dt_safe;
+
+        bool physically_plausible = true;
+
+        // 1. Strict forward monotonic progress (no backward velocity or displacement beyond jitter tolerance)
+        if (raw.cx < x - backward_jitter_tolerance_m || dx_prev < min_flight_vx_m_s * dt_safe - centroid_position_tolerance_m || dx_prev > max_vx_m_s * dt_safe + centroid_position_tolerance_m) {
+            physically_plausible = false;
+            last_rejection_reason = "FORWARD_VELOCITY";
+        }
+
+        // 2. No ascent after apex: once descending, a free projectile cannot gain altitude in mid-air
+        if (physically_plausible && reject_ascent_after_apex && has_reached_apex) {
+            if (raw.cz > z + vertical_jitter_tolerance_m) {
+                physically_plausible = false;
+                last_rejection_reason = "ASCENT_AFTER_APEX";
+            }
+        }
+
+        // 3. Physical 3D Acceleration limits: gravity is -9.8 m/s^2; extreme downward, lateral, or total acceleration is impossible
+        if (physically_plausible) {
+            double ax = (new_vx - vx) / dt_safe;
+            double ay = (new_vy - vy) / dt_safe;
+            double az = (new_vz - vz) / dt_safe;
+            double total_accel = std::sqrt(ax * ax + ay * ay + az * az);
+            // Differentiation amplifies centroid measurement error as 1/dt^2.
+            // Bound that uncertainty in position units instead of loosening physical acceleration limits.
+            const double accel_uncertainty = 2.0 * centroid_position_tolerance_m / (dt_safe * dt_safe);
+            if (total_accel > max_total_accel_m_s2 + accel_uncertainty ||
+                az < min_vertical_accel_m_s2 - accel_uncertainty ||
+                std::abs(ay) > max_lateral_accel_m_s2 + accel_uncertainty) {
+                physically_plausible = false;
+                last_rejection_reason = "ACCELERATION";
+            }
+        }
+
+        // 4. Heading deviation angle: projectile momentum prevents sharp orthogonal turns into desks/obstacles
+        if (physically_plausible) {
+            double prev_speed = std::sqrt(vx * vx + vy * vy + vz * vz);
+            double step_dist = std::sqrt(dx_prev * dx_prev + dy_prev * dy_prev + dz_prev * dz_prev);
+            if (prev_speed > heading_min_speed_m_s && step_dist > heading_min_step_m) {
+                double dot = (vx * dx_prev + vy * dy_prev + vz * dz_prev) / (prev_speed * step_dist);
+                double cos_clamped = std::clamp(dot, -1.0, 1.0);
+                double deviation_deg = std::acos(cos_clamped) * DEG_TO_RAD_FACTOR;
+                if (deviation_deg > max_heading_deg) {
+                    physically_plausible = false;
+                    last_rejection_reason = "HEADING";
+                }
+            }
+        }
+
         if (dist_pred <= effective_gate &&
             dist_prev <= max_step_dist &&
-            new_vx >= min_flight_vx_m_s && new_vx <= max_vx_m_s &&
-            std::abs(new_vy) <= max_abs_vy_m_s &&
-            new_vz >= min_vz_m_s && new_vz <= max_vz_m_s)
+            physically_plausible &&
+            std::abs(dy_prev) <= max_abs_vy_m_s * dt_safe + centroid_position_tolerance_m &&
+            dz_prev >= min_vz_m_s * dt_safe - centroid_position_tolerance_m &&
+            dz_prev <= max_vz_m_s * dt_safe + centroid_position_tolerance_m)
         {
-            // Confirm forward upward/level displacement from launch point before locking on
-            if (!launch_displacement_confirmed) {
-                double dx_from_launch = raw.cx - launch_x;
-                double dz_from_launch = raw.cz - launch_z;
-                double dt_launch = stamp_sec - launch_stamp;
-                double dt_launch_safe = (dt_launch > 0.0) ? dt_launch : dt_safe;
-                double launch_vx = dx_from_launch / dt_launch_safe;
+            matched = true;
+            last_rejection_reason.clear();
+            anomaly_count = 0;
 
-                if (dx_from_launch >= min_launch_move_m &&
-                    launch_vx >= min_launch_vx &&
-                    dz_from_launch >= -dx_from_launch)
-                {
-                    launch_displacement_confirmed = true;
-                    matched = true;
-                    vx = std::clamp(new_vx, min_flight_vx_m_s, max_vx_m_s);
-                    vy = std::clamp(new_vy, -max_abs_vy_m_s, max_abs_vy_m_s);
-                    vz = std::clamp(new_vz, min_vz_m_s, max_vz_m_s);
-                    stationary_ref_x = raw.cx;
-                    stationary_ref_y = raw.cy;
-                    stationary_ref_z = raw.cz;
-                    stationary_count = 0;
-                    x = raw.cx;
-                    y = raw.cy;
-                    z = raw.cz;
-                    last_stamp = stamp_sec;
-                    lost_count = 0;
-                    tracked_count = 1;
-                    out = raw;
-                    return true;
+            // Detect mid-air or pole-hooked resting state
+            double ref_dx = raw.cx - stationary_ref_x;
+            double ref_dy = raw.cy - stationary_ref_y;
+            double ref_dz = raw.cz - stationary_ref_z;
+            double dist_from_ref = std::sqrt(ref_dx * ref_dx + ref_dy * ref_dy + ref_dz * ref_dz);
+            if (dist_from_ref < min_stationary_move_m) {
+                stationary_count++;
+                if (max_stationary_frames > 0 && stationary_count >= max_stationary_frames) {
+                    if (x > launch_max_x) {
+                        state = TrackerState::RESTING;
+                        lost_count = 0;
+                        stationary_count = 0;
+                    } else {
+                        reset();
+                    }
+                    return false;
                 }
             } else {
-                matched = true;
+                stationary_ref_x = raw.cx;
+                stationary_ref_y = raw.cy;
+                stationary_ref_z = raw.cz;
+                stationary_count = 0;
+            }
 
-                // Detect mid-air or pole-hooked resting state
-                double ref_dx = raw.cx - stationary_ref_x;
-                double ref_dy = raw.cy - stationary_ref_y;
-                double ref_dz = raw.cz - stationary_ref_z;
-                double dist_from_ref = std::sqrt(ref_dx * ref_dx + ref_dy * ref_dy + ref_dz * ref_dz);
-                if (dist_from_ref < min_stationary_move_m) {
-                    stationary_count++;
-                    if (max_stationary_frames > 0 && stationary_count >= max_stationary_frames) {
-                        if (x > launch_max_x) {
-                            state = TrackerState::LANDED;
-                            lost_count = 0;
-                            stationary_count = 0;
-                        } else {
-                            reset();
-                        }
-                        return false;
-                    }
-                } else {
-                    stationary_ref_x = raw.cx;
-                    stationary_ref_y = raw.cy;
-                    stationary_ref_z = raw.cz;
-                    stationary_count = 0;
-                }
+            double drag_factor = std::clamp(1.0 - drag_coeff * dt_safe, 0.0, 1.0);
+            double pred_vx = vx * drag_factor;
+            double pred_vy = vy * drag_factor;
+            double pred_vz = vz - gravity_m_s2 * dt_safe;
 
-                double drag_factor = std::clamp(1.0 - drag_coeff * dt_safe, 0.0, 1.0);
-                double pred_vx = vx * drag_factor;
-                double pred_vy = vy * drag_factor;
-                double pred_vz = vz - gravity_m_s2 * dt_safe;
+            vx = std::clamp((1.0 - vel_smoothing_beta) * pred_vx + vel_smoothing_beta * new_vx, min_flight_vx_m_s, max_vx_m_s);
+            vy = std::clamp((1.0 - vel_smoothing_beta) * pred_vy + vel_smoothing_beta * new_vy, -max_abs_vy_m_s, max_abs_vy_m_s);
+            vz = std::clamp((1.0 - vel_smoothing_beta) * pred_vz + vel_smoothing_beta * new_vz, min_vz_m_s, max_vz_m_s);
 
-                vx = std::clamp((1.0 - vel_smoothing_beta) * pred_vx + vel_smoothing_beta * new_vx, min_flight_vx_m_s, max_vx_m_s);
-                vy = std::clamp((1.0 - vel_smoothing_beta) * pred_vy + vel_smoothing_beta * new_vy, -max_abs_vy_m_s, max_abs_vy_m_s);
-                vz = std::clamp((1.0 - vel_smoothing_beta) * pred_vz + vel_smoothing_beta * new_vz, min_vz_m_s, max_vz_m_s);
+            x = raw.cx;
+            y = raw.cy;
+            z = raw.cz;
 
-                // Strictly use the actual measured cloth cluster position (never blend predicted coordinates into TF)
-                x = raw.cx;
-                y = raw.cy;
-                z = raw.cz;
+            apex_z = std::max(apex_z, z);
+            if (vz <= 0.0 || z < apex_z - vertical_jitter_tolerance_m) {
+                has_reached_apex = true;
+            }
 
-                last_stamp = stamp_sec;
+            last_stamp = stamp_sec;
+            lost_count = 0;
+            tracked_count++;
+            out = raw;
+
+            // Stop tracking when cloth touches the floor plane (landing_min_z)
+            if (z <= landing_min_z) {
+                state = TrackerState::LANDED;
                 lost_count = 0;
-                tracked_count++;
-                out = raw;
-
-                // Stop tracking when cloth touches the floor plane (landing_min_z)
-                if (z <= landing_min_z) {
-                    state = TrackerState::LANDED;
-                    lost_count = 0;
-                    stationary_count = 0;
-                }
-                return true;
+                stationary_count = 0;
+            }
+            return true;
+        } else {
+            // An unphysical or out-of-tube candidate was detected
+            anomaly_count++;
+            if (abort_on_anomaly && anomaly_count >= max_anomaly_frames) {
+                state = TrackerState::LOST;
+                lost_count = 0;
+                stationary_count = 0;
+                return false;
             }
         }
     }
@@ -221,41 +312,15 @@ bool BallisticTracker::update(
     // Phase C: Observation Missed / Lost Frame Handling
     // =========================================================================
     if (!matched) {
-        if (!launch_displacement_confirmed) {
-            if (raw.valid &&
-                raw.cx >= launch_min_x && raw.cx <= launch_max_x &&
-                raw.cy >= launch_min_y && raw.cy <= launch_max_y &&
-                raw.cz >= launch_min_z && raw.cz <= launch_max_z &&
-                raw.cluster_points_count >= min_cluster_points)
-            {
-                x = raw.cx;
-                y = raw.cy;
-                z = raw.cz;
-                launch_x = raw.cx;
-                launch_y = raw.cy;
-                launch_z = raw.cz;
-                launch_stamp = stamp_sec;
-                stationary_ref_x = raw.cx;
-                stationary_ref_y = raw.cy;
-                stationary_ref_z = raw.cz;
-                vx = std::max(min_launch_vx, DEFAULT_LAUNCH_VX_M_S);
-                vy = 0.0;
-                vz = 0.0;
-                last_stamp = stamp_sec;
-                return false;
-            }
-            if ((stamp_sec - launch_stamp) > launch_timeout_sec) {
-                reset();
-            }
-            return false;
-        }
         lost_count++;
-        if (lost_count > max_lost_frames || pred_z <= landing_min_z) {
-            state = TrackerState::LANDED;
+        if (lost_count > max_lost_frames) {
+            state = TrackerState::LOST;
             lost_count = 0;
             stationary_count = 0;
             return false;
         }
+
+
         return false;
     }
 
