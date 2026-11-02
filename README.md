@@ -97,10 +97,17 @@ YAMLは実行環境、カメラ、ROI、射出、飛翔、GPU、gn10接続、表
 
 | 役割 | ファイル |
 |---|---|
-| カメラ入力・パラメータ・結果の配信 | `src/cloth_tracker_cuda_node.cpp` |
+| 起動・終了の順序 | `src/cloth_tracker_cuda_node.cpp` |
+| YAML読込・設定検証 | `src/tracker_parameters.cpp` |
+| 画像トピック入力・カメラTF | `src/camera_input.cpp` |
+| USB直結のRealSense取得 | `src/realsense_camera.cpp` |
+| 非同期の色画像配信 | `src/color_stream.cpp` |
+| 実測位置・着地・軌跡の配信 | `src/tracking_output.cpp` |
 | 点群の受信・gn10への送信・入力途絶処理 | `src/external_cloud_tracking.cpp` |
 | ROI・間引き・クラスタ選択 | `src/cuda_kernels.cu` |
 | 射出確認・予測・異常と着地の判定 | `src/ballistic_tracker.cpp` |
 | 状態トピック | `src/tracking_status.cpp` |
 
 今回の削除・変更・設定名の移行は `CHANGES_20261102.md` に記載します。Jetsonの負荷と、雑巾を最後まで追える割合は実機で測定する必要があります。
+
+コードを読む順序・今回の整理・削除した処理は `CODE_STRUCTURE.md` にまとめています。

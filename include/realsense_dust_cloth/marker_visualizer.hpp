@@ -1,45 +1,36 @@
 #pragma once
 
-#include <vector>
-#include <string>
-#include <cmath>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
+#include <string>
+#include <vector>
 
-#include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
-#include <visualization_msgs/msg/marker.hpp>
-#include <visualization_msgs/msg/marker_array.hpp>
-#include <nav_msgs/msg/path.hpp>
+#include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
+#include <visualization_msgs/msg/marker.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 
 #include "realsense_dust_cloth/cuda_kernels.cuh"
-#include "realsense_dust_cloth/parabola_fit.hpp"
 
 namespace realsense_dust_cloth {
 
 class MarkerVisualizer {
-public:
+  public:
     /**
      * @brief Builds ROI boundary boxes, launch gate, HUD dashboard text, and floor distance markers.
      */
     static visualization_msgs::msg::MarkerArray create_roi_markers(
-        const rclcpp::Time& stamp,
-        const FilterConfig& filter_cfg,
-        bool enable_ballistic_filter,
-        double launch_min_x, double launch_max_x,
-        double launch_min_y, double launch_max_y,
-        double launch_min_z, double launch_max_z,
-        bool is_tracking,
-        double track_x, double track_y, double track_z,
-        double track_vx, double track_vz, double track_speed,
-        const ClothTrackingResult& raw_res,
+        const rclcpp::Time& stamp, const FilterConfig& filter_cfg, double launch_min_x,
+        double launch_max_x, double launch_min_y, double launch_max_y, double launch_min_z,
+        double launch_max_z, bool is_tracking, double track_x, double track_y, double track_z,
+        double track_vx, double track_vz, double track_speed, const ClothTrackingResult& raw_res,
         const CameraPoseConfig& camera_pose,
         const std::vector<std::pair<double, geometry_msgs::msg::Point>>& trajectory_points,
-        const std::string& frame_id = "base_link")
-    {
+        const std::string& frame_id = "base_link") {
         visualization_msgs::msg::MarkerArray markers;
 
         // 1. PassThrough ROI Box (Cyan Wireframe Cube)
@@ -64,27 +55,25 @@ public:
         markers.markers.push_back(roi_marker);
 
         // 2. Launch Gate Box (Yellow Translucent Cube)
-        if (enable_ballistic_filter) {
-            visualization_msgs::msg::Marker launch_marker;
-            launch_marker.header.stamp = stamp;
-            launch_marker.header.frame_id = frame_id;
-            launch_marker.ns = "launch_gate";
-            launch_marker.id = 1;
-            launch_marker.type = visualization_msgs::msg::Marker::CUBE;
-            launch_marker.action = visualization_msgs::msg::Marker::ADD;
-            launch_marker.pose.position.x = 0.5 * (launch_min_x + launch_max_x);
-            launch_marker.pose.position.y = 0.5 * (launch_min_y + launch_max_y);
-            launch_marker.pose.position.z = 0.5 * (launch_min_z + launch_max_z);
-            launch_marker.pose.orientation.w = 1.0;
-            launch_marker.scale.x = std::max(0.01, launch_max_x - launch_min_x);
-            launch_marker.scale.y = std::max(0.01, launch_max_y - launch_min_y);
-            launch_marker.scale.z = std::max(0.01, launch_max_z - launch_min_z);
-            launch_marker.color.r = 1.0f;
-            launch_marker.color.g = 0.85f;
-            launch_marker.color.b = 0.0f;
-            launch_marker.color.a = 0.20f;
-            markers.markers.push_back(launch_marker);
-        }
+        visualization_msgs::msg::Marker launch_marker;
+        launch_marker.header.stamp = stamp;
+        launch_marker.header.frame_id = frame_id;
+        launch_marker.ns = "launch_gate";
+        launch_marker.id = 1;
+        launch_marker.type = visualization_msgs::msg::Marker::CUBE;
+        launch_marker.action = visualization_msgs::msg::Marker::ADD;
+        launch_marker.pose.position.x = 0.5 * (launch_min_x + launch_max_x);
+        launch_marker.pose.position.y = 0.5 * (launch_min_y + launch_max_y);
+        launch_marker.pose.position.z = 0.5 * (launch_min_z + launch_max_z);
+        launch_marker.pose.orientation.w = 1.0;
+        launch_marker.scale.x = std::max(0.01, launch_max_x - launch_min_x);
+        launch_marker.scale.y = std::max(0.01, launch_max_y - launch_min_y);
+        launch_marker.scale.z = std::max(0.01, launch_max_z - launch_min_z);
+        launch_marker.color.r = 1.0f;
+        launch_marker.color.g = 0.85f;
+        launch_marker.color.b = 0.0f;
+        launch_marker.color.a = 0.20f;
+        markers.markers.push_back(launch_marker);
 
         // 3. Real-time HUD Dashboard (High-visibility 3D Text positioned clearly above scene)
         visualization_msgs::msg::Marker text_marker;
@@ -106,9 +95,10 @@ public:
             text_marker.color.b = 0.3f;
             text_marker.color.a = 1.0f;
             snprintf(status_str, sizeof(status_str),
-                     "● [TRACKING ACTIVE]\nCloth: (X: %.2fm, Y: %.2fm, Z: %.2fm)\nSpeed: %.2f m/s (Vx: %.2f, Vz: %.2f)\nPoints: %d pts",
-                     track_x, track_y, track_z,
-                     track_speed, track_vx, track_vz, raw_res.cluster_points_count);
+                     "● [TRACKING ACTIVE]\nCloth: (X: %.2fm, Y: %.2fm, Z: %.2fm)\nSpeed: %.2f m/s "
+                     "(Vx: %.2f, Vz: %.2f)\nPoints: %d pts",
+                     track_x, track_y, track_z, track_speed, track_vx, track_vz,
+                     raw_res.cluster_points_count);
         } else {
             text_marker.color.r = 1.0f;
             text_marker.color.g = 0.9f;
@@ -116,20 +106,21 @@ public:
             text_marker.color.a = 0.95f;
             if (raw_res.valid) {
                 snprintf(status_str, sizeof(status_str),
-                         "○ [IDLE: Candidate Detected]\nPos: (X: %.2fm, Y: %.2fm, Z: %.2fm)\nCluster: %d pts\n(Waiting for launch velocity)",
+                         "○ [IDLE: Candidate Detected]\nPos: (X: %.2fm, Y: %.2fm, Z: "
+                         "%.2fm)\nCluster: %d pts\n(Waiting for launch velocity)",
                          raw_res.cx, raw_res.cy, raw_res.cz, raw_res.cluster_points_count);
             } else {
                 snprintf(status_str, sizeof(status_str),
-                         "○ [IDLE: Waiting for Throw]\nLaunch Area: X: %.2f~%.2fm, Z: %.2f~%.2fm\nCamera: Pitch %.1f deg, Height %.2fm",
-                         launch_min_x, launch_max_x,
-                         launch_min_z, launch_max_z,
+                         "○ [IDLE: Waiting for Throw]\nLaunch Area: X: %.2f~%.2fm, Z: "
+                         "%.2f~%.2fm\nCamera: Pitch %.1f deg, Height %.2fm",
+                         launch_min_x, launch_max_x, launch_min_z, launch_max_z,
                          camera_pose.pitch_deg, camera_pose.height_offset_m);
             }
         }
         text_marker.text = status_str;
         markers.markers.push_back(text_marker);
 
-        // 4. Floor Distance Markers (1.0m, 2.0m, 3.0m, 3.5m)
+        // 床面の距離目盛（1m刻み）
         for (double dist = 1.0; dist <= 3.5; dist += 1.0) {
             visualization_msgs::msg::Marker dist_marker;
             dist_marker.header.stamp = stamp;
@@ -152,7 +143,7 @@ public:
             markers.markers.push_back(dist_marker);
         }
 
-        // 5. Landing point text marker
+        // 最後の実測位置。LOSTの場合も表示するため着地とは呼ばない。
         if (!trajectory_points.empty()) {
             const auto& last_pt = trajectory_points.back().second;
             visualization_msgs::msg::Marker land_marker;
@@ -171,7 +162,7 @@ public:
             land_marker.color.b = 0.2f;
             land_marker.color.a = 1.0f;
             char land_buf[64];
-            snprintf(land_buf, sizeof(land_buf), "🎯 Landing: %.2fm", last_pt.x);
+            snprintf(land_buf, sizeof(land_buf), "Last observation X: %.2fm", last_pt.x);
             land_marker.text = land_buf;
             markers.markers.push_back(land_marker);
         }
@@ -182,10 +173,9 @@ public:
     /**
      * @brief Creates the current cloth tip sphere marker.
      */
-    static visualization_msgs::msg::Marker create_cloth_tip_marker(
-        const rclcpp::Time& stamp, double x, double y, double z,
-        const std::string& frame_id = "base_link")
-    {
+    static visualization_msgs::msg::Marker
+    create_cloth_tip_marker(const rclcpp::Time& stamp, double x, double y, double z,
+                            const std::string& frame_id = "base_link") {
         visualization_msgs::msg::Marker ball_marker;
         ball_marker.header.stamp = stamp;
         ball_marker.header.frame_id = frame_id;
@@ -210,11 +200,10 @@ public:
     /**
      * @brief Creates the measured flight trajectory line strip.
      */
-    static visualization_msgs::msg::Marker create_trajectory_line(
-        const rclcpp::Time& stamp,
-        const std::vector<std::pair<double, geometry_msgs::msg::Point>>& points,
-        const std::string& frame_id = "base_link")
-    {
+    static visualization_msgs::msg::Marker
+    create_trajectory_line(const rclcpp::Time& stamp,
+                           const std::vector<std::pair<double, geometry_msgs::msg::Point>>& points,
+                           const std::string& frame_id = "base_link") {
         visualization_msgs::msg::Marker line_marker;
         line_marker.header.stamp = stamp;
         line_marker.header.frame_id = frame_id;
@@ -236,11 +225,10 @@ public:
     /**
      * @brief Creates the measured points list (orange spheres).
      */
-    static visualization_msgs::msg::Marker create_measured_points(
-        const rclcpp::Time& stamp,
-        const std::vector<std::pair<double, geometry_msgs::msg::Point>>& points,
-        const std::string& frame_id = "base_link")
-    {
+    static visualization_msgs::msg::Marker
+    create_measured_points(const rclcpp::Time& stamp,
+                           const std::vector<std::pair<double, geometry_msgs::msg::Point>>& points,
+                           const std::string& frame_id = "base_link") {
         visualization_msgs::msg::Marker raw_points_marker;
         raw_points_marker.header.stamp = stamp;
         raw_points_marker.header.frame_id = frame_id;
@@ -264,13 +252,12 @@ public:
     /**
      * @brief Helper to publish float3 point clouds as sensor_msgs::msg::PointCloud2.
      */
-    static void publish_point_cloud(
-        const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr& pub,
-        const std::vector<float3>& pts,
-        const rclcpp::Time& stamp,
-        const std::string& frame_id)
-    {
-        if (!pub) return;
+    static void
+    publish_point_cloud(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr& pub,
+                        const std::vector<float3>& pts, const rclcpp::Time& stamp,
+                        const std::string& frame_id) {
+        if (!pub)
+            return;
 
         sensor_msgs::msg::PointCloud2 cloud_msg;
         cloud_msg.header.stamp = stamp;
@@ -304,4 +291,3 @@ public:
 };
 
 } // namespace realsense_dust_cloth
-

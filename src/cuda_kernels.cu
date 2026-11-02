@@ -1,621 +1,576 @@
 #include "realsense_dust_cloth/cuda_kernels.cuh"
-#include <cuda_runtime.h>
-#include <math_constants.h>
-#include <device_launch_parameters.h>
 #include <cmath>
-#include <stdexcept>
+#include <cuda_runtime.h>
+#include <device_launch_parameters.h>
 #include <iostream>
+#include <math_constants.h>
+#include <stdexcept>
 
-namespace realsense_dust_cloth
-{
+namespace realsense_dust_cloth {
 
-    namespace
-    {
+namespace {
 
-        __device__ __forceinline__ float atomicMinFloat(float *addr, float value)
-        {
-            float old;
-            old = (value >= 0) ? __int_as_float(atomicMin((int *)addr, __float_as_int(value))) : __uint_as_float(atomicMax((unsigned int *)addr, __float_as_uint(value)));
-            return old;
-        }
+__device__ __forceinline__ float atomicMinFloat(float* addr, float value) {
+    float old;
+    old = (value >= 0) ? __int_as_float(atomicMin((int*)addr, __float_as_int(value)))
+                       : __uint_as_float(atomicMax((unsigned int*)addr, __float_as_uint(value)));
+    return old;
+}
 
-        __device__ __forceinline__ float atomicMaxFloat(float *addr, float value)
-        {
-            float old;
-            old = (value >= 0) ? __int_as_float(atomicMax((int *)addr, __float_as_int(value))) : __uint_as_float(atomicMin((unsigned int *)addr, __float_as_uint(value)));
-            return old;
-        }
+__device__ __forceinline__ float atomicMaxFloat(float* addr, float value) {
+    float old;
+    old = (value >= 0) ? __int_as_float(atomicMax((int*)addr, __float_as_int(value)))
+                       : __uint_as_float(atomicMin((unsigned int*)addr, __float_as_uint(value)));
+    return old;
+}
 
-        __device__ int find_root(int *parent, int i)
-        {
-            while (parent[i] != i)
-            {
-                int p = parent[i];
-                parent[i] = parent[p]; // Path halving
-                i = p;
-            }
-            return i;
-        }
-
-        __device__ void union_clusters(int *parent, int a, int b)
-        {
-            int root_a = find_root(parent, a);
-            int root_b = find_root(parent, b);
-            while (root_a != root_b)
-            {
-                if (root_a > root_b)
-                {
-                    int old = atomicMin(&parent[root_a], root_b);
-                    if (old == root_a)
-                        break;
-                    root_a = find_root(parent, old);
-                }
-                else
-                {
-                    int old = atomicMin(&parent[root_b], root_a);
-                    if (old == root_b)
-                        break;
-                    root_b = find_root(parent, old);
-                }
-            }
-        }
-
-        // -------------------------------------------------------------
-        // Kernel 1: Back-Projection, Coordinate Transform & PassThrough
-        // -------------------------------------------------------------
-        __global__ void kernel_backproject_and_passthrough(
-            const uint16_t *__restrict__ depth,
-            CameraIntrinsics intrin,
-            CameraPoseConfig pose,
-            FilterConfig filter,
-            float3 *__restrict__ valid_points,
-            int *__restrict__ valid_count,
-            int max_valid_points)
-        {
-            int u = blockIdx.x * blockDim.x + threadIdx.x;
-            int v = blockIdx.y * blockDim.y + threadIdx.y;
-
-            if (u >= intrin.width || v >= intrin.height)
-                return;
-
-            int idx = v * intrin.width + u;
-            uint16_t raw_depth = depth[idx];
-            if (raw_depth == 0)
-                return;
-
-            float z_raw = raw_depth * intrin.depth_scale;
-            if (z_raw < filter.min_depth_m || z_raw > filter.max_depth_m)
-                return;
-
-            // 2D Depth Continuity Check (Parameterizable via FilterConfig / YAML)
-            if (filter.continuity_min_neighbors > 0)
-            {
-                const int radius = filter.continuity_radius_px;
-                if (u < radius || u >= intrin.width - radius || v < radius || v >= intrin.height - radius)
-                    return;
-                float z_up = depth[(v - radius) * intrin.width + u] * intrin.depth_scale;
-                float z_dn = depth[(v + radius) * intrin.width + u] * intrin.depth_scale;
-                float z_lf = depth[v * intrin.width + (u - radius)] * intrin.depth_scale;
-                float z_rt = depth[v * intrin.width + (u + radius)] * intrin.depth_scale;
-                int valid_neighbors = 0;
-                if (z_up > 0.0f && fabsf(z_raw - z_up) <= filter.continuity_thresh_m) valid_neighbors++;
-                if (z_dn > 0.0f && fabsf(z_raw - z_dn) <= filter.continuity_thresh_m) valid_neighbors++;
-                if (z_lf > 0.0f && fabsf(z_raw - z_lf) <= filter.continuity_thresh_m) valid_neighbors++;
-                if (z_rt > 0.0f && fabsf(z_raw - z_rt) <= filter.continuity_thresh_m) valid_neighbors++;
-                if (valid_neighbors < filter.continuity_min_neighbors)
-                {
-                    return;
-                }
-            }
-
-            // Camera optical frame (Z forward, X right, Y down)
-            float x_cam = (static_cast<float>(u) - intrin.cx) * z_raw / intrin.fx;
-            float y_cam = (static_cast<float>(v) - intrin.cy) * z_raw / intrin.fy;
-            float z_cam = z_raw;
-
-            // Right-handed 3D rotation matching Static TF (q_pitch(-pitch) * q_roll(roll) * q_opt)
-            constexpr float DEG_TO_RAD = 3.14159265358979323846f / 180.0f;
-            float pitch_rad = pose.pitch_deg * DEG_TO_RAD;
-            float roll_rad = pose.roll_deg * DEG_TO_RAD;
-            float cos_p = cosf(pitch_rad);
-            float sin_p = sinf(pitch_rad);
-            float cos_r = cosf(roll_rad);
-            float sin_r = sinf(roll_rad);
-
-            float y_roll = -x_cam * cos_r + y_cam * sin_r;
-            float z_roll = -x_cam * sin_r - y_cam * cos_r;
-
-            float x_rob = pose.x_offset_m + (z_cam * cos_p - z_roll * sin_p);
-            float y_rob = y_roll;
-            float z_rob = pose.height_offset_m + (z_cam * sin_p + z_roll * cos_p);
-
-
-
-            // PassThrough in base_link
-            if (x_rob < filter.min_x_m || x_rob > filter.max_x_m ||
-                y_rob < filter.min_y_m || y_rob > filter.max_y_m ||
-                z_rob < filter.min_z_m || z_rob > filter.max_z_m)
-            {
-                return;
-            }
-
-            int out_idx = atomicAdd(valid_count, 1);
-            if (out_idx < max_valid_points)
-            {
-                valid_points[out_idx] = make_float3(x_rob, y_rob, z_rob);
-            }
-        }
-
-        // -------------------------------------------------------------
-        // Kernel 2: Fast Spatial Hash Voxel Downsampling
-        // -------------------------------------------------------------
-        __global__ void kernel_voxel_downsample(
-            const float3 *__restrict__ valid_points,
-            int valid_count,
-            float voxel_size,
-            uint64_t *__restrict__ hash_keys,
-            float3 *__restrict__ voxel_points,
-            int *__restrict__ voxel_count,
-            int max_voxel_points,
-            int hash_table_size)
-        {
-            int idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= valid_count)
-                return;
-
-            float3 pt = valid_points[idx];
-            int vx = __float2int_rd(pt.x / voxel_size);
-            int vy = __float2int_rd(pt.y / voxel_size);
-            int vz = __float2int_rd(pt.z / voxel_size);
-
-            // 64-bit voxel spatial key
-            uint64_t key = ((static_cast<uint64_t>(vx + 2048) & 0x1FFFFFULL) << 42) |
-                           ((static_cast<uint64_t>(vy + 2048) & 0x1FFFFFULL) << 21) |
-                           (static_cast<uint64_t>(vz + 2048) & 0x1FFFFFULL);
-
-            // Hash function (Murmur / splitmix inspired)
-            uint64_t h = key;
-            h ^= h >> 33;
-            h *= 0xff51afd7ed558ccdULL;
-            h ^= h >> 33;
-            h *= 0xc4ceb9fe1a85ec53ULL;
-            h ^= h >> 33;
-            uint32_t slot = static_cast<uint32_t>(h) & (hash_table_size - 1);
-
-            // Linear probing
-            for (int probe = 0; probe < 32; ++probe)
-            {
-                uint32_t s = (slot + probe) & (hash_table_size - 1);
-                unsigned long long prev = atomicCAS(
-                    reinterpret_cast<unsigned long long *>(&hash_keys[s]),
-                    0xFFFFFFFFFFFFFFFFULL,
-                    static_cast<unsigned long long>(key));
-
-                if (prev == 0xFFFFFFFFFFFFFFFFULL)
-                {
-                    // First time this voxel is encountered
-                    int v_idx = atomicAdd(voxel_count, 1);
-                    if (v_idx < max_voxel_points)
-                    {
-                        voxel_points[v_idx] = pt;
-                    }
-                    break;
-                }
-                else if (prev == static_cast<unsigned long long>(key))
-                {
-                    // Duplicate voxel
-                    break;
-                }
-            }
-        }
-
-        // -------------------------------------------------------------
-        // Kernel 3: Clustering Initialization & Parallel Union-Find
-        // -------------------------------------------------------------
-        __global__ void kernel_init_clusters(int *parent, int count)
-        {
-            int idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx < count)
-            {
-                parent[idx] = idx;
-            }
-        }
-
-        __global__ void kernel_cluster_union_find(
-            const float3 *__restrict__ points,
-            int count,
-            float eps_sq,
-            int *__restrict__ parent)
-        {
-            int i = blockIdx.x * blockDim.x + threadIdx.x;
-            if (i >= count)
-                return;
-
-            float3 pi = points[i];
-
-            for (int j = i + 1; j < count; ++j)
-            {
-                float3 pj = points[j];
-                float dx = pi.x - pj.x;
-                float dy = pi.y - pj.y;
-                float dz = pi.z - pj.z;
-                float d2 = dx * dx + dy * dy + dz * dz;
-
-                if (d2 <= eps_sq)
-                {
-                    union_clusters(parent, i, j);
-                }
-            }
-        }
-
-        // -------------------------------------------------------------
-        // Kernel 4: Cluster Properties Accumulation
-        // -------------------------------------------------------------
-        __global__ void kernel_init_cluster_stats(
-            int *cluster_sizes,
-            float3 *cluster_min,
-            float3 *cluster_max,
-            float3 *cluster_sum,
-            int count)
-        {
-            int idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx < count)
-            {
-                cluster_sizes[idx] = 0;
-                cluster_min[idx] = make_float3(1e9f, 1e9f, 1e9f);
-                cluster_max[idx] = make_float3(-1e9f, -1e9f, -1e9f);
-                cluster_sum[idx] = make_float3(0.0f, 0.0f, 0.0f);
-            }
-        }
-
-        __global__ void kernel_accumulate_cluster_stats(
-            const float3 *__restrict__ points,
-            int *__restrict__ parent,
-            int count,
-            int *__restrict__ cluster_sizes,
-            float3 *__restrict__ cluster_min,
-            float3 *__restrict__ cluster_max,
-            float3 *__restrict__ cluster_sum)
-        {
-            int i = blockIdx.x * blockDim.x + threadIdx.x;
-            if (i >= count)
-                return;
-
-            int root = find_root(parent, i);
-            float3 p = points[i];
-
-            atomicAdd(&cluster_sizes[root], 1);
-            atomicMinFloat(&cluster_min[root].x, p.x);
-            atomicMinFloat(&cluster_min[root].y, p.y);
-            atomicMinFloat(&cluster_min[root].z, p.z);
-
-            atomicMaxFloat(&cluster_max[root].x, p.x);
-            atomicMaxFloat(&cluster_max[root].y, p.y);
-            atomicMaxFloat(&cluster_max[root].z, p.z);
-
-            atomicAdd(&cluster_sum[root].x, p.x);
-            atomicAdd(&cluster_sum[root].y, p.y);
-            atomicAdd(&cluster_sum[root].z, p.z);
-        }
-
-        // -------------------------------------------------------------
-        // Kernel 5: Select Flying Cloth Cluster
-        // -------------------------------------------------------------
-        __global__ void kernel_select_cloth(
-            const int *__restrict__ cluster_sizes,
-            const float3 *__restrict__ cluster_min,
-            const float3 *__restrict__ cluster_max,
-            const float3 *__restrict__ cluster_sum,
-            int count,
-            FilterConfig filter,
-            float3 pred_pos,
-            bool has_prediction,
-            ClothTrackingResult *__restrict__ result,
-            int *__restrict__ best_root_out)
-        {
-            if (threadIdx.x == 0 && blockIdx.x == 0)
-            {
-                result->valid = false;
-                result->cx = 0.0f;
-                result->cy = 0.0f;
-                result->cz = 0.0f;
-                result->cluster_points_count = 0;
-                result->bbox_dx = 0.0f;
-                result->bbox_dy = 0.0f;
-                result->bbox_dz = 0.0f;
-                *best_root_out = -1;
-
-                int best_count = 0;
-                int best_idx = -1;
-                float best_score = -CUDART_INF_F;
-
-                int min_pts = has_prediction ? filter.min_tracking_points : filter.min_cluster_points;
-                for (int i = 0; i < count; ++i)
-                {
-                    int sz = cluster_sizes[i];
-                    if (sz < min_pts || sz > filter.max_cluster_points)
-                    {
-                        continue;
-                    }
-
-                    float dx = cluster_max[i].x - cluster_min[i].x;
-                    float dy = cluster_max[i].y - cluster_min[i].y;
-                    float dz = cluster_max[i].z - cluster_min[i].z;
-
-                    // Reject opponent robot or huge noise (> max_cloth_size_m) or tiny speckle noise (< min_cloth_size_m)
-                    float max_dim = fmaxf(dx, fmaxf(dy, dz));
-                    if (dx > filter.max_cloth_size_m || dy > filter.max_cloth_size_m || dz > filter.max_cloth_size_m ||
-                        max_dim < filter.min_cloth_size_m)
-                    {
-                        continue;
-                    }
-
-                    float c_cx = cluster_sum[i].x / static_cast<float>(sz);
-                    float c_cy = cluster_sum[i].y / static_cast<float>(sz);
-                    float c_cz = cluster_sum[i].z / static_cast<float>(sz);
-
-                    float score = 0.0f;
-                    if (has_prediction)
-                    {
-                        float dpx = c_cx - pred_pos.x;
-                        float dpy = c_cy - pred_pos.y;
-                        float dpz = c_cz - pred_pos.z;
-                        float dist = sqrtf(dpx * dpx + dpy * dpy + dpz * dpz);
-
-                        if (dist > filter.gate_radius_m)
-                        {
-                            continue; // Out of tracking gate
-                        }
-
-                        // Close to ballistic prediction: highest priority (proximity strictly dominates over cluster size)
-
-                        score = -dist * filter.prediction_distance_weight + static_cast<float>(sz) * filter.cluster_size_weight;
-                    }
-                    else
-                    {
-                        // When waiting for launch: ONLY accept clusters originating inside the configured launch zone
-                        if (c_cx >= filter.launch_min_x && c_cx <= filter.launch_max_x &&
-                            c_cy >= filter.launch_min_y && c_cy <= filter.launch_max_y &&
-                            c_cz >= filter.launch_min_z && c_cz <= filter.launch_max_z)
-                        {
-                            // Favor the most forward cluster (away from hand/launcher); size is only a tiebreaker so a large hand cannot outrank the cloth
-
-
-                            score = c_cx * filter.launch_forward_weight + static_cast<float>(sz) * filter.cluster_size_weight;
-                        }
-                        else
-                        {
-                            // Strictly reject any clusters outside the launch gate while waiting for launch
-                            continue;
-                        }
-                    }
-
-                    if (score > best_score)
-                    {
-                        best_score = score;
-                        best_count = sz;
-                        best_idx = i;
-                    }
-                }
-
-                if (best_idx >= 0)
-                {
-                    result->valid = true;
-                    result->cx = cluster_sum[best_idx].x / static_cast<float>(best_count);
-                    result->cy = cluster_sum[best_idx].y / static_cast<float>(best_count);
-                    result->cz = cluster_sum[best_idx].z / static_cast<float>(best_count);
-                    result->cluster_points_count = best_count;
-                    result->bbox_dx = cluster_max[best_idx].x - cluster_min[best_idx].x;
-                    result->bbox_dy = cluster_max[best_idx].y - cluster_min[best_idx].y;
-                    result->bbox_dz = cluster_max[best_idx].z - cluster_min[best_idx].z;
-                    *best_root_out = best_idx;
-                }
-            }
-        }
-
-    } // namespace
-
-    bool init_cuda_tracker(CudaTrackerContext &ctx, int max_depth_width, int max_depth_height)
-    {
-        if (ctx.initialized)
-            return true;
-
-        ctx.max_pixels = max_depth_width * max_depth_height;
-        cudaStreamCreate(&ctx.stream);
-
-        cudaMalloc(&ctx.d_depth, ctx.max_pixels * sizeof(uint16_t));
-        cudaMalloc(&ctx.d_valid_points, ctx.max_pixels * sizeof(float3));
-        cudaMalloc(&ctx.d_valid_count, sizeof(int));
-
-        cudaMalloc(&ctx.d_voxel_points, ctx.max_voxel_points * sizeof(float3));
-        cudaMalloc(&ctx.d_voxel_count, sizeof(int));
-        cudaMalloc(&ctx.d_hash_keys, ctx.hash_table_size * sizeof(uint64_t));
-
-        cudaMalloc(&ctx.d_parent, ctx.max_voxel_points * sizeof(int));
-        cudaMalloc(&ctx.d_cluster_sizes, ctx.max_voxel_points * sizeof(int));
-        cudaMalloc(&ctx.d_cluster_min, ctx.max_voxel_points * sizeof(float3));
-        cudaMalloc(&ctx.d_cluster_max, ctx.max_voxel_points * sizeof(float3));
-        cudaMalloc(&ctx.d_cluster_sum, ctx.max_voxel_points * sizeof(float3));
-
-        cudaMalloc(&ctx.d_result, sizeof(ClothTrackingResult));
-        cudaMallocHost(&ctx.h_result_pinned, sizeof(ClothTrackingResult));
-        cudaMalloc(&ctx.d_best_root, sizeof(int));
-
-        ctx.initialized = true;
-        return true;
+__device__ int find_root(int* parent, int i) {
+    while (parent[i] != i) {
+        int p = parent[i];
+        parent[i] = parent[p]; // Path halving
+        i = p;
     }
+    return i;
+}
 
-    void destroy_cuda_tracker(CudaTrackerContext &ctx)
-    {
-        if (!ctx.initialized)
+__device__ void union_clusters(int* parent, int a, int b) {
+    int root_a = find_root(parent, a);
+    int root_b = find_root(parent, b);
+    while (root_a != root_b) {
+        if (root_a > root_b) {
+            int old = atomicMin(&parent[root_a], root_b);
+            if (old == root_a)
+                break;
+            root_a = find_root(parent, old);
+        } else {
+            int old = atomicMin(&parent[root_b], root_a);
+            if (old == root_b)
+                break;
+            root_b = find_root(parent, old);
+        }
+    }
+}
+
+// -------------------------------------------------------------
+// Kernel 1: Back-Projection, Coordinate Transform & PassThrough
+// -------------------------------------------------------------
+__global__ void kernel_backproject_and_passthrough(const uint16_t* __restrict__ depth,
+                                                   CameraIntrinsics intrin, CameraPoseConfig pose,
+                                                   FilterConfig filter,
+                                                   float3* __restrict__ valid_points,
+                                                   int* __restrict__ valid_count,
+                                                   int max_valid_points) {
+    int u = blockIdx.x * blockDim.x + threadIdx.x;
+    int v = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (u >= intrin.width || v >= intrin.height)
+        return;
+
+    int idx = v * intrin.width + u;
+    uint16_t raw_depth = depth[idx];
+    if (raw_depth == 0)
+        return;
+
+    float z_raw = raw_depth * intrin.depth_scale;
+    if (z_raw < filter.min_depth_m || z_raw > filter.max_depth_m)
+        return;
+
+    // 2D Depth Continuity Check (Parameterizable via FilterConfig / YAML)
+    if (filter.continuity_min_neighbors > 0) {
+        const int radius = filter.continuity_radius_px;
+        if (u < radius || u >= intrin.width - radius || v < radius || v >= intrin.height - radius)
             return;
-
-        if (ctx.d_depth)
-            cudaFree(ctx.d_depth);
-        if (ctx.d_valid_points)
-            cudaFree(ctx.d_valid_points);
-        if (ctx.d_valid_count)
-            cudaFree(ctx.d_valid_count);
-
-        if (ctx.d_voxel_points)
-            cudaFree(ctx.d_voxel_points);
-        if (ctx.d_voxel_count)
-            cudaFree(ctx.d_voxel_count);
-        if (ctx.d_hash_keys)
-            cudaFree(ctx.d_hash_keys);
-
-        if (ctx.d_parent)
-            cudaFree(ctx.d_parent);
-        if (ctx.d_cluster_sizes)
-            cudaFree(ctx.d_cluster_sizes);
-        if (ctx.d_cluster_min)
-            cudaFree(ctx.d_cluster_min);
-        if (ctx.d_cluster_max)
-            cudaFree(ctx.d_cluster_max);
-        if (ctx.d_cluster_sum)
-            cudaFree(ctx.d_cluster_sum);
-
-        if (ctx.d_result)
-            cudaFree(ctx.d_result);
-        if (ctx.h_result_pinned)
-            cudaFreeHost(ctx.h_result_pinned);
-        if (ctx.d_best_root)
-            cudaFree(ctx.d_best_root);
-
-        if (ctx.stream)
-            cudaStreamDestroy(ctx.stream);
-
-        ctx.initialized = false;
+        float z_up = depth[(v - radius) * intrin.width + u] * intrin.depth_scale;
+        float z_dn = depth[(v + radius) * intrin.width + u] * intrin.depth_scale;
+        float z_lf = depth[v * intrin.width + (u - radius)] * intrin.depth_scale;
+        float z_rt = depth[v * intrin.width + (u + radius)] * intrin.depth_scale;
+        int valid_neighbors = 0;
+        if (z_up > 0.0f && fabsf(z_raw - z_up) <= filter.continuity_thresh_m)
+            valid_neighbors++;
+        if (z_dn > 0.0f && fabsf(z_raw - z_dn) <= filter.continuity_thresh_m)
+            valid_neighbors++;
+        if (z_lf > 0.0f && fabsf(z_raw - z_lf) <= filter.continuity_thresh_m)
+            valid_neighbors++;
+        if (z_rt > 0.0f && fabsf(z_raw - z_rt) <= filter.continuity_thresh_m)
+            valid_neighbors++;
+        if (valid_neighbors < filter.continuity_min_neighbors) {
+            return;
+        }
     }
 
-    static ClothTrackingResult cluster_voxels(CudaTrackerContext& ctx, int num_points,
-        const FilterConfig& filter, std::vector<float3>* out_cluster_points,
-        std::vector<float3>* out_filtered_points, float pred_x, float pred_y, float pred_z,
-        bool has_prediction) {
-        const int block1d = 256;
-        // 4. Kernel 3: Clustering (Union-Find)
-        int grid_pts = (num_points + block1d - 1) / block1d;
-        kernel_init_clusters<<<grid_pts, block1d, 0, ctx.stream>>>(ctx.d_parent, num_points);
+    // Camera optical frame (Z forward, X right, Y down)
+    float x_cam = (static_cast<float>(u) - intrin.cx) * z_raw / intrin.fx;
+    float y_cam = (static_cast<float>(v) - intrin.cy) * z_raw / intrin.fy;
+    float z_cam = z_raw;
 
-        float eps_sq = filter.cluster_eps_m * filter.cluster_eps_m;
-        kernel_cluster_union_find<<<grid_pts, block1d, 0, ctx.stream>>>(
-            ctx.d_voxel_points, num_points, eps_sq, ctx.d_parent);
+    // Right-handed 3D rotation matching Static TF (q_pitch(-pitch) * q_roll(roll) * q_opt)
+    constexpr float DEG_TO_RAD = 3.14159265358979323846f / 180.0f;
+    float pitch_rad = pose.pitch_deg * DEG_TO_RAD;
+    float roll_rad = pose.roll_deg * DEG_TO_RAD;
+    float cos_p = cosf(pitch_rad);
+    float sin_p = sinf(pitch_rad);
+    float cos_r = cosf(roll_rad);
+    float sin_r = sinf(roll_rad);
 
-        // 5. Kernel 4: Accumulate stats
-        kernel_init_cluster_stats<<<grid_pts, block1d, 0, ctx.stream>>>(
-            ctx.d_cluster_sizes, ctx.d_cluster_min, ctx.d_cluster_max, ctx.d_cluster_sum, num_points);
+    float y_roll = -x_cam * cos_r + y_cam * sin_r;
+    float z_roll = -x_cam * sin_r - y_cam * cos_r;
 
-        kernel_accumulate_cluster_stats<<<grid_pts, block1d, 0, ctx.stream>>>(
-            ctx.d_voxel_points, ctx.d_parent, num_points,
-            ctx.d_cluster_sizes, ctx.d_cluster_min, ctx.d_cluster_max, ctx.d_cluster_sum);
+    float x_rob = pose.x_offset_m + (z_cam * cos_p - z_roll * sin_p);
+    float y_rob = y_roll;
+    float z_rob = pose.height_offset_m + (z_cam * sin_p + z_roll * cos_p);
 
-        // 6. Kernel 5: Select best cloth cluster (guided by ballistic prediction if tracking)
-        float3 pred_pt = make_float3(pred_x, pred_y, pred_z);
-        kernel_select_cloth<<<1, 1, 0, ctx.stream>>>(
-            ctx.d_cluster_sizes, ctx.d_cluster_min, ctx.d_cluster_max, ctx.d_cluster_sum,
-            num_points, filter, pred_pt, has_prediction, ctx.d_result, ctx.d_best_root);
+    // PassThrough in base_link
+    if (x_rob < filter.min_x_m || x_rob > filter.max_x_m || y_rob < filter.min_y_m ||
+        y_rob > filter.max_y_m || z_rob < filter.min_z_m || z_rob > filter.max_z_m) {
+        return;
+    }
 
-        // Copy result back
-        cudaMemcpyAsync(ctx.h_result_pinned, ctx.d_result, sizeof(ClothTrackingResult), cudaMemcpyDeviceToHost, ctx.stream);
-        int h_best_root = -1;
-        cudaMemcpyAsync(&h_best_root, ctx.d_best_root, sizeof(int), cudaMemcpyDeviceToHost, ctx.stream);
-        cudaStreamSynchronize(ctx.stream);
+    int out_idx = atomicAdd(valid_count, 1);
+    if (out_idx < max_valid_points) {
+        valid_points[out_idx] = make_float3(x_rob, y_rob, z_rob);
+    }
+}
 
-        ClothTrackingResult final_res = *ctx.h_result_pinned;
+// -------------------------------------------------------------
+// Kernel 2: Fast Spatial Hash Voxel Downsampling
+// -------------------------------------------------------------
+__global__ void kernel_voxel_downsample(const float3* __restrict__ valid_points, int valid_count,
+                                        float voxel_size, uint64_t* __restrict__ hash_keys,
+                                        float3* __restrict__ voxel_points,
+                                        int* __restrict__ voxel_count, int max_voxel_points,
+                                        int hash_table_size) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= valid_count)
+        return;
 
-        // Optional: Extract debug all filtered/voxel points
-        std::vector<float3> h_all_voxels;
-        if (out_filtered_points || out_cluster_points)
-        {
-            h_all_voxels.resize(num_points);
-            cudaMemcpy(h_all_voxels.data(), ctx.d_voxel_points, num_points * sizeof(float3), cudaMemcpyDeviceToHost);
-            if (out_filtered_points)
-            {
-                *out_filtered_points = h_all_voxels;
+    float3 pt = valid_points[idx];
+    int vx = __float2int_rd(pt.x / voxel_size);
+    int vy = __float2int_rd(pt.y / voxel_size);
+    int vz = __float2int_rd(pt.z / voxel_size);
+
+    // 64-bit voxel spatial key
+    uint64_t key = ((static_cast<uint64_t>(vx + 2048) & 0x1FFFFFULL) << 42) |
+                   ((static_cast<uint64_t>(vy + 2048) & 0x1FFFFFULL) << 21) |
+                   (static_cast<uint64_t>(vz + 2048) & 0x1FFFFFULL);
+
+    // Hash function (Murmur / splitmix inspired)
+    uint64_t h = key;
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdULL;
+    h ^= h >> 33;
+    h *= 0xc4ceb9fe1a85ec53ULL;
+    h ^= h >> 33;
+    uint32_t slot = static_cast<uint32_t>(h) & (hash_table_size - 1);
+
+    // Linear probing
+    for (int probe = 0; probe < 32; ++probe) {
+        uint32_t s = (slot + probe) & (hash_table_size - 1);
+        unsigned long long prev =
+            atomicCAS(reinterpret_cast<unsigned long long*>(&hash_keys[s]), 0xFFFFFFFFFFFFFFFFULL,
+                      static_cast<unsigned long long>(key));
+
+        if (prev == 0xFFFFFFFFFFFFFFFFULL) {
+            // First time this voxel is encountered
+            int v_idx = atomicAdd(voxel_count, 1);
+            if (v_idx < max_voxel_points) {
+                voxel_points[v_idx] = pt;
             }
+            break;
+        } else if (prev == static_cast<unsigned long long>(key)) {
+            // Duplicate voxel
+            break;
         }
+    }
+}
 
-        // Optional: Extract debug cluster points
-        if (out_cluster_points && h_best_root >= 0)
-        {
-            out_cluster_points->clear();
-            std::vector<int> h_parents(num_points);
-            cudaMemcpy(h_parents.data(), ctx.d_parent, num_points * sizeof(int), cudaMemcpyDeviceToHost);
+// -------------------------------------------------------------
+// Kernel 3: Clustering Initialization & Parallel Union-Find
+// -------------------------------------------------------------
+__global__ void kernel_init_clusters(int* parent, int count) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < count) {
+        parent[idx] = idx;
+    }
+}
 
-            for (int i = 0; i < num_points; ++i)
-            {
-                int root = i;
-                while (h_parents[root] != root)
-                    root = h_parents[root];
-                if (root == h_best_root)
-                {
-                    out_cluster_points->push_back(h_all_voxels[i]);
+__global__ void kernel_cluster_union_find(const float3* __restrict__ points, int count,
+                                          float eps_sq, int* __restrict__ parent) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= count)
+        return;
+
+    float3 pi = points[i];
+
+    for (int j = i + 1; j < count; ++j) {
+        float3 pj = points[j];
+        float dx = pi.x - pj.x;
+        float dy = pi.y - pj.y;
+        float dz = pi.z - pj.z;
+        float d2 = dx * dx + dy * dy + dz * dz;
+
+        if (d2 <= eps_sq) {
+            union_clusters(parent, i, j);
+        }
+    }
+}
+
+// -------------------------------------------------------------
+// Kernel 4: Cluster Properties Accumulation
+// -------------------------------------------------------------
+__global__ void kernel_init_cluster_stats(int* cluster_sizes, float3* cluster_min,
+                                          float3* cluster_max, float3* cluster_sum, int count) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < count) {
+        cluster_sizes[idx] = 0;
+        cluster_min[idx] = make_float3(1e9f, 1e9f, 1e9f);
+        cluster_max[idx] = make_float3(-1e9f, -1e9f, -1e9f);
+        cluster_sum[idx] = make_float3(0.0f, 0.0f, 0.0f);
+    }
+}
+
+__global__ void kernel_accumulate_cluster_stats(const float3* __restrict__ points,
+                                                int* __restrict__ parent, int count,
+                                                int* __restrict__ cluster_sizes,
+                                                float3* __restrict__ cluster_min,
+                                                float3* __restrict__ cluster_max,
+                                                float3* __restrict__ cluster_sum) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= count)
+        return;
+
+    int root = find_root(parent, i);
+    float3 p = points[i];
+
+    atomicAdd(&cluster_sizes[root], 1);
+    atomicMinFloat(&cluster_min[root].x, p.x);
+    atomicMinFloat(&cluster_min[root].y, p.y);
+    atomicMinFloat(&cluster_min[root].z, p.z);
+
+    atomicMaxFloat(&cluster_max[root].x, p.x);
+    atomicMaxFloat(&cluster_max[root].y, p.y);
+    atomicMaxFloat(&cluster_max[root].z, p.z);
+
+    atomicAdd(&cluster_sum[root].x, p.x);
+    atomicAdd(&cluster_sum[root].y, p.y);
+    atomicAdd(&cluster_sum[root].z, p.z);
+}
+
+// -------------------------------------------------------------
+// Kernel 5: Select Flying Cloth Cluster
+// -------------------------------------------------------------
+__global__ void
+kernel_select_cloth(const int* __restrict__ cluster_sizes, const float3* __restrict__ cluster_min,
+                    const float3* __restrict__ cluster_max, const float3* __restrict__ cluster_sum,
+                    int count, FilterConfig filter, float3 pred_pos, bool has_prediction,
+                    ClothTrackingResult* __restrict__ result, int* __restrict__ best_root_out) {
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
+        result->valid = false;
+        result->cx = 0.0f;
+        result->cy = 0.0f;
+        result->cz = 0.0f;
+        result->cluster_points_count = 0;
+        result->bbox_dx = 0.0f;
+        result->bbox_dy = 0.0f;
+        result->bbox_dz = 0.0f;
+        *best_root_out = -1;
+
+        int best_count = 0;
+        int best_idx = -1;
+        float best_score = -CUDART_INF_F;
+
+        int min_pts = has_prediction ? filter.min_tracking_points : filter.min_cluster_points;
+        for (int i = 0; i < count; ++i) {
+            int sz = cluster_sizes[i];
+            if (sz < min_pts || sz > filter.max_cluster_points) {
+                continue;
+            }
+
+            float dx = cluster_max[i].x - cluster_min[i].x;
+            float dy = cluster_max[i].y - cluster_min[i].y;
+            float dz = cluster_max[i].z - cluster_min[i].z;
+
+            // Reject opponent robot or huge noise (> max_cloth_size_m) or tiny speckle noise (< min_cloth_size_m)
+            float max_dim = fmaxf(dx, fmaxf(dy, dz));
+            if (dx > filter.max_cloth_size_m || dy > filter.max_cloth_size_m ||
+                dz > filter.max_cloth_size_m || max_dim < filter.min_cloth_size_m) {
+                continue;
+            }
+
+            float c_cx = cluster_sum[i].x / static_cast<float>(sz);
+            float c_cy = cluster_sum[i].y / static_cast<float>(sz);
+            float c_cz = cluster_sum[i].z / static_cast<float>(sz);
+
+            float score = 0.0f;
+            if (has_prediction) {
+                float dpx = c_cx - pred_pos.x;
+                float dpy = c_cy - pred_pos.y;
+                float dpz = c_cz - pred_pos.z;
+                float dist = sqrtf(dpx * dpx + dpy * dpy + dpz * dpz);
+
+                if (dist > filter.gate_radius_m) {
+                    continue; // Out of tracking gate
+                }
+
+                // Close to ballistic prediction: highest priority (proximity strictly dominates over cluster size)
+
+                score = -dist * filter.prediction_distance_weight +
+                        static_cast<float>(sz) * filter.cluster_size_weight;
+            } else {
+                // When waiting for launch: ONLY accept clusters originating inside the configured launch zone
+                if (c_cx >= filter.launch_min_x && c_cx <= filter.launch_max_x &&
+                    c_cy >= filter.launch_min_y && c_cy <= filter.launch_max_y &&
+                    c_cz >= filter.launch_min_z && c_cz <= filter.launch_max_z) {
+                    // Favor the most forward cluster (away from hand/launcher); size is only a tiebreaker so a large hand cannot outrank the cloth
+
+                    score = c_cx * filter.launch_forward_weight +
+                            static_cast<float>(sz) * filter.cluster_size_weight;
+                } else {
+                    // Strictly reject any clusters outside the launch gate while waiting for launch
+                    continue;
                 }
             }
-        }
 
-        return final_res;
-    }
-
-    std::vector<float3> prepare_depth_cloud_cuda(CudaTrackerContext& ctx, const uint16_t* depth,
-        const CameraIntrinsics& intrin, const CameraPoseConfig& pose, const FilterConfig& filter) {
-        const int pixels=intrin.width*intrin.height;
-        if (!ctx.initialized || !depth || pixels>ctx.max_pixels) return {};
-        cudaMemcpyAsync(ctx.d_depth,depth,pixels*sizeof(uint16_t),cudaMemcpyHostToDevice,ctx.stream);
-        cudaMemsetAsync(ctx.d_valid_count,0,sizeof(int),ctx.stream);
-        dim3 block(32,16), grid((intrin.width+31)/32,(intrin.height+15)/16);
-        kernel_backproject_and_passthrough<<<grid,block,0,ctx.stream>>>(ctx.d_depth,intrin,pose,filter,
-            ctx.d_valid_points,ctx.d_valid_count,ctx.max_pixels);
-        int count=0;
-        cudaMemcpyAsync(&count,ctx.d_valid_count,sizeof(int),cudaMemcpyDeviceToHost,ctx.stream);
-        cudaStreamSynchronize(ctx.stream);
-        if (count<=0) return {};
-        if (count>ctx.max_pixels) throw std::runtime_error("ROI point capacity exceeded");
-        cudaMemsetAsync(ctx.d_voxel_count,0,sizeof(int),ctx.stream);
-        cudaMemsetAsync(ctx.d_hash_keys,0xFF,ctx.hash_table_size*sizeof(uint64_t),ctx.stream);
-        kernel_voxel_downsample<<<(count+255)/256,256,0,ctx.stream>>>(ctx.d_valid_points,count,
-            filter.voxel_size_m,ctx.d_hash_keys,ctx.d_voxel_points,ctx.d_voxel_count,
-            ctx.max_voxel_points,ctx.hash_table_size);
-        int voxels=0;
-        cudaMemcpyAsync(&voxels,ctx.d_voxel_count,sizeof(int),cudaMemcpyDeviceToHost,ctx.stream);
-        cudaStreamSynchronize(ctx.stream);
-        if (voxels>ctx.max_voxel_points)
-            throw std::runtime_error("ROI voxel capacity exceeded; increase voxel_size_m or narrow ROI");
-        std::vector<float3> output(voxels);
-        if (voxels) cudaMemcpy(output.data(),ctx.d_voxel_points,voxels*sizeof(float3),cudaMemcpyDeviceToHost);
-        if (cudaGetLastError()!=cudaSuccess) throw std::runtime_error("CUDA ROI export failed");
-        return output;
-    }
-
-    ClothTrackingResult process_point_cloud_cuda(CudaTrackerContext& ctx,const std::vector<float3>& points,
-        const FilterConfig& filter,std::vector<float3>* cluster,std::vector<float3>* filtered,
-        float px,float py,float pz,bool predicted) {
-        std::vector<float3> selected;
-        selected.reserve(points.size());
-        // The upstream cloud is already ROI-filtered and voxelized. Apply only the active search gate.
-        for (const auto& p : points) {
-            if (!std::isfinite(p.x)||!std::isfinite(p.y)||!std::isfinite(p.z)) continue;
-            if (p.x<filter.min_x_m||p.x>filter.max_x_m||p.y<filter.min_y_m||p.y>filter.max_y_m||
-                p.z<filter.min_z_m||p.z>filter.max_z_m) continue;
-            if (predicted) {
-                const float radius=filter.gate_radius_m+filter.max_cloth_size_m;
-                if ((p.x-px)*(p.x-px)+(p.y-py)*(p.y-py)+(p.z-pz)*(p.z-pz)>radius*radius) continue;
-            } else {
-                const float pad=filter.max_cloth_size_m;
-                if (p.x<filter.launch_min_x-pad||p.x>filter.launch_max_x+pad||
-                    p.y<filter.launch_min_y-pad||p.y>filter.launch_max_y+pad||
-                    p.z<filter.launch_min_z-pad||p.z>filter.launch_max_z+pad) continue;
+            if (score > best_score) {
+                best_score = score;
+                best_count = sz;
+                best_idx = i;
             }
-            selected.push_back(p);
         }
-        if (filtered) *filtered=selected;
-        const int minimum=predicted?filter.min_tracking_points:filter.min_cluster_points;
-        if (selected.size()<static_cast<size_t>(minimum)) return {};
-        if (selected.size()>ctx.max_voxel_points)
-            throw std::runtime_error("Dynamic point capacity exceeded");
-        cudaMemcpyAsync(ctx.d_voxel_points,selected.data(),selected.size()*sizeof(float3),
-            cudaMemcpyHostToDevice,ctx.stream);
-        return cluster_voxels(ctx,selected.size(),filter,cluster,filtered,px,py,pz,predicted);
+
+        if (best_idx >= 0) {
+            result->valid = true;
+            result->cx = cluster_sum[best_idx].x / static_cast<float>(best_count);
+            result->cy = cluster_sum[best_idx].y / static_cast<float>(best_count);
+            result->cz = cluster_sum[best_idx].z / static_cast<float>(best_count);
+            result->cluster_points_count = best_count;
+            result->bbox_dx = cluster_max[best_idx].x - cluster_min[best_idx].x;
+            result->bbox_dy = cluster_max[best_idx].y - cluster_min[best_idx].y;
+            result->bbox_dz = cluster_max[best_idx].z - cluster_min[best_idx].z;
+            *best_root_out = best_idx;
+        }
     }
+}
+
+} // namespace
+
+bool init_cuda_tracker(CudaTrackerContext& ctx, int max_depth_width, int max_depth_height) {
+    if (ctx.initialized)
+        return true;
+
+    ctx.max_pixels = max_depth_width * max_depth_height;
+    cudaStreamCreate(&ctx.stream);
+
+    cudaMalloc(&ctx.d_depth, ctx.max_pixels * sizeof(uint16_t));
+    cudaMalloc(&ctx.d_valid_points, ctx.max_pixels * sizeof(float3));
+    cudaMalloc(&ctx.d_valid_count, sizeof(int));
+
+    cudaMalloc(&ctx.d_voxel_points, ctx.max_voxel_points * sizeof(float3));
+    cudaMalloc(&ctx.d_voxel_count, sizeof(int));
+    cudaMalloc(&ctx.d_hash_keys, ctx.hash_table_size * sizeof(uint64_t));
+
+    cudaMalloc(&ctx.d_parent, ctx.max_voxel_points * sizeof(int));
+    cudaMalloc(&ctx.d_cluster_sizes, ctx.max_voxel_points * sizeof(int));
+    cudaMalloc(&ctx.d_cluster_min, ctx.max_voxel_points * sizeof(float3));
+    cudaMalloc(&ctx.d_cluster_max, ctx.max_voxel_points * sizeof(float3));
+    cudaMalloc(&ctx.d_cluster_sum, ctx.max_voxel_points * sizeof(float3));
+
+    cudaMalloc(&ctx.d_result, sizeof(ClothTrackingResult));
+    cudaMallocHost(&ctx.h_result_pinned, sizeof(ClothTrackingResult));
+    cudaMalloc(&ctx.d_best_root, sizeof(int));
+
+    ctx.initialized = true;
+    return true;
+}
+
+void destroy_cuda_tracker(CudaTrackerContext& ctx) {
+    if (!ctx.initialized)
+        return;
+
+    if (ctx.d_depth)
+        cudaFree(ctx.d_depth);
+    if (ctx.d_valid_points)
+        cudaFree(ctx.d_valid_points);
+    if (ctx.d_valid_count)
+        cudaFree(ctx.d_valid_count);
+
+    if (ctx.d_voxel_points)
+        cudaFree(ctx.d_voxel_points);
+    if (ctx.d_voxel_count)
+        cudaFree(ctx.d_voxel_count);
+    if (ctx.d_hash_keys)
+        cudaFree(ctx.d_hash_keys);
+
+    if (ctx.d_parent)
+        cudaFree(ctx.d_parent);
+    if (ctx.d_cluster_sizes)
+        cudaFree(ctx.d_cluster_sizes);
+    if (ctx.d_cluster_min)
+        cudaFree(ctx.d_cluster_min);
+    if (ctx.d_cluster_max)
+        cudaFree(ctx.d_cluster_max);
+    if (ctx.d_cluster_sum)
+        cudaFree(ctx.d_cluster_sum);
+
+    if (ctx.d_result)
+        cudaFree(ctx.d_result);
+    if (ctx.h_result_pinned)
+        cudaFreeHost(ctx.h_result_pinned);
+    if (ctx.d_best_root)
+        cudaFree(ctx.d_best_root);
+
+    if (ctx.stream)
+        cudaStreamDestroy(ctx.stream);
+
+    ctx.initialized = false;
+}
+
+static ClothTrackingResult cluster_voxels(CudaTrackerContext& ctx, int num_points,
+                                          const FilterConfig& filter,
+                                          std::vector<float3>* out_cluster_points,
+                                          std::vector<float3>* out_filtered_points, float pred_x,
+                                          float pred_y, float pred_z, bool has_prediction) {
+    const int block1d = 256;
+    // 4. Kernel 3: Clustering (Union-Find)
+    int grid_pts = (num_points + block1d - 1) / block1d;
+    kernel_init_clusters<<<grid_pts, block1d, 0, ctx.stream>>>(ctx.d_parent, num_points);
+
+    float eps_sq = filter.cluster_eps_m * filter.cluster_eps_m;
+    kernel_cluster_union_find<<<grid_pts, block1d, 0, ctx.stream>>>(ctx.d_voxel_points, num_points,
+                                                                    eps_sq, ctx.d_parent);
+
+    // 5. Kernel 4: Accumulate stats
+    kernel_init_cluster_stats<<<grid_pts, block1d, 0, ctx.stream>>>(
+        ctx.d_cluster_sizes, ctx.d_cluster_min, ctx.d_cluster_max, ctx.d_cluster_sum, num_points);
+
+    kernel_accumulate_cluster_stats<<<grid_pts, block1d, 0, ctx.stream>>>(
+        ctx.d_voxel_points, ctx.d_parent, num_points, ctx.d_cluster_sizes, ctx.d_cluster_min,
+        ctx.d_cluster_max, ctx.d_cluster_sum);
+
+    // 6. Kernel 5: Select best cloth cluster (guided by ballistic prediction if tracking)
+    float3 pred_pt = make_float3(pred_x, pred_y, pred_z);
+    kernel_select_cloth<<<1, 1, 0, ctx.stream>>>(
+        ctx.d_cluster_sizes, ctx.d_cluster_min, ctx.d_cluster_max, ctx.d_cluster_sum, num_points,
+        filter, pred_pt, has_prediction, ctx.d_result, ctx.d_best_root);
+
+    // Copy result back
+    cudaMemcpyAsync(ctx.h_result_pinned, ctx.d_result, sizeof(ClothTrackingResult),
+                    cudaMemcpyDeviceToHost, ctx.stream);
+    int h_best_root = -1;
+    cudaMemcpyAsync(&h_best_root, ctx.d_best_root, sizeof(int), cudaMemcpyDeviceToHost, ctx.stream);
+    cudaStreamSynchronize(ctx.stream);
+
+    ClothTrackingResult final_res = *ctx.h_result_pinned;
+
+    // Optional: Extract debug all filtered/voxel points
+    std::vector<float3> h_all_voxels;
+    if (out_filtered_points || out_cluster_points) {
+        h_all_voxels.resize(num_points);
+        cudaMemcpy(h_all_voxels.data(), ctx.d_voxel_points, num_points * sizeof(float3),
+                   cudaMemcpyDeviceToHost);
+        if (out_filtered_points) {
+            *out_filtered_points = h_all_voxels;
+        }
+    }
+
+    // Optional: Extract debug cluster points
+    if (out_cluster_points && h_best_root >= 0) {
+        out_cluster_points->clear();
+        std::vector<int> h_parents(num_points);
+        cudaMemcpy(h_parents.data(), ctx.d_parent, num_points * sizeof(int),
+                   cudaMemcpyDeviceToHost);
+
+        for (int i = 0; i < num_points; ++i) {
+            int root = i;
+            while (h_parents[root] != root)
+                root = h_parents[root];
+            if (root == h_best_root) {
+                out_cluster_points->push_back(h_all_voxels[i]);
+            }
+        }
+    }
+
+    return final_res;
+}
+
+std::vector<float3> prepare_depth_cloud_cuda(CudaTrackerContext& ctx, const uint16_t* depth,
+                                             const CameraIntrinsics& intrin,
+                                             const CameraPoseConfig& pose,
+                                             const FilterConfig& filter) {
+    const int pixels = intrin.width * intrin.height;
+    if (!ctx.initialized || !depth || pixels > ctx.max_pixels)
+        return {};
+    cudaMemcpyAsync(ctx.d_depth, depth, pixels * sizeof(uint16_t), cudaMemcpyHostToDevice,
+                    ctx.stream);
+    cudaMemsetAsync(ctx.d_valid_count, 0, sizeof(int), ctx.stream);
+    dim3 block(32, 16), grid((intrin.width + 31) / 32, (intrin.height + 15) / 16);
+    kernel_backproject_and_passthrough<<<grid, block, 0, ctx.stream>>>(
+        ctx.d_depth, intrin, pose, filter, ctx.d_valid_points, ctx.d_valid_count, ctx.max_pixels);
+    int count = 0;
+    cudaMemcpyAsync(&count, ctx.d_valid_count, sizeof(int), cudaMemcpyDeviceToHost, ctx.stream);
+    cudaStreamSynchronize(ctx.stream);
+    if (count <= 0)
+        return {};
+    if (count > ctx.max_pixels)
+        throw std::runtime_error("ROI point capacity exceeded");
+    cudaMemsetAsync(ctx.d_voxel_count, 0, sizeof(int), ctx.stream);
+    cudaMemsetAsync(ctx.d_hash_keys, 0xFF, ctx.hash_table_size * sizeof(uint64_t), ctx.stream);
+    kernel_voxel_downsample<<<(count + 255) / 256, 256, 0, ctx.stream>>>(
+        ctx.d_valid_points, count, filter.voxel_size_m, ctx.d_hash_keys, ctx.d_voxel_points,
+        ctx.d_voxel_count, ctx.max_voxel_points, ctx.hash_table_size);
+    int voxels = 0;
+    cudaMemcpyAsync(&voxels, ctx.d_voxel_count, sizeof(int), cudaMemcpyDeviceToHost, ctx.stream);
+    cudaStreamSynchronize(ctx.stream);
+    if (voxels > ctx.max_voxel_points)
+        throw std::runtime_error(
+            "ROI voxel capacity exceeded; increase voxel_size_m or narrow ROI");
+    std::vector<float3> output(voxels);
+    if (voxels)
+        cudaMemcpy(output.data(), ctx.d_voxel_points, voxels * sizeof(float3),
+                   cudaMemcpyDeviceToHost);
+    if (cudaGetLastError() != cudaSuccess)
+        throw std::runtime_error("CUDA ROI export failed");
+    return output;
+}
+
+ClothTrackingResult process_point_cloud_cuda(CudaTrackerContext& ctx,
+                                             const std::vector<float3>& points,
+                                             const FilterConfig& filter,
+                                             std::vector<float3>* cluster,
+                                             std::vector<float3>* filtered, float px, float py,
+                                             float pz, bool predicted) {
+    std::vector<float3> selected;
+    selected.reserve(points.size());
+    // The upstream cloud is already ROI-filtered and voxelized. Apply only the active search gate.
+    for (const auto& p : points) {
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z))
+            continue;
+        if (p.x < filter.min_x_m || p.x > filter.max_x_m || p.y < filter.min_y_m ||
+            p.y > filter.max_y_m || p.z < filter.min_z_m || p.z > filter.max_z_m)
+            continue;
+        if (predicted) {
+            const float radius = filter.gate_radius_m + filter.max_cloth_size_m;
+            if ((p.x - px) * (p.x - px) + (p.y - py) * (p.y - py) + (p.z - pz) * (p.z - pz) >
+                radius * radius)
+                continue;
+        } else {
+            const float pad = filter.max_cloth_size_m;
+            if (p.x < filter.launch_min_x - pad || p.x > filter.launch_max_x + pad ||
+                p.y < filter.launch_min_y - pad || p.y > filter.launch_max_y + pad ||
+                p.z < filter.launch_min_z - pad || p.z > filter.launch_max_z + pad)
+                continue;
+        }
+        selected.push_back(p);
+    }
+    if (filtered)
+        *filtered = selected;
+    const int minimum = predicted ? filter.min_tracking_points : filter.min_cluster_points;
+    if (selected.size() < static_cast<size_t>(minimum))
+        return {};
+    if (selected.size() > ctx.max_voxel_points)
+        throw std::runtime_error("Dynamic point capacity exceeded");
+    cudaMemcpyAsync(ctx.d_voxel_points, selected.data(), selected.size() * sizeof(float3),
+                    cudaMemcpyHostToDevice, ctx.stream);
+    return cluster_voxels(ctx, selected.size(), filter, cluster, filtered, px, py, pz, predicted);
+}
 
 } // namespace realsense_dust_cloth
