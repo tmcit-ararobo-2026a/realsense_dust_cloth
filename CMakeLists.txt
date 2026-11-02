@@ -23,7 +23,6 @@ find_package(visualization_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
-find_package(cv_bridge REQUIRED)
 find_package(OpenCV REQUIRED)
 
 # Optional hardware-native RealSense C++ SDK
@@ -37,7 +36,13 @@ endif()
 
 # Build C++ / CUDA Tracker Node
 add_executable(cloth_tracker_cuda_node
+  src/main.cpp
   src/cloth_tracker_cuda_node.cpp
+  src/tracker_parameters.cpp
+  src/camera_input.cpp
+  src/realsense_camera.cpp
+  src/color_stream.cpp
+  src/tracking_output.cpp
   src/ballistic_tracker.cpp
   src/tracking_status.cpp
   src/external_cloud_tracking.cpp
@@ -62,7 +67,6 @@ ament_target_dependencies(cloth_tracker_cuda_node
   nav_msgs
   tf2
   tf2_ros
-  cv_bridge
 )
 
 if(realsense2_FOUND)
@@ -80,7 +84,6 @@ ament_python_install_package(${PROJECT_NAME})
 install(PROGRAMS
   realsense_dust_cloth/trajectory_probability_analyzer.py
   realsense_dust_cloth/record_trajectories.py
-  realsense_dust_cloth/sim_cloth_flight.py
   realsense_dust_cloth/decompress_image.py
   DESTINATION lib/${PROJECT_NAME}
 )

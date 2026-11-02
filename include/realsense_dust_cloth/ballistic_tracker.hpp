@@ -1,9 +1,9 @@
 #pragma once
 
+#include "realsense_dust_cloth/cuda_kernels.cuh"
 #include <algorithm>
 #include <cmath>
 #include <string>
-#include "realsense_dust_cloth/cuda_kernels.cuh"
 
 namespace realsense_dust_cloth {
 
@@ -11,11 +11,11 @@ namespace realsense_dust_cloth {
  * @brief States for the dust cloth tracking state machine.
  */
 enum class TrackerState {
-    IDLE,       ///< Waiting for launch from configured launch zone
-    TRACKING,   ///< Actively tracking flying cloth along ballistic trajectory
-    LANDED,     ///< Landing (strict mode: observed below landing_min_z)
-    LOST,       ///< Observations ended; landing is unknown
-    RESTING     ///< Observed stationary above the landing plane
+    IDLE,     ///< Waiting for launch from configured launch zone
+    TRACKING, ///< Actively tracking flying cloth along ballistic trajectory
+    LANDED,   ///< Landing (strict mode: observed below landing_min_z)
+    LOST,     ///< Observations ended; landing is unknown
+    RESTING   ///< Observed stationary above the landing plane
 };
 
 /**
@@ -25,10 +25,10 @@ enum class TrackerState {
  * 1. Only locking onto objects originating from the configured launch gate with forward motion.
  * 2. Continuously predicting parabolic flight with aerodynamic drag deceleration.
  * 3. Smoothly filtering velocity and tracking cluster centroids.
- * 4. Detecting landing when the cloth reaches the floor or stops moving.
+ * 4. Distinguishing observed landing, high resting position, and observation loss.
  */
 class BallisticTracker {
-public:
+  public:
     TrackerState state{TrackerState::IDLE};
     double x{0.0}, y{0.0}, z{0.0};
     double vx{0.0}, vy{0.0}, vz{0.0};
@@ -38,7 +38,6 @@ public:
     int stationary_count{0};
 
     // Launch tracking and displacement confirmation
-    double launch_x{0.0}, launch_y{0.0}, launch_z{0.0};
     double launch_stamp{0.0};
     double stationary_ref_x{0.0}, stationary_ref_y{0.0}, stationary_ref_z{0.0};
     bool launch_displacement_confirmed{false};
@@ -63,32 +62,43 @@ public:
     double landing_min_z{0.10};
 
     // Velocity Smoothing & Physical Velocity Bounds (Loaded via ROS 2 tracker_params.yaml)
-    double vel_smoothing_beta{0.30};      ///< Velocity measurement blend weight (0..1)
-    double min_flight_vx_m_s{0.00};       ///< Minimum allowed forward velocity in flight (m/s, strictly non-negative)
-    double max_vx_m_s{15.00};             ///< Maximum physical forward velocity (m/s)
-    double max_abs_vy_m_s{0.80};          ///< Maximum physical lateral velocity (m/s, tightened for trajectory straightness)
-    double min_vz_m_s{-10.00};            ///< Minimum physical vertical velocity (m/s)
-    double max_vz_m_s{8.00};              ///< Maximum physical vertical velocity (m/s)
+    double vel_smoothing_beta{0.30}; ///< Velocity measurement blend weight (0..1)
+    double min_flight_vx_m_s{
+        0.00}; ///< Minimum allowed forward velocity in flight (m/s, strictly non-negative)
+    double max_vx_m_s{15.00}; ///< Maximum physical forward velocity (m/s)
+    double max_abs_vy_m_s{
+        0.80}; ///< Maximum physical lateral velocity (m/s, tightened for trajectory straightness)
+    double min_vz_m_s{-10.00}; ///< Minimum physical vertical velocity (m/s)
+    double max_vz_m_s{8.00};   ///< Maximum physical vertical velocity (m/s)
 
     // High-speed Launch, Anti-Deadlock & Tracking Controls (Loaded via ROS 2 tracker_params.yaml)
-    double min_launch_move_m{0.08};       ///< Minimum forward displacement (m) to confirm launch
-    double launch_timeout_sec{0.20};      ///< Timeout to reset stationary launch pending anchor (s)
-    double max_flight_duration_sec{2.50}; ///< Maximum possible flight duration before auto-reset (s)
-    double min_stationary_move_m{0.10};   ///< Minimum 3D net movement from anchor to not count as stationary (m)
-    int max_stationary_frames{8};         ///< Consecutive stationary frames in mid-air before auto-reset
-    int min_track_points_limit{8};        ///< Lower bound for in-flight minimum cluster points
+    double min_launch_move_m{0.08};  ///< Minimum forward displacement (m) to confirm launch
+    double launch_timeout_sec{0.20}; ///< Timeout to reset stationary launch pending anchor (s)
+    double max_flight_duration_sec{
+        2.50}; ///< Maximum possible flight duration before auto-reset (s)
+    double min_stationary_move_m{
+        0.10}; ///< Minimum 3D net movement from anchor to not count as stationary (m)
+    int max_stationary_frames{8};  ///< Consecutive stationary frames in mid-air before auto-reset
+    int min_track_points_limit{8}; ///< Lower bound for in-flight minimum cluster points
 
     // =========================================================================
     // Physical Anomaly & Ballistic Tube Guard Constants (Configurable via YAML)
     // =========================================================================
-    static constexpr double DEFAULT_TUBE_RADIUS_M = 0.35;               ///< Flight tube search radius [m]
-    static constexpr double DEFAULT_MAX_TOTAL_ACCEL_M_S2 = 25.0;        ///< Maximum allowable physical 3D acceleration [m/s^2] (~2.5G)
-    static constexpr double DEFAULT_MIN_VERTICAL_ACCEL_M_S2 = -20.0;    ///< Maximum allowable downward vertical acceleration [m/s^2] (~-2G)
-    static constexpr double DEFAULT_MAX_LATERAL_ACCEL_M_S2 = 8.0;       ///< Maximum allowable lateral acceleration [m/s^2]
-    static constexpr double DEFAULT_MAX_HEADING_DEG = 45.0;             ///< Maximum allowable heading deflection angle [deg]
-    static constexpr double DEFAULT_BACKWARD_JITTER_TOL_M = 0.02;       ///< Forward flight backward tolerance [m]
-    static constexpr double DEFAULT_VERTICAL_JITTER_TOL_M = 0.03;       ///< Post-apex vertical measurement tolerance [m]
-    static constexpr int DEFAULT_MAX_ANOMALY_FRAMES = 1;                ///< Consecutive anomalous frames before tracking is aborted
+    static constexpr double DEFAULT_TUBE_RADIUS_M = 0.35; ///< Flight tube search radius [m]
+    static constexpr double DEFAULT_MAX_TOTAL_ACCEL_M_S2 =
+        25.0; ///< Maximum allowable physical 3D acceleration [m/s^2] (~2.5G)
+    static constexpr double DEFAULT_MIN_VERTICAL_ACCEL_M_S2 =
+        -20.0; ///< Maximum allowable downward vertical acceleration [m/s^2] (~-2G)
+    static constexpr double DEFAULT_MAX_LATERAL_ACCEL_M_S2 =
+        8.0; ///< Maximum allowable lateral acceleration [m/s^2]
+    static constexpr double DEFAULT_MAX_HEADING_DEG =
+        45.0; ///< Maximum allowable heading deflection angle [deg]
+    static constexpr double DEFAULT_BACKWARD_JITTER_TOL_M =
+        0.02; ///< Forward flight backward tolerance [m]
+    static constexpr double DEFAULT_VERTICAL_JITTER_TOL_M =
+        0.03; ///< Post-apex vertical measurement tolerance [m]
+    static constexpr int DEFAULT_MAX_ANOMALY_FRAMES =
+        1; ///< Consecutive anomalous frames before tracking is aborted
 
     double lost_frame_gate_expansion_m{0.04};
     double max_gate_expansion_m{0.10};
@@ -106,14 +116,15 @@ public:
     bool reject_ascent_after_apex{true};
 
     // Early Tracking Cutoff & Anomaly Abort Controls
-    bool abort_on_anomaly{true};          ///< Cut off tracking immediately if physical anomaly detected
-    int max_anomaly_frames{DEFAULT_MAX_ANOMALY_FRAMES}; ///< Consecutive anomaly frames threshold before aborting
+    bool abort_on_anomaly{true}; ///< Cut off tracking immediately if physical anomaly detected
+    int max_anomaly_frames{
+        DEFAULT_MAX_ANOMALY_FRAMES}; ///< Consecutive anomaly frames threshold before aborting
     int anomaly_count{0};
-    std::string last_rejection_reason;                 ///< Consecutive physical anomaly frame counter
+    std::string last_rejection_reason; ///< Consecutive physical anomaly frame counter
 
     // Flight Phase Physical State
-    bool has_reached_apex{false};       ///< True once cloth has reached apex and started descending
-    double apex_z{0.0};                 ///< Maximum recorded flight altitude [m]
+    bool has_reached_apex{false}; ///< True once cloth has reached apex and started descending
+    double apex_z{0.0};           ///< Maximum recorded flight altitude [m]
 
     /**
      * @brief Reset tracker state machine to IDLE and clear tracking history.
@@ -138,7 +149,12 @@ public:
      * @return true if currently actively tracking the cloth, false if idle or lost
      */
     bool update(const ClothTrackingResult& raw, double stamp_sec, ClothTrackingResult& out);
+
+  private:
+    bool is_inside_launch_gate(const ClothTrackingResult& candidate) const;
+    bool update_launch_candidate(const ClothTrackingResult& raw, double stamp_sec,
+                                 ClothTrackingResult& out);
+    bool update_flight(const ClothTrackingResult& raw, double stamp_sec, ClothTrackingResult& out);
 };
 
 } // namespace realsense_dust_cloth
-

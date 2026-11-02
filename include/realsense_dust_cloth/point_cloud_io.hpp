@@ -1,22 +1,25 @@
 #pragma once
-#include <sensor_msgs/msg/point_cloud2.hpp>
-#include <cuda_runtime.h>
 #include <cmath>
 #include <cstring>
+#include <cuda_runtime.h>
+#include <sensor_msgs/msg/point_cloud2.hpp>
 #include <stdexcept>
 #include <vector>
 
 namespace realsense_dust_cloth {
 // Accept organized XYZ FLOAT32 clouds, including row padding. Never reinterpret unaligned bytes.
 inline std::vector<float3> read_xyz_cloud(const sensor_msgs::msg::PointCloud2& msg,
-                                        const std::string& expected_frame, size_t max_points) {
+                                          const std::string& expected_frame, size_t max_points) {
     if (msg.header.frame_id != expected_frame)
         throw std::invalid_argument("Point cloud frame does not match camera_parent_frame");
     const sensor_msgs::msg::PointField *xf = nullptr, *yf = nullptr, *zf = nullptr;
     for (const auto& field : msg.fields) {
-        if (field.name == "x") xf = &field;
-        if (field.name == "y") yf = &field;
-        if (field.name == "z") zf = &field;
+        if (field.name == "x")
+            xf = &field;
+        if (field.name == "y")
+            yf = &field;
+        if (field.name == "z")
+            zf = &field;
     }
     auto valid = [&](const auto* field) {
         return field && field->datatype == sensor_msgs::msg::PointField::FLOAT32 &&
