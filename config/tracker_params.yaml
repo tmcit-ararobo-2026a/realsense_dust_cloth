@@ -47,17 +47,17 @@
     min_depth_m: 0.25  # カメラ最小計測深度 [m]
     max_depth_m: 5.5  # カメラ最大計測深度 [m]
     continuity_radius_px: 2  # 深度連続性を調べる上下左右の距離 [px]
-    continuity_thresh_m: 0.08  # 点群連続性判定距離閾値 [m]
+    continuity_thresh_m: 0.2  # 点群連続性判定距離閾値 [m]
     continuity_min_neighbors: 3  # 連続性認定最小近傍点数
 
     # --- 5. 射出判定 ---
     launch_min_x: 0.8  # 発射判定ボックス X 下限 [m] (発射口の前端位置)
-    launch_max_x: 1.35  # 発射判定ボックス X 上限 [m]
+    launch_max_x: 2.0  # 発射判定ボックス X 上限 [m]
     launch_min_y: -0.25  # 発射判定ボックス Y 下限 [m]
     launch_max_y: 0.18  # 発射判定ボックス Y 上限 [m]
     launch_min_z: 1.45  # 発射判定ボックス Z 下限 [m] (発射口の高さ)
-    launch_max_z: 2.1  # 発射判定ボックス Z 上限 [m]
-    min_launch_vx: 0.5  # 射出認定最小前方初速 [m/s] (光ジッター除外: 0.5m/s 以上を要求)
+    launch_max_z: 2.5  # 発射判定ボックス Z 上限 [m]
+    min_launch_vx: 3.0  # 射出認定最小前方初速 [m/s] (光ジッター除外: 0.5m/s 以上を要求)
     min_launch_move_m: 0.12  # 射出認定最小前方変位 [m] (発射枠内で 12cm 以上前進して初めて発射認定)
     pending_reset_sec: 0.2  # 発射枠内の微小振動・静止物リセットタイムアウト [s]
     pending_max_drop_m: 0.5  # 射出確定前にこの距離以上落下した候補を破棄する [m]
