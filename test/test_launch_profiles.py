@@ -22,10 +22,12 @@ class Profiles(unittest.TestCase):
         files = sorted((ROOT / 'config').glob('*.yaml'))
         self.assertEqual({p.name for p in files}, {'tracker_params.yaml', 'unity_params.yaml', 'rosbag_params.yaml'})
         for profile in files:
-            context = LaunchContext()
-            context.launch_configurations['params_file'] = profile.name
-            nodes = create(context)
-            self.assertEqual(nodes[0]['parameters'], [str(profile)])
+            # Test both cloth_tracker_params_file and legacy params_file
+            for key in ('cloth_tracker_params_file', 'params_file'):
+                context = LaunchContext()
+                context.launch_configurations[key] = profile.name
+                nodes = create(context)
+                self.assertEqual(nodes[0]['parameters'], [str(profile)])
             # Enable helpers in a separate copy and verify they use the same clock.
             data = yaml.safe_load(profile.read_text())
             values = data['/**']['ros__parameters']
@@ -33,7 +35,8 @@ class Profiles(unittest.TestCase):
             with tempfile.TemporaryDirectory() as directory:
                 modified = Path(directory) / profile.name
                 modified.write_text(yaml.safe_dump(data))
-                context.launch_configurations['params_file'] = str(modified)
+                context = LaunchContext()
+                context.launch_configurations['cloth_tracker_params_file'] = str(modified)
                 nodes = create(context)
                 self.assertEqual(nodes[0]['parameters'], [str(modified)])
                 for helper in nodes[1:3]:

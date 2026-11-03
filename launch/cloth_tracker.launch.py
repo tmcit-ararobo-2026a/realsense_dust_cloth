@@ -11,7 +11,12 @@ from launch_ros.actions import Node
 
 def _create_nodes(context):
     package_dir = get_package_share_directory('realsense_dust_cloth')
-    requested = LaunchConfiguration('params_file').perform(context)
+    if 'cloth_tracker_params_file' in context.launch_configurations:
+        requested = LaunchConfiguration('cloth_tracker_params_file').perform(context)
+    elif 'params_file' in context.launch_configurations:
+        requested = LaunchConfiguration('params_file').perform(context)
+    else:
+        requested = 'tracker_params.yaml'
     params_file = os.path.expanduser(requested)
     if not os.path.isabs(params_file) and not os.path.isfile(params_file):
         params_file = os.path.join(package_dir, 'config', params_file)
@@ -52,7 +57,7 @@ def _create_nodes(context):
 
 def generate_launch_description():
     return LaunchDescription([
-        DeclareLaunchArgument('params_file', default_value='tracker_params.yaml',
+        DeclareLaunchArgument('cloth_tracker_params_file', default_value='tracker_params.yaml',
                               description='tracker_params.yaml / unity_params.yaml / rosbag_params.yaml'),
         OpaqueFunction(function=_create_nodes),
     ])

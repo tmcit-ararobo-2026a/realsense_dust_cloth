@@ -31,10 +31,12 @@ source ~/ros2_ws/install/setup.bash
 # 実機：通常のMID360・IMU・localizationを別途起動しておく
 ros2 launch realsense_dust_cloth cloth_tracker.launch.py
 # Unity：localizationもシミュレーション時刻で起動しておく
-ros2 launch realsense_dust_cloth cloth_tracker.launch.py params_file:=unity_params.yaml
+ros2 launch realsense_dust_cloth cloth_tracker.launch.py cloth_tracker_params_file:=unity_params.yaml
 # rosbag
-ros2 launch realsense_dust_cloth cloth_tracker.launch.py params_file:=rosbag_params.yaml
+ros2 launch realsense_dust_cloth cloth_tracker.launch.py cloth_tracker_params_file:=rosbag_params.yaml
 ```
+
+※ 引数 `cloth_tracker_params_file`（後方互換として `params_file` も可）で設定YAMLを指定します。
 
 `use_sim_time:=true`、`use_direct_realsense:=false`、`sim:=true` の追加指定は不要です。設定したい値はYAML内で変更します。
 
