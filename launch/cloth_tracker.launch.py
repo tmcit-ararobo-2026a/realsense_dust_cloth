@@ -4,28 +4,66 @@ import os
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction
-from launch.substitutions import LaunchConfiguration
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, GroupAction, OpaqueFunction
 from launch_ros.actions import Node
+
+TRACKER_BOOL_KEYS = (
+    'use_sim_time',
+    'use_direct_realsense',
+    'start_rviz',
+    'start_analyzer',
+    'record_inputs',
+)
+TRACKER_ONLY_KEYS = TRACKER_BOOL_KEYS[1:]
+
+
+def _resolve_params_path(requested: str, package_dir: str) -> str:
+    path = os.path.expanduser(requested)
+    if not os.path.isabs(path) and not os.path.isfile(path):
+        path = os.path.join(package_dir, 'config', path)
+    return path
+
+
+def _select_params_file(context, package_dir: str) -> str:
+    cloth_tracker_requested = context.launch_configurations.get(
+        'cloth_tracker_params_file', '').strip()
+    tracker_requested = context.launch_configurations.get(
+        'tracker_params_file', '').strip()
+    legacy_requested = context.launch_configurations.get('params_file', '').strip()
+
+    if cloth_tracker_requested and cloth_tracker_requested != 'tracker_params.yaml':
+        return _resolve_params_path(cloth_tracker_requested, package_dir)
+
+    if tracker_requested and tracker_requested != 'tracker_params.yaml':
+        return _resolve_params_path(tracker_requested, package_dir)
+
+    if legacy_requested and legacy_requested != 'tracker_params.yaml':
+        candidate = _resolve_params_path(legacy_requested, package_dir)
+        if os.path.isfile(candidate):
+            with open(candidate, encoding='utf-8') as stream:
+                data = yaml.safe_load(stream) or {}
+            values = data.get('/**', {}).get('ros__parameters', {})
+            in_this_pkg = os.path.abspath(candidate).startswith(
+                os.path.abspath(package_dir) + os.sep)
+            has_tracker_keys = isinstance(values, dict) and any(
+                k in values for k in TRACKER_ONLY_KEYS)
+            if not in_this_pkg and not has_tracker_keys:
+                fallback = cloth_tracker_requested or tracker_requested or 'tracker_params.yaml'
+                return _resolve_params_path(fallback, package_dir)
+        return candidate
+
+    fallback = cloth_tracker_requested or tracker_requested or 'tracker_params.yaml'
+    return _resolve_params_path(fallback, package_dir)
 
 
 def _create_nodes(context):
     package_dir = get_package_share_directory('realsense_dust_cloth')
-    if 'cloth_tracker_params_file' in context.launch_configurations:
-        requested = LaunchConfiguration('cloth_tracker_params_file').perform(context)
-    elif 'params_file' in context.launch_configurations:
-        requested = LaunchConfiguration('params_file').perform(context)
-    else:
-        requested = 'tracker_params.yaml'
-    params_file = os.path.expanduser(requested)
-    if not os.path.isabs(params_file) and not os.path.isfile(params_file):
-        params_file = os.path.join(package_dir, 'config', params_file)
+    params_file = _select_params_file(context, package_dir)
     if not os.path.isfile(params_file):
-        raise FileNotFoundError(f'Parameter YAML not found: {requested}')
+        raise FileNotFoundError(f'Parameter YAML not found: {params_file}')
     with open(params_file, encoding='utf-8') as stream:
         values = yaml.safe_load(stream)['/**']['ros__parameters']
-    for key in ('use_sim_time', 'use_direct_realsense', 'start_rviz',
-                'start_analyzer', 'record_inputs'):
+    for key in TRACKER_BOOL_KEYS:
         if type(values.get(key)) is not bool:
             raise ValueError(f'{key} must be true or false in {params_file}')
     clock = {'use_sim_time': values['use_sim_time']}
@@ -57,7 +95,16 @@ def _create_nodes(context):
 
 def generate_launch_description():
     return LaunchDescription([
-        DeclareLaunchArgument('cloth_tracker_params_file', default_value='tracker_params.yaml',
-                              description='tracker_params.yaml / unity_params.yaml / rosbag_params.yaml'),
-        OpaqueFunction(function=_create_nodes),
+        GroupAction([
+            DeclareLaunchArgument(
+                'cloth_tracker_params_file', default_value='tracker_params.yaml',
+                description='tracker_params.yaml / unity_params.yaml / rosbag_params.yaml'),
+            DeclareLaunchArgument(
+                'tracker_params_file', default_value='tracker_params.yaml',
+                description='tracker_params.yaml / unity_params.yaml / rosbag_params.yaml'),
+            DeclareLaunchArgument(
+                'params_file', default_value='tracker_params.yaml',
+                description='tracker_params.yaml / unity_params.yaml / rosbag_params.yaml'),
+            OpaqueFunction(function=_create_nodes),
+        ], scoped=True),
     ])

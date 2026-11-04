@@ -36,9 +36,9 @@ ros2 launch realsense_dust_cloth cloth_tracker.launch.py cloth_tracker_params_fi
 ros2 launch realsense_dust_cloth cloth_tracker.launch.py cloth_tracker_params_file:=rosbag_params.yaml
 ```
 
-※ 引数 `cloth_tracker_params_file`（後方互換として `params_file` も可）で設定YAMLを指定します。
+※ 引数 `cloth_tracker_params_file`（後方互換として `params_file` や `tracker_params_file` も可）で設定YAMLを指定します。
 
-`use_sim_time:=true`、`use_direct_realsense:=false`、`sim:=true` の追加指定は不要です。設定したい値はYAML内で変更します。
+`use_sim_time:=true`、`use_direct_realsense:=false`、`sim:=true` の追加指定は不要です。設定したい値はYAML内で変更します。他のlaunchファイル（`gn10_pointcloud_localization` 等）と同時にIncludeしても、`GroupAction(scoped=True)` とパラメータ自動判定により互いの `params_file` は分離されます。
 
 Jetsonは追跡とlocalizationを実行し、手元のPCでRVizを開けます。PCとJetsonのROS通信設定を合わせてください。
 
