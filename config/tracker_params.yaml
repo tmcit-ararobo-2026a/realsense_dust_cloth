@@ -16,7 +16,7 @@
     # --- 2. RealSense接続・画像配信 ---
     camera_width: 640  # 深度画像幅 [px]
     camera_height: 480  # 深度画像高さ [px]
-    depth_fps: 60  # 深度フレームレート [fps] (高速飛翔体の追跡には 60fps 推奨)
+    depth_fps: 30  # 深度フレームレート [fps] (60->30fpsにして通信帯域とgn10の処理負荷を半減)
     color_fps: 30  # カラーフレームレート [fps]
     rs_laser_power: -1.0  # 負値:SDKが返す出力範囲の最大値 / 0:消灯 / 正値:指定出力
     rs_exposure_us: -1  # Depth 露光時間 [us] (-1: 自動露出)
@@ -39,13 +39,13 @@
 
     # --- 4. 追跡する空間ROI・深度ノイズ除去 ---
     min_x_m: 0.6  # 探索空間 X 下限 (前方) [m] (ロボット本体直前の点群を除外)
-    max_x_m: 6.0  # 探索空間 X 上限 (前方) [m] (追跡対象とする最遠到達距離)
-    min_y_m: -0.6  # 探索空間 Y 下限 (右側) [m]
-    max_y_m: 0.6  # 探索空間 Y 上限 (左側) [m]
-    min_z_m: 0.04  # 探索空間 Z 下限 [m]。着地高さまで観測できる余裕を確保し、床除去はgn10と整合させる
-    max_z_m: 4.0  # 探索空間 Z 上限 [m]。実bagでは上昇中の候補を約3.08mまで観測。上限に余裕を確保し、gn10のheight_maxも合わせる
+    max_x_m: 4.8  # 探索空間 X 上限 (前方) [m] (遠方の背景壁・ノイズを除外して点群量を削減)
+    min_y_m: -0.40  # 探索空間 Y 下限 (右側) [m] (雑巾の飛翔レーンに絞り横の壁・障害物を除外)
+    max_y_m: 0.40  # 探索空間 Y 上限 (左側) [m]
+    min_z_m: 0.25  # 探索空間 Z 下限 [m] (ピッチ誤差で浮き上がる奥の床面点群をGPU段階で完全除外)
+    max_z_m: 3.0  # 探索空間 Z 上限 [m] (天井・照明の不要な点群を除外)
     min_depth_m: 0.25  # カメラ最小計測深度 [m]
-    max_depth_m: 5.5  # カメラ最大計測深度 [m]
+    max_depth_m: 4.8  # カメラ最大計測深度 [m]
     continuity_radius_px: 2  # 深度連続性を調べる上下左右の距離 [px]
     continuity_thresh_m: 0.2  # 点群連続性判定距離閾値 [m]
     continuity_min_neighbors: 3  # 連続性認定最小近傍点数
@@ -90,13 +90,13 @@
     max_gate_expansion_m: 0.20  # 欠測時のゲート拡張量の上限 [m]
     min_stationary_move_m: 0.12  # 静止判定移動量閾値 [m]
     max_stationary_frames: 6  # 静止判定フレーム数
-    landing_min_z: 0.15  # この高さ以下の実測点を採用した場合のみLANDED [m]。ROI下限より高く設定
+    landing_min_z: 0.30  # この高さ以下の実測点を採用した場合のみLANDED [m]。ROI下限(0.25m)より高く設定
 
     # --- 7. 間引き・クラスタ選択・GPUメモリ ---
-    voxel_size_m: 0.02  # GPU ダウンサンプリングボクセルサイズ [m]
-    cluster_eps_m: 0.08  # DBSCAN クラスタリング近傍探索距離 [m] (旗と雑巾が1つのクラスタに結合するのを防ぐ)
-    min_cluster_points: 35  # 射出候補の最小点数 [点] (手元のノイズ誤発射を防止)
-    min_tracking_points: 4  # 飛翔中の候補の最小点数 [点] (奥で点数が減っても追跡継続)
+    voxel_size_m: 0.03  # GPU ダウンサンプリングボクセルサイズ [m] (0.02->0.03mで点群通信量を約1/3に削減)
+    cluster_eps_m: 0.09  # DBSCAN クラスタリング近傍探索距離 [m] (3cmボクセルに合わせつつ旗との結合を防止)
+    min_cluster_points: 20  # 射出候補の最小点数 [点] (3cmボクセルでの手元ノイズ誤発射防止ライン)
+    min_tracking_points: 3  # 飛翔中の候補の最小点数 [点] (3cmボクセルで奥へ行った際の追跡維持)
     max_cluster_points: 12000  # クラスタ最大点数 (巨大な背景や壁クラスタを除外)
     min_cloth_size_m: 0.04  # 雑巾最小外形径 [m] (4cm以下の微小ノイズを除外)
     max_cloth_size_m: 0.8  # 雑巾最大外形径 [m] (80cm以上の大型物体を除外)
