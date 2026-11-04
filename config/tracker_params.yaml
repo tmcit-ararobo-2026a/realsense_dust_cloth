@@ -65,53 +65,53 @@
     # --- 6. 飛翔予測・異常候補の除外 ---
     gravity_m_s2: 9.81  # 予測に使う重力加速度 [m/s²]
     drag_coeff: 0.4  # 速度減衰係数 [1/s]。予測の前後・左右速度に適用する
-    vel_smoothing_beta: 0.4  # 速度平滑化フィルタ係数 (0.0: 予測重視 〜 1.0: 観測重視)
-    tube_radius_m: 0.40  # 予測位置から採用候補までの最大距離 [m]。狭すぎると本物も見失う
-    centroid_position_tolerance_m: 0.08  # 重心位置の計測誤差許容量 [m]。速度・加速度の差分で拡大する誤差を考慮
-    max_total_accel_m_s2: 35.0  # 許容最大全加速度 [m/s^2] (旗との混入による一時的な重心ブレを許容)
-    min_vertical_accel_m_s2: -30.0  # 許容下向き最大加速度 [m/s^2]
-    max_lateral_accel_m_s2: 15.0  # 許容横方向最大加速度 [m/s^2]
-    max_heading_deg: 75.0  # 許容最大進行偏向角 [deg] (旗の点群混入で重心が横に引かれても弾かない)
+    vel_smoothing_beta: 0.25  # 速度平滑化フィルタ係数 (予測の直進性を重視して横ブレを抑える)
+    tube_radius_m: 0.35  # 予測位置から採用候補までの最大距離 [m]
+    centroid_position_tolerance_m: 0.04  # 重心位置の計測誤差許容量 [m]
+    max_total_accel_m_s2: 22.0  # 許容最大全加速度 [m/s^2] (急激な折れ曲がりを遮断)
+    min_vertical_accel_m_s2: -18.0  # 許容下向き最大加速度 [m/s^2]
+    max_lateral_accel_m_s2: 5.0  # 許容横方向最大加速度 [m/s^2] (横への折れ曲がりを厳しく遮断)
+    max_heading_deg: 25.0  # 許容最大進行偏向角 [deg] (25度以上の曲がりを不採用にして直進を強制)
     heading_min_speed_m_s: 0.2  # 進行方向の角度判定を有効にする最低速度 [m/s]
-    heading_min_step_m: 0.05  # 進行方向の角度判定を行う最小移動量 [m]
-    reject_ascent_after_apex: false  # 旗の点群混入で重心がわずかに上がっても棄却しない
-    backward_jitter_tolerance_m: 0.10  # 飛翔中の許容最大後退ジッター [m] (旗に重心が引かれた際の後退ブレを許容)
-    vertical_jitter_tolerance_m: 0.10  # 頂点通過後の許容鉛直ジッター [m]
-    min_flight_vx_m_s: 0.0  # 飛翔中の前方速度の下限 [m/s]。測定ノイズの影響も考慮する
+    heading_min_step_m: 0.04  # 進行方向の角度判定を行う最小移動量 [m]
+    reject_ascent_after_apex: true  # 頂点通過後の再上昇（途中でのコブ状の浮き上がり）を厳しく除外
+    backward_jitter_tolerance_m: 0.01  # 飛翔中の後退・ループ状の折れ曲がりを除外 [m]
+    vertical_jitter_tolerance_m: 0.02  # 頂点通過後の許容鉛直ジッター [m]
+    min_flight_vx_m_s: 0.5  # 飛翔中の前方速度の下限 [m/s] (静止した旗を拾わないよう前進速度を要求)
     max_vx_m_s: 15.0  # 許容最大飛翔速度 Vx [m/s]
-    max_abs_vy_m_s: 1.5  # 許容最大横方向速度 |Vy| [m/s]
+    max_abs_vy_m_s: 0.5  # 許容最大横方向速度 |Vy| [m/s] (横曲がりを防止し直進軌道を強制)
     min_vz_m_s: -10.0  # 許容最小鉛直速度 Vz [m/s] (落下方向)
     max_vz_m_s: 12.0  # 許容最大鉛直速度 Vz [m/s] (上昇方向)
-    abort_on_anomaly: false  # 旗の点群と混ざって物理判定から外れてもLOSTで即打ち切りにしない
-    max_anomaly_frames: 8  # LOSTにするまでの連続異常候補数 [フレーム]
-    max_lost_frames: 8  # このフレーム数を超えて見失うとLOST。LANDEDにはしない
+    abort_on_anomaly: false  # 旗で曲がった候補は「不採用にしてスキップ」し、追跡自体は打ち切らず奥の直進点へ繋ぐ
+    max_anomaly_frames: 10  # 異常候補数上限 [フレーム]
+    max_lost_frames: 10  # 旗付近の不採用フレームを跨いで奥の雑巾に再ロックできる猶予フレーム数
     max_flight_duration_sec: 2.5  # 最大許容飛翔時間 [s] (滞空異常の安全タイムアウト)
-    lost_frame_gate_expansion_m: 0.06  # 欠測1フレームあたりの予測ゲート拡張量 [m]
-    max_gate_expansion_m: 0.20  # 欠測時のゲート拡張量の上限 [m]
+    lost_frame_gate_expansion_m: 0.04  # 欠測1フレームあたりの予測ゲート拡張量 [m]
+    max_gate_expansion_m: 0.15  # 欠測時のゲート拡張量の上限 [m]
     min_stationary_move_m: 0.12  # 静止判定移動量閾値 [m]
-    max_stationary_frames: 6  # 静止判定フレーム数
+    max_stationary_frames: 5  # 静止判定フレーム数
     landing_min_z: 0.22  # この高さ以下の実測点を採用した場合のみLANDED [m]。ROI下限(0.18m)より高く設定
 
     # --- 7. 間引き・クラスタ選択・GPUメモリ ---
-    voxel_size_m: 0.02  # GPU ダウンサンプリングボクセルサイズ [m] (2cmに戻してdynamic_cloudの点群密度を確保)
-    cluster_eps_m: 0.08  # DBSCAN クラスタリング近傍探索距離 [m] (旗と雑巾が1つのクラスタに結合するのを防ぐ)
+    voxel_size_m: 0.02  # GPU ダウンサンプリングボクセルサイズ [m]
+    cluster_eps_m: 0.08  # DBSCAN クラスタリング近傍探索距離 [m] (旗と雑巾の結合を防止)
     min_cluster_points: 30  # 射出候補の最小点数 [点] (手元のノイズ誤発射を防止)
-    min_tracking_points: 4  # 飛翔中の候補の最小点数 [点] (奥で点数が減っても追跡継続)
+    min_tracking_points: 3  # 飛翔中の候補の最小点数 [点] (奥で3点まで減っても直進線上なら追跡継続)
     max_cluster_points: 12000  # クラスタ最大点数 (巨大な背景や壁クラスタを除外)
-    min_cloth_size_m: 0.04  # 雑巾最小外形径 [m] (4cm以下の微小ノイズを除外)
-    max_cloth_size_m: 0.8  # 雑巾最大外形径 [m] (80cm以上の大型物体を除外)
+    min_cloth_size_m: 0.04  # 雑巾最小外形径 [m]
+    max_cloth_size_m: 0.8  # 雑巾最大外形径 [m]
     prediction_distance_weight: 1000.0  # 候補選択で予測位置からの距離に与える重み。大きいほど近さを優先
-    cluster_size_weight: 0.01  # 候補選択で点数に与える重み (点数の多い旗の残りより予測位置に近い雑巾を優先)
+    cluster_size_weight: 0.01  # 候補選択で点数に与える重み
     launch_forward_weight: 50.0  # 射出枠内の候補選択で前方位置を優先する重み
-    max_voxel_points: 8192  # GPUに保持する間引き後の最大点数 [点]。超過時はエラー表示する
-    voxel_hash_table_size: 32768  # Voxelハッシュの要素数。2の累乗かつmax_voxel_points以上にする
+    max_voxel_points: 8192  # GPUに保持する間引き後の最大点数 [点]
+    voxel_hash_table_size: 32768  # Voxelハッシュの要素数
 
     # --- 8. gn10との接続・入力時刻 ---
     cropped_cloud_topic: /realsense/cropped_cloud  # 自己位置ノードへ送信するクロップ点群トピック
     dynamic_cloud_topic: /realsense/dynamic_cloud  # 自己位置ノードから受信する動的点群トピック
     external_filter_status_topic: /realsense/filter_status  # 自己位置フィルタ状態トピック
     external_prediction_topic: /cloth/filter_prediction  # 自己位置ノードへ送る予測保護球マーカー
-    external_tracking_keep_radius_m: 0.15  # gn10へ送る予測保護球の半径 [m] (0.5mだと直径1m分の旗がdynamic_cloudに混入するため0.15mに縮小)
+    external_tracking_keep_radius_m: 0.0  # 0.0にしてgn10側で常に旗の静的マップ除去を効かせる（旗点群の混入を防止）
     external_result_timeout_sec: 0.25  # 動的抽出結果待機タイムアウト [s]
     external_poll_sec: 0.02  # ポーリング周期 [s]
     image_max_age_sec: 0.25  # 入力の撮影時刻とROS時計の最大許容差 [s]。bagは --clock で再生する
