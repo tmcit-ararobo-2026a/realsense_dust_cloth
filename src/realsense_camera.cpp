@@ -44,16 +44,15 @@ void ClothTrackerCudaNode::setup_direct_camera() {
     const std::string camera_info_topic = get_parameter("camera_info_topic").as_string();
     const std::string color_topic = get_parameter("color_topic").as_string();
 #ifdef HAVE_REALSENSE2
-    pub_raw_depth_ =
-        this->create_publisher<sensor_msgs::msg::Image>(depth_topic, publisher_queue_size_);
-    pub_depth_info_ = this->create_publisher<sensor_msgs::msg::CameraInfo>(camera_info_topic,
-                                                                           publisher_queue_size_);
-    pub_raw_color_ =
-        this->create_publisher<sensor_msgs::msg::Image>(color_topic, publisher_queue_size_);
+    const auto sensor_qos = rclcpp::SensorDataQoS();
+    pub_raw_depth_ = this->create_publisher<sensor_msgs::msg::Image>(depth_topic, sensor_qos);
+    pub_depth_info_ =
+        this->create_publisher<sensor_msgs::msg::CameraInfo>(camera_info_topic, sensor_qos);
+    pub_raw_color_ = this->create_publisher<sensor_msgs::msg::Image>(color_topic, sensor_qos);
     pub_compressed_color_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
-        "/camera/camera/color/image_raw/compressed", publisher_queue_size_);
+        "/camera/camera/color/image_raw/compressed", sensor_qos);
     pub_color_info_ = this->create_publisher<sensor_msgs::msg::CameraInfo>(
-        "/camera/camera/color/camera_info", publisher_queue_size_);
+        "/camera/camera/color/camera_info", sensor_qos);
 
     RCLCPP_INFO(this->get_logger(),
                 "Starting Direct librealsense2 C++ API loop (Hardware Native)...");

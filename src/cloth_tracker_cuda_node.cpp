@@ -19,16 +19,17 @@ ClothTrackerCudaNode::ClothTrackerCudaNode(const rclcpp::NodeOptions& options)
         "/cloth/trajectory_marker", publisher_queue_size_);
     pub_path_ =
         this->create_publisher<nav_msgs::msg::Path>("/cloth/measured_path", publisher_queue_size_);
-    pub_rotated_color_ = this->create_publisher<sensor_msgs::msg::Image>("/cloth/camera_view",
-                                                                         publisher_queue_size_);
+    const auto sensor_qos = rclcpp::SensorDataQoS();
+    pub_rotated_color_ =
+        this->create_publisher<sensor_msgs::msg::Image>("/cloth/camera_view", sensor_qos);
 
     // Debug publishers (always available for RViz visualization & verification)
     pub_roi_markers_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
         "/cloth/debug/roi_markers", publisher_queue_size_);
     pub_cluster_cloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-        "/cloth/debug/cluster_points", publisher_queue_size_);
+        "/cloth/debug/cluster_points", sensor_qos);
     pub_filtered_cloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-        "/cloth/debug/filtered_points", publisher_queue_size_);
+        "/cloth/debug/filtered_points", sensor_qos);
 
     setup_external_cloud();
 

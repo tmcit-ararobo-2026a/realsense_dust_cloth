@@ -81,31 +81,43 @@ void ClothTrackerCudaNode::color_worker_loop() {
             if (task.bgr_frame.empty())
                 continue;
 
+            const bool want_raw = pub_raw_color_ && pub_raw_color_->get_subscription_count() > 0;
+            const bool want_rotated =
+                pub_rotated_color_ && pub_rotated_color_->get_subscription_count() > 0;
+            const bool want_compressed =
+                pub_compressed_color_ && pub_compressed_color_->get_subscription_count() > 0;
+            const bool want_info = pub_color_info_ && pub_color_info_->get_subscription_count() > 0;
+
+            if (!want_raw && !want_rotated && !want_compressed && !want_info)
+                continue;
+
             // 1. Raw color publication if requested
-            if (pub_raw_color_ && pub_raw_color_->get_subscription_count() > 0) {
+            if (want_raw) {
                 pub_raw_color_->publish(
                     mat_to_image_msg(task.bgr_frame, task.stamp, color_optical_frame_));
             }
 
-            // 2. Rotation
-            if (color_rotation_deg_ == ROTATION_180_DEG) {
-                cv::rotate(task.bgr_frame, rotated_frame, cv::ROTATE_180);
-            } else if (color_rotation_deg_ == ROTATION_90_CW_DEG) {
-                cv::rotate(task.bgr_frame, rotated_frame, cv::ROTATE_90_CLOCKWISE);
-            } else if (color_rotation_deg_ == ROTATION_270_CW_DEG) {
-                cv::rotate(task.bgr_frame, rotated_frame, cv::ROTATE_90_COUNTERCLOCKWISE);
-            } else {
-                rotated_frame = task.bgr_frame;
+            // 2. Rotation (only when rotated or compressed image is subscribed)
+            if (want_rotated || want_compressed) {
+                if (color_rotation_deg_ == ROTATION_180_DEG) {
+                    cv::rotate(task.bgr_frame, rotated_frame, cv::ROTATE_180);
+                } else if (color_rotation_deg_ == ROTATION_90_CW_DEG) {
+                    cv::rotate(task.bgr_frame, rotated_frame, cv::ROTATE_90_CLOCKWISE);
+                } else if (color_rotation_deg_ == ROTATION_270_CW_DEG) {
+                    cv::rotate(task.bgr_frame, rotated_frame, cv::ROTATE_90_COUNTERCLOCKWISE);
+                } else {
+                    rotated_frame = task.bgr_frame;
+                }
             }
 
             // 3. Rotated uncompressed color (/cloth/camera_view)
-            if (pub_rotated_color_ && pub_rotated_color_->get_subscription_count() > 0) {
+            if (want_rotated) {
                 pub_rotated_color_->publish(
                     mat_to_image_msg(rotated_frame, task.stamp, color_optical_frame_));
             }
 
             // 4. JPEG Compressed Color (/camera/camera/color/image_raw/compressed)
-            if (pub_compressed_color_) {
+            if (want_compressed) {
                 const std::vector<int> jpeg_params = {cv::IMWRITE_JPEG_QUALITY, jpeg_quality_};
                 compressed_buf.clear();
                 cv::imencode(".jpg", rotated_frame, compressed_buf, jpeg_params);
@@ -119,12 +131,10 @@ void ClothTrackerCudaNode::color_worker_loop() {
             }
 
             // 5. Camera Info
-            if (pub_color_info_) {
-                if (task.has_color_info) {
-                    task.color_info.header.stamp = task.stamp;
-                    task.color_info.header.frame_id = color_optical_frame_;
-                    pub_color_info_->publish(task.color_info);
-                }
+            if (want_info && task.has_color_info) {
+                task.color_info.header.stamp = task.stamp;
+                task.color_info.header.frame_id = color_optical_frame_;
+                pub_color_info_->publish(task.color_info);
             }
         } catch (const std::exception& e) {
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), warning_log_throttle_ms_,

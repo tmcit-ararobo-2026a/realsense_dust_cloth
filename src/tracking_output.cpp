@@ -36,19 +36,25 @@ void ClothTrackerCudaNode::publish_tracking_result(const ClothTrackingResult& ra
 
     // Publish Debug Point Clouds & ROI Markers after tracker state update
     if (publish_debug_cloud_) {
-        MarkerVisualizer::publish_point_cloud(pub_filtered_cloud_, debug_filtered_pts, stamp,
-                                              camera_parent_frame_);
-        publish_roi_markers(stamp, raw_res);
+        if (pub_filtered_cloud_ && pub_filtered_cloud_->get_subscription_count() > 0) {
+            MarkerVisualizer::publish_point_cloud(pub_filtered_cloud_, debug_filtered_pts, stamp,
+                                                  camera_parent_frame_);
+        }
+        if (pub_roi_markers_ && pub_roi_markers_->get_subscription_count() > 0) {
+            publish_roi_markers(stamp, raw_res);
+        }
     }
 
-    // 今回採用したクラスタだけを表示し、それ以外では表示を消す。
-    if (is_actively_tracked && !debug_cluster_pts.empty()) {
-        MarkerVisualizer::publish_point_cloud(pub_cluster_cloud_, debug_cluster_pts, stamp,
-                                              camera_parent_frame_);
-    } else {
-        std::vector<float3> empty_pts;
-        MarkerVisualizer::publish_point_cloud(pub_cluster_cloud_, empty_pts, stamp,
-                                              camera_parent_frame_);
+    // 今回採用したクラスタだけを表示し、それ以外では表示を消す（購読者がいる時のみ配信）。
+    if (pub_cluster_cloud_ && pub_cluster_cloud_->get_subscription_count() > 0) {
+        if (is_actively_tracked && !debug_cluster_pts.empty()) {
+            MarkerVisualizer::publish_point_cloud(pub_cluster_cloud_, debug_cluster_pts, stamp,
+                                                  camera_parent_frame_);
+        } else {
+            std::vector<float3> empty_pts;
+            MarkerVisualizer::publish_point_cloud(pub_cluster_cloud_, empty_pts, stamp,
+                                                  camera_parent_frame_);
+        }
     }
 
     // ログ周期はYAMLのstatus_log_throttle_msに従う。
