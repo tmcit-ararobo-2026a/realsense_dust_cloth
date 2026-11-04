@@ -150,6 +150,9 @@ class BallisticTracker {
      */
     bool update(const ClothTrackingResult& raw, double stamp_sec, ClothTrackingResult& out);
 
+    // GPUの候補探索と、採用判定で同じ半径を使う。欠測中だけYAMLの上限まで広げる。
+    double search_radius_m() const;
+
   private:
     bool is_inside_launch_gate(const ClothTrackingResult& candidate) const;
     bool update_launch_candidate(const ClothTrackingResult& raw, double stamp_sec,

@@ -141,6 +141,9 @@ ClothTrackingResult ClothTrackerCudaNode::find_cloth_candidate(const std::vector
     float px = 0, py = 0, pz = 0;
     bool predicted = ballistic_tracker_.get_prediction(stamp_sec, px, py, pz);
     auto search_filter = filter_cfg_;
+    if (predicted) {
+        search_filter.gate_radius_m = ballistic_tracker_.search_radius_m();
+    }
     if (!predicted && ballistic_tracker_.is_pending_launch) {
         // Only the first observation must be in the launch box. A fast cloth may
         // leave that box before the next camera frame confirms its displacement.
