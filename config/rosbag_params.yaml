@@ -25,7 +25,7 @@
     realsense_wait_timeout_ms: 1000  # 実機カメラのフレーム待機タイムアウト [ms]
 
     # --- 3. カメラ取付と座標系 ---
-    publish_static_tf: false  # カメラ固定TFを配信する。bagの同じTFを再生する場合はfalse
+    publish_static_tf: true  # カメラ固定TFを配信する。bagの同じTFを再生する場合はfalse
     camera_parent_frame: base_link  # 親座標系 (ロボット車体中心)
     camera_frame: camera_link  # カメラ座標系名
     depth_optical_frame: camera_depth_optical_frame  # 深度画像の光学座標系名
