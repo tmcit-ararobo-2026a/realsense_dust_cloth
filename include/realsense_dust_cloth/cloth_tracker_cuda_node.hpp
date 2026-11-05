@@ -19,7 +19,9 @@
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/empty.hpp>
 #include <std_msgs/msg/string.hpp>
+#include <std_msgs/msg/u_int8.hpp>
 #include <tf2_ros/static_transform_broadcaster.h>
 #include <tf2_ros/transform_broadcaster.h>
 #include <visualization_msgs/msg/marker.hpp>
@@ -67,6 +69,21 @@ class ClothTrackerCudaNode : public rclcpp::Node {
     ClothTrackingResult find_cloth_candidate(const std::vector<float3>& points, double stamp_sec,
                                              std::vector<float3>* cluster,
                                              std::vector<float3>* filtered);
+
+    // 射出検知 & 背景凍結ステートマシン
+    enum class BackgroundState { ROLLING, FROZEN };
+    BackgroundState bg_state_{BackgroundState::ROLLING};
+    double shot_freeze_until_sec_{0.0};
+    uint8_t last_shot_count_{0};
+    bool has_received_shot_count_{false};
+    int rolling_bg_frame_counter_{0};
+    std::string shot_count_topic_{"/robot/feedback/shot_count"};
+    std::string reset_topic_{"/cloth/reset"};
+    rclcpp::Subscription<std_msgs::msg::UInt8>::SharedPtr sub_shot_count_;
+    rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr sub_reset_;
+    void shot_count_callback(const std_msgs::msg::UInt8::SharedPtr msg);
+    void reset_callback(const std_msgs::msg::Empty::SharedPtr msg);
+    void trigger_freeze(double now_sec);
 
     // 実測結果と状態の配信: tracking_output.cpp / tracking_status.cpp
     void setup_tracking_status();

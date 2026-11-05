@@ -1,16 +1,15 @@
-# rosbag（記録済み差分点群の再追跡）
+# rosbag（深度画像 / 記録済み差分点群の再追跡）
 # このYAMLが設定の正本です。launchはuse_sim_time / use_direct_realsenseを上書きしません。
-# 地図と自己位置の管理・地図差分はgn10側のみ。追跡側に地図ファイルは不要です。
 /**:
   ros__parameters:
 
     # --- 1. 実行環境・入力の種類 ---
     use_sim_time: true  # 実機:false / Unity・bag:true。launchはこの値をそのまま全ノードに適用する
     use_direct_realsense: false  # 実機USB直結:true / Unity・bag:false。未対応ビルド時は明示エラー
-    input_source: dynamic_cloud  # depth:深度から作成 / cropped_cloud:除去前点群を再投入 / dynamic_cloud:記録済み差分後点群を追跡
+    input_source: depth  # depth:深度から作成 / cropped_cloud:除去前点群を再投入 / dynamic_cloud:記録済み差分後点群を追跡
     depth_topic: /camera/camera/depth/image_rect_raw  # 深度トピック名 (ROS 2 互換受信用)
     camera_info_topic: /camera/camera/depth/camera_info  # カメラ内部パラメータトピック名
-    color_topic: /camera/camera/color/image_raw  # カラー画像トピック名
+    color_topic: /camera/color/image_raw  # カラー画像トピック名
     cropped_replay_topic: /bag/realsense/cropped_cloud  # cropped_cloud再投入用。bag再生で元トピックをここへremapし、入出力ループを防ぐ
 
     # --- 2. RealSense接続・画像配信 ---
@@ -32,106 +31,115 @@
     depth_optical_frame: camera_depth_optical_frame  # 深度画像の光学座標系名
     color_optical_frame: camera_color_optical_frame  # カラー画像の光学座標系名。TFと画像ヘッダーで共通に使用
     cloth_tf_frame: flying_cloth  # 雑巾の最後の実測位置を表示するTFの子座標系名
-    camera_x_offset_m: 0.5  # 車体中心からカメラレンズまでの前後オフセット [m] (前方: +, 後方: -)
-    camera_height_offset_m: 1.0  # 地面からカメラレンズ中心までの高さオフセット [m]
+    camera_x_offset_m: 0.50  # 車体中心からカメラレンズまでの前後オフセット [m] (前方: +, 後方: -)
+    camera_height_offset_m: 1.00  # 地面からカメラレンズ中心までの高さオフセット [m]
     camera_pitch_deg: 20.0  # カメラ仰角 [deg]。この実装では正の値が上向き
     camera_roll_deg: 90.0  # カメラ縦置き設置の回転角 [deg] (横置き: 0度, 縦置き: 90度)
 
     # --- 4. 追跡する空間ROI・深度ノイズ除去 ---
-    min_x_m: 0.6  # 探索空間 X 下限 (前方) [m] (ロボット本体直前の点群を除外)
-    max_x_m: 6.0  # 探索空間 X 上限 (前方) [m] (追跡対象とする最遠到達距離)
-    min_y_m: -0.6  # 探索空間 Y 下限 (右側) [m]
-    max_y_m: 0.6  # 探索空間 Y 上限 (左側) [m]
-    min_z_m: 0.04  # 探索空間 Z 下限 [m]。着地高さまで観測できる余裕を確保し、床除去はgn10と整合させる
-    max_z_m: 4.0  # 探索空間 Z 上限 [m]。実bagでは上昇中の候補を約3.08mまで観測。上限に余裕を確保し、gn10のheight_maxも合わせる
+    min_x_m: 0.60  # 探索空間 X 下限 (前方) [m] (ロボット本体直前の点群を除外)
+    max_x_m: 5.00  # 探索空間 X 上限 (前方) [m] (追跡対象とする最遠到達距離)
+    min_y_m: -0.60  # 探索空間 Y 下限 (右側) [m]
+    max_y_m: 0.60  # 探索空間 Y 上限 (左側) [m]
+    min_z_m: 0.05  # 探索空間 Z 下限 [m]。着地高さまで観測できる余裕を確保し、床除去はgn10と整合させる
+    max_z_m: 4.00  # 探索空間 Z 上限 [m]
     min_depth_m: 0.25  # カメラ最小計測深度 [m]
-    max_depth_m: 5.5  # カメラ最大計測深度 [m]
+    max_depth_m: 5.30  # カメラ最大計測深度 [m]
     continuity_radius_px: 2  # 深度連続性を調べる上下左右の距離 [px]
-    continuity_thresh_m: 0.2  # 点群連続性判定距離閾値 [m]
+    continuity_thresh_m: 0.08  # 点群連続性判定距離閾値 [m]
     continuity_min_neighbors: 3  # 連続性認定最小近傍点数
 
     # --- 5. 射出判定 ---
-    launch_min_x: 1.35  # 発射判定ボックス X 下限 [m] (発射口の前端位置)
-    launch_max_x: 2.0  # 発射判定ボックス X 上限 [m]
+    launch_min_x: 0.80  # 発射判定ボックス X 下限 [m] (発射口の前端位置)
+    launch_max_x: 1.35  # 発射判定ボックス X 上限 [m]
     launch_min_y: -0.25  # 発射判定ボックス Y 下限 [m]
-    launch_max_y: 0.18  # 発射判定ボックス Y 上限 [m]
+    launch_max_y: 0.30  # 発射判定ボックス Y 上限 [m]
     launch_min_z: 1.45  # 発射判定ボックス Z 下限 [m] (発射口の高さ)
-    launch_max_z: 2.5  # 発射判定ボックス Z 上限 [m]
-    min_launch_vx: 3.0  # 射出認定最小前方初速 [m/s] (光ジッター除外: 0.5m/s 以上を要求)
-    min_launch_move_m: 0.12  # 射出認定最小前方変位 [m] (発射枠内で 12cm 以上前進して初めて発射認定)
-    pending_reset_sec: 0.2  # 発射枠内の微小振動・静止物リセットタイムアウト [s]
-    pending_max_drop_m: 0.5  # 射出確定前にこの距離以上落下した候補を破棄する [m]
+    launch_max_z: 2.10  # 発射判定ボックス Z 上限 [m]
+    min_launch_vx: 0.30  # 射出認定最小前方初速 [m/s]
+    min_launch_move_m: 0.05  # 射出認定最小前方変位 [m]
+    pending_reset_sec: 0.25  # 発射枠内の微小振動・静止物リセットタイムアウト [s]
+    pending_max_drop_m: 0.50  # 射出確定前にこの距離以上落下した候補を破棄する [m]
 
     # --- 6. 飛翔予測・異常候補の除外 ---
     gravity_m_s2: 9.81  # 予測に使う重力加速度 [m/s²]
-    drag_coeff: 0.4  # 速度減衰係数 [1/s]。予測の前後・左右速度に適用する
-    vel_smoothing_beta: 0.5  # 速度平滑化フィルタ係数 (0.0: 予測重視 〜 1.0: 観測重視)
-    tube_radius_m: 0.35  # 予測位置から採用候補までの最大距離 [m]。狭すぎると本物も見失う
-    centroid_position_tolerance_m: 0.06  # 重心位置の計測誤差許容量 [m]。速度・加速度の差分で拡大する誤差を考慮
-    max_total_accel_m_s2: 25.0  # 許容最大全加速度 [m/s^2] (約2.5G: 異常な急加速・急停止を遮断)
-    min_vertical_accel_m_s2: -20.0  # 許容下向き最大加速度 [m/s^2] (約-2G: 異常な垂直急降下ダイブを遮断)
-    max_lateral_accel_m_s2: 8.0  # 許容横方向最大加速度 [m/s^2] (横飛びノイズ・急カーブを遮断し直進性を強制)
-    max_heading_deg: 45.0  # 許容最大進行偏向角 [deg] (45度以上の直角折れ曲がりを遮断)
+    drag_coeff: 0.40  # 速度減衰係数 [1/s]。予測の前後・左右速度に適用する
+    vel_smoothing_beta: 0.50  # 速度平滑化フィルタ係数 (0.0: 予測重視 〜 1.0: 観測重視)
+    tube_radius_m: 0.65  # 予測位置から採用候補までの最大距離 [m]
+    centroid_position_tolerance_m: 0.08  # 重心位置の計測誤差許容量 [m]
+    max_total_accel_m_s2: 45.0  # 許容最大全加速度 [m/s^2]
+    min_vertical_accel_m_s2: -35.0  # 許容下向き最大加速度 [m/s^2]
+    max_lateral_accel_m_s2: 30.0  # 許容横方向最大加速度 [m/s^2]
+    max_heading_deg: 55.0  # 許容最大進行偏向角 [deg]
     heading_min_speed_m_s: 0.2  # 進行方向の角度判定を有効にする最低速度 [m/s]
     heading_min_step_m: 0.05  # 進行方向の角度判定を行う最小移動量 [m]
     reject_ascent_after_apex: true  # 頂点通過後、鉛直ジッター許容を超える再上昇候補を除外する
-    backward_jitter_tolerance_m: 0.02  # 飛翔中の許容最大後退ジッター [m]
+    backward_jitter_tolerance_m: 0.04  # 飛翔中の許容最大後退ジッター [m]
     vertical_jitter_tolerance_m: 0.06  # 頂点通過後の許容鉛直ジッター [m]
-    min_flight_vx_m_s: 0.0  # 飛翔中の前方速度の下限 [m/s]。測定ノイズの影響も考慮する
+    min_flight_vx_m_s: -1.50  # 飛翔中の前方速度の下限 [m/s]
     max_vx_m_s: 15.0  # 許容最大飛翔速度 Vx [m/s]
-    max_abs_vy_m_s: 0.8  # 許容最大横方向速度 |Vy| [m/s] (0.80に引き締め、直進軌道を強制)
+    max_abs_vy_m_s: 2.50  # 許容最大横方向速度 |Vy| [m/s]
     min_vz_m_s: -10.0  # 許容最小鉛直速度 Vz [m/s] (落下方向)
-    max_vz_m_s: 12.0  # 許容最大鉛直速度 Vz [m/s] (上昇方向)
+    max_vz_m_s: 8.0  # 許容最大鉛直速度 Vz [m/s] (上昇方向)
     abort_on_anomaly: true  # 物理条件に反する候補が続いたらLOSTとして打ち切る
-    max_anomaly_frames: 3  # LOSTにするまでの連続異常候補数 [フレーム]
-    max_lost_frames: 6  # このフレーム数を超えて見失うとLOST。LANDEDにはしない
-    max_flight_duration_sec: 2.5  # 最大許容飛翔時間 [s] (滞空異常の安全タイムアウト)
+    max_anomaly_frames: 2  # LOSTにするまでの連続異常候補数 [フレーム]
+    max_lost_frames: 12  # このフレーム数を超えて見失うとLOST。LANDEDにはしない
+    max_flight_duration_sec: 2.50  # 最大許容飛翔時間 [s] (滞空異常の安全タイムアウト)
     lost_frame_gate_expansion_m: 0.04  # 欠測1フレームあたりの予測ゲート拡張量 [m]
-    max_gate_expansion_m: 0.1  # 欠測時のゲート拡張量の上限 [m]
-    min_stationary_move_m: 0.12  # 静止判定移動量閾値 [m]
-    max_stationary_frames: 5  # 静止判定フレーム数
-    landing_min_z: 0.15  # この高さ以下の実測点を採用した場合のみLANDED [m]。ROI下限より高く設定
+    max_gate_expansion_m: 0.10  # 欠測時のゲート拡張量の上限 [m]
+    min_stationary_move_m: 0.10  # 静止判定移動量閾値 [m]
+    max_stationary_frames: 8  # 静止判定フレーム数
+    landing_min_z: 0.15  # この高さ以下の実測点を採用した場合のみLANDED [m]
 
     # --- 7. 間引き・クラスタ選択・GPUメモリ ---
     voxel_size_m: 0.02  # GPU ダウンサンプリングボクセルサイズ [m]
-    cluster_eps_m: 0.08  # DBSCAN クラスタリング近傍探索距離 [m] (構造物残骸との結合を防止)
-    min_cluster_points: 35  # 射出候補の最小点数 [点]。上流gn10のmin_dynamic_pointsも確認する
-    min_tracking_points: 8  # 飛翔中の候補の最小点数 [点]。上流で消えた点は復元できない
-    max_cluster_points: 12000  # クラスタ最大点数 (巨大な背景や壁クラスタを除外)
-    min_cloth_size_m: 0.05  # 雑巾最小外形径 [m] (5cm以下の微小ノイズを除外)
-    max_cloth_size_m: 0.65  # 雑巾最大外形径 [m] (65cm以上の大型構造物を除外)
-    prediction_distance_weight: 1000.0  # 候補選択で予測位置からの距離に与える重み。大きいほど近さを優先
-    cluster_size_weight: 0.01  # 候補選択で点数に与える重み。大きすぎると背景の大きな塊を選びやすい
-    launch_forward_weight: 50.0  # 射出枠内の候補選択で前方位置を優先する重み
-    max_voxel_points: 8192  # GPUに保持する間引き後の最大点数 [点]。超過時はエラー表示する
-    voxel_hash_table_size: 32768  # Voxelハッシュの要素数。2の累乗かつmax_voxel_points以上にする
+    cluster_eps_m: 0.10  # DBSCAN クラスタリング近傍探索距離 [m]
+    min_cluster_points: 25  # 射出候補の最小点数 [点]
+    min_tracking_points: 4  # 飛翔中の候補の最小点数 [点]
+    max_cluster_points: 8000  # クラスタ最大点数
+    min_cloth_size_m: 0.05  # 雑巾最小外形径 [m]
+    max_cloth_size_m: 0.60  # 雑巾最大外形径 [m]
+    prediction_distance_weight: 2.0  # 候補選択で予測位置からの距離に与える重み
+    cluster_size_weight: 0.05  # 候補選択で点数に与える重み
+    launch_forward_weight: 1.0  # 射出枠内の候補選択で前方位置を優先する重み
+    max_voxel_points: 8192  # GPUに保持する間引き後の最大点数 [点]
+    voxel_hash_table_size: 32768  # Voxelハッシュの要素数
 
-    # --- 8. gn10との接続・入力時刻 ---
+    # --- 8. GPU深度背景差分 & 射出連携 ---
+    use_bg_subtraction: true  # GPU深度リングバッファ背景差分を有効化
+    bg_diff_thresh_m: 0.12  # 背景より手前にある動的物体のみ抽出するしきい値 [m]
+    bg_ring_frames: 6  # 背景作成用深度リングバッファフレーム数 (60fps時: 6フレーム=0.10秒)
+    bg_pre_shot_exclude_sec: 0.08  # 射出検知時刻直前の除外ウィンドウ [s] (直近フレームを背景から除外)
+    shot_window_sec: 2.5  # 射出後の背景凍結ウィンドウ時間 [s]
+    shot_count_topic: /robot/feedback/shot_count  # 射出カウントトピック名
+    reset_topic: /cloth/reset  # 追跡・背景リセットトピック名
+
+    # --- 9. 外部通信・入力時刻 ---
     cropped_cloud_topic: /realsense/cropped_cloud  # 自己位置ノードへ送信するクロップ点群トピック
     dynamic_cloud_topic: /realsense/dynamic_cloud  # 自己位置ノードから受信する動的点群トピック
     external_filter_status_topic: /realsense/filter_status  # 自己位置フィルタ状態トピック
     external_prediction_topic: /cloth/filter_prediction  # 自己位置ノードへ送る予測保護球マーカー
-    external_tracking_keep_radius_m: 0.0  # gn10へ送る予測保護球の半径 [m] (0.0でESDF静的構造物除去を常時有効化)
+    external_tracking_keep_radius_m: 0.30  # gn10へ送る予測保護球の半径 [m]
     external_result_timeout_sec: 0.25  # 動的抽出結果待機タイムアウト [s]
     external_poll_sec: 0.02  # ポーリング周期 [s]
-    image_max_age_sec: 0.25  # 入力の撮影時刻とROS時計の最大許容差 [s]。bagは --clock で再生する
-    depth_queue_size: 8  # 深度画像の受信キュー長 [フレーム]。大きくしすぎると遅延が増える
+    image_max_age_sec: 0.25  # 入力の撮影時刻とROS時計の最大許容差 [s]
+    depth_queue_size: 8  # 深度画像の受信キュー長 [フレーム]
     publisher_queue_size: 10  # 通常の出力トピックのキュー長 [件]
-    color_queue_size: 5  # カラー受信キュー長 [フレーム]。最新画像を優先する
+    color_queue_size: 5  # カラー受信キュー長 [フレーム]
     bag_rewind_tolerance_sec: 0.5  # 時刻がこの値以上戻ったら追跡履歴をリセットする [s]
 
-    # --- 9. 表示・実測出力・ログ ---
-    publish_debug_cloud: true  # デバッグ用点群パブリッシュ (通常運用は false)
+    # --- 10. 表示・実測出力・ログ ---
+    publish_debug_cloud: true  # デバッグ用点群パブリッシュ
     trajectory_history_sec: 15.0  # RViz 軌跡描画履歴保持時間 [s]
-    min_trajectory_step_m: 0.005  # 軌跡に点を追加する最小移動量 [m]。実測値自体は加工しない
+    min_trajectory_step_m: 0.005  # 軌跡に点を追加する最小移動量 [m]
     max_trajectory_points: 1000  # 保持する軌跡の最大点数 [点]
     static_marker_interval_sec: 0.1  # 追跡終了後のマーカー再配信間隔 [s]
     landing_position_topic: /cloth/landing_position  # 着地推定位置パブリッシュトピック名
     warning_log_throttle_ms: 5000  # 警告の最小表示間隔 [ms]
     status_log_throttle_ms: 1000  # 状態ログの最小表示間隔 [ms]
 
-    # --- 10. launchで起動する補助処理（Jetsonでは通常すべてfalse） ---
-    start_rviz: false  # 同じPCでRVizも起動するか。別PCで見る場合はfalse
+    # --- 11. launchで起動する補助処理（Jetsonでは通常すべてfalse） ---
+    start_rviz: false  # 同じPCでRVizも起動するか
     start_analyzer: false  # 軌道CSV解析ノードを同時起動するか
     record_inputs: false  # 入力・自己位置・追跡結果をrosbagへ記録するか
     record_topics:  # 記録するトピック（record_inputs=true時だけ使用）
@@ -139,9 +147,7 @@
       - /tf_static
       - /camera/camera/depth/image_rect_raw
       - /camera/camera/depth/camera_info
-      - /realsense/cropped_cloud
-      - /realsense/dynamic_cloud
-      - /cloth/filter_prediction
       - /cloth/position
       - /cloth/landing_position
       - /cloth/tracking_state
+      - /robot/feedback/shot_count

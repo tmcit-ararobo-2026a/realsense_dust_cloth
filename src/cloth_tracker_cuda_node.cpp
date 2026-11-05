@@ -34,6 +34,7 @@ ClothTrackerCudaNode::ClothTrackerCudaNode(const rclcpp::NodeOptions& options)
     setup_external_cloud();
 
     // Initialize CUDA memory and stream
+    cuda_ctx_.ring_frames = filter_cfg_.bg_ring_frames > 0 ? filter_cfg_.bg_ring_frames : 6;
     if (!init_cuda_tracker(cuda_ctx_, camera_intrin_.width, camera_intrin_.height)) {
         throw std::runtime_error("Failed to initialize CUDA tracker context");
     }

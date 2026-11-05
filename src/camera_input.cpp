@@ -11,6 +11,17 @@ constexpr double DEG_TO_RAD = M_PI / 180.0;
 } // namespace
 
 void ClothTrackerCudaNode::setup_camera_input() {
+    if (!shot_count_topic_.empty()) {
+        sub_shot_count_ = this->create_subscription<std_msgs::msg::UInt8>(
+            shot_count_topic_, rclcpp::QoS(10).reliable(),
+            std::bind(&ClothTrackerCudaNode::shot_count_callback, this, std::placeholders::_1));
+    }
+    if (!reset_topic_.empty()) {
+        sub_reset_ = this->create_subscription<std_msgs::msg::Empty>(
+            reset_topic_, rclcpp::QoS(10),
+            std::bind(&ClothTrackerCudaNode::reset_callback, this, std::placeholders::_1));
+    }
+
     if (input_source_ != "depth")
         return;
     if (use_direct_realsense_) {
@@ -59,6 +70,7 @@ void ClothTrackerCudaNode::setup_camera_subscriptions() {
                       std::placeholders::_1),
             color_sub_opts);
     }
+
     RCLCPP_INFO(this->get_logger(),
                 "Listening on Depth Image topic: %s, Color Image topic: %s (+/compressed)",
                 depth_topic.c_str(), color_topic.c_str());
@@ -201,6 +213,10 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr,
         has_cloth_pose_ = false;
         last_external_stamp_sec_ = -1.0;
         last_external_wall_sec_ = -1.0;
+        prev_state_ = TrackerState::IDLE;
+        bg_state_ = BackgroundState::ROLLING;
+        shot_freeze_until_sec_ = 0.0;
+        reset_background_cuda(cuda_ctx_);
     }
     last_frame_stamp_sec_ = now_sec;
 
@@ -208,15 +224,110 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr,
         publish_input_status("IMAGE_TIME_INVALID", false);
         return;
     }
+
+    // 1. Push depth to GPU ring buffer
+    push_depth_ring_cuda(cuda_ctx_, depth_ptr, camera_intrin_.width, camera_intrin_.height, now_sec);
+
+    // 2. Manage background freeze expiration
+    if (bg_state_ == BackgroundState::FROZEN) {
+        if (now_sec > shot_freeze_until_sec_ && ballistic_tracker_.state == TrackerState::IDLE) {
+            bg_state_ = BackgroundState::ROLLING;
+            RCLCPP_INFO(get_logger(), "Shot window expired. Returning to ROLLING background update.");
+        }
+    }
+
+    // 3. If in ROLLING mode and not currently tracking, update background every 5 frames (~12Hz)
+    if (bg_state_ == BackgroundState::ROLLING && ballistic_tracker_.state == TrackerState::IDLE) {
+        rolling_bg_frame_counter_++;
+        if (rolling_bg_frame_counter_ >= 5) {
+            rolling_bg_frame_counter_ = 0;
+            update_rolling_background_cuda(cuda_ctx_, camera_intrin_.width, camera_intrin_.height, -1.0);
+        }
+    }
+
     try {
-        const auto points = prepare_depth_cloud_cuda(cuda_ctx_, depth_ptr, camera_intrin_,
-                                                     camera_pose_, filter_cfg_);
-        publish_filter_input(points, stamp);
+        std::vector<float3> debug_cluster_pts;
+        std::vector<float3> debug_filtered_pts;
+
+        float pred_x = 0.0f, pred_y = 0.0f, pred_z = 0.0f;
+        bool has_pred = ballistic_tracker_.get_prediction(stamp.seconds(), pred_x, pred_y, pred_z);
+
+        ClothTrackingResult raw_res = process_depth_frame_cuda(
+            cuda_ctx_, depth_ptr, camera_intrin_, camera_pose_, filter_cfg_,
+            publish_debug_cloud_ ? &debug_cluster_pts : nullptr,
+            publish_debug_cloud_ ? &debug_filtered_pts : nullptr,
+            pred_x, pred_y, pred_z, has_pred);
+
+        auto error = cudaGetLastError();
+        if (error != cudaSuccess) {
+            publish_input_status("CUDA_PROCESSING_ERROR", false);
+            RCLCPP_ERROR(get_logger(), "Depth tracking CUDA failure: %s", cudaGetErrorString(error));
+            return;
+        }
+
+        // Auto-trigger freeze if candidate appears in launch gate while ROLLING
+        if (raw_res.valid && bg_state_ == BackgroundState::ROLLING) {
+            if (raw_res.cx >= ballistic_tracker_.launch_min_x &&
+                raw_res.cx <= ballistic_tracker_.launch_max_x &&
+                raw_res.cy >= ballistic_tracker_.launch_min_y &&
+                raw_res.cy <= ballistic_tracker_.launch_max_y &&
+                raw_res.cz >= ballistic_tracker_.launch_min_z &&
+                raw_res.cz <= ballistic_tracker_.launch_max_z) {
+                trigger_freeze(now_sec);
+            }
+        }
+
+        publish_tracking_result(raw_res, stamp, debug_cluster_pts, debug_filtered_pts);
     } catch (const std::exception& error) {
         publish_input_status("FILTER_INPUT_ERROR", false);
         RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), status_log_throttle_ms_,
-                              "Point export: %s", error.what());
+                              "Depth processing: %s", error.what());
     }
+}
+
+void ClothTrackerCudaNode::shot_count_callback(const std_msgs::msg::UInt8::SharedPtr msg) {
+    std::lock_guard<std::recursive_mutex> lock(processing_mutex_);
+    if (!has_received_shot_count_) {
+        last_shot_count_ = msg->data;
+        has_received_shot_count_ = true;
+        return;
+    }
+    if (msg->data != last_shot_count_) {
+        RCLCPP_INFO(get_logger(), "Shot count incremented: %u -> %u. Triggering background freeze.",
+                    last_shot_count_, msg->data);
+        last_shot_count_ = msg->data;
+        trigger_freeze(this->now().seconds());
+    }
+}
+
+void ClothTrackerCudaNode::reset_callback(const std_msgs::msg::Empty::SharedPtr) {
+    std::lock_guard<std::recursive_mutex> lock(processing_mutex_);
+    RCLCPP_INFO(get_logger(), "Tracker and background reset requested via /cloth/reset");
+    trajectory_points_.clear();
+    ballistic_tracker_.reset();
+    has_cloth_pose_ = false;
+    last_external_stamp_sec_ = -1.0;
+    last_external_wall_sec_ = -1.0;
+    prev_state_ = TrackerState::IDLE;
+    bg_state_ = BackgroundState::ROLLING;
+    shot_freeze_until_sec_ = 0.0;
+    reset_background_cuda(cuda_ctx_);
+}
+
+void ClothTrackerCudaNode::trigger_freeze(double now_sec) {
+    if (bg_state_ == BackgroundState::FROZEN) {
+        shot_freeze_until_sec_ =
+            std::max(shot_freeze_until_sec_, now_sec + filter_cfg_.shot_window_sec);
+        return;
+    }
+    bg_state_ = BackgroundState::FROZEN;
+    shot_freeze_until_sec_ = now_sec + filter_cfg_.shot_window_sec;
+    double exclude_before = now_sec - filter_cfg_.bg_pre_shot_exclude_sec;
+    update_rolling_background_cuda(cuda_ctx_, camera_intrin_.width, camera_intrin_.height,
+                                   exclude_before);
+    RCLCPP_INFO(get_logger(),
+                "Background frozen until t=%.2f (exclude frames after t=%.2f)",
+                shot_freeze_until_sec_, exclude_before);
 }
 
 } // namespace realsense_dust_cloth

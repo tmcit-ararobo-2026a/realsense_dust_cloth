@@ -188,6 +188,17 @@ void ClothTrackerCudaNode::declare_and_load_parameters() {
     color_fps_ = required_parameter<int>(*this, "color_fps");
     jpeg_quality_ = required_parameter<int>(*this, "jpeg_quality");
 
+    // 5.5. 背景差分 (GPU深度リングバッファ) & 射出連携
+    filter_cfg_.use_bg_subtraction = required_parameter<bool>(*this, "use_bg_subtraction");
+    filter_cfg_.bg_diff_thresh_m =
+        static_cast<float>(required_parameter<double>(*this, "bg_diff_thresh_m"));
+    filter_cfg_.bg_ring_frames = required_parameter<int>(*this, "bg_ring_frames");
+    filter_cfg_.bg_pre_shot_exclude_sec =
+        required_parameter<double>(*this, "bg_pre_shot_exclude_sec");
+    filter_cfg_.shot_window_sec = required_parameter<double>(*this, "shot_window_sec");
+    shot_count_topic_ = required_parameter<std::string>(*this, "shot_count_topic");
+    reset_topic_ = required_parameter<std::string>(*this, "reset_topic");
+
     // 6. 射出確認と飛翔予測
     ballistic_tracker_.launch_min_x = required_parameter<double>(*this, "launch_min_x");
     ballistic_tracker_.launch_max_x = required_parameter<double>(*this, "launch_max_x");
@@ -286,7 +297,9 @@ void ClothTrackerCudaNode::declare_and_load_parameters() {
         ballistic_tracker_.min_track_points_limit <= 0 ||
         ballistic_tracker_.min_cluster_points <= 0 || ballistic_tracker_.max_anomaly_frames <= 0 ||
         ballistic_tracker_.max_lost_frames < 0 || ballistic_tracker_.vel_smoothing_beta < 0 ||
-        ballistic_tracker_.vel_smoothing_beta > 1)
+        ballistic_tracker_.vel_smoothing_beta > 1 ||
+        filter_cfg_.bg_diff_thresh_m <= 0.0f || filter_cfg_.bg_ring_frames <= 0 ||
+        filter_cfg_.bg_pre_shot_exclude_sec < 0.0 || filter_cfg_.shot_window_sec <= 0.0)
         throw std::invalid_argument("Invalid camera/ROI/GPU/tracking parameters in YAML");
 
     param_cb_handle_ = this->add_on_set_parameters_callback(
@@ -498,6 +511,14 @@ ClothTrackerCudaNode::on_parameters_change(const std::vector<rclcpp::Parameter>&
             external_keep_radius_m_ = std::max(0.0, param.as_double());
         } else if (name == "publish_debug_cloud") {
             publish_debug_cloud_ = param.as_bool();
+        } else if (name == "use_bg_subtraction") {
+            filter_cfg_.use_bg_subtraction = param.as_bool();
+        } else if (name == "bg_diff_thresh_m") {
+            filter_cfg_.bg_diff_thresh_m = static_cast<float>(param.as_double());
+        } else if (name == "bg_pre_shot_exclude_sec") {
+            filter_cfg_.bg_pre_shot_exclude_sec = param.as_double();
+        } else if (name == "shot_window_sec") {
+            filter_cfg_.shot_window_sec = param.as_double();
         }
 
         RCLCPP_INFO(this->get_logger(), "[DynamicParam] %s = %s", name.c_str(),

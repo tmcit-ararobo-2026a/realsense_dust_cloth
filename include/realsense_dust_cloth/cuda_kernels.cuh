@@ -44,6 +44,13 @@ struct FilterConfig {
     float min_cloth_size_m{0.05f}; // 最小3Dサイズ制限 (m, 微小ノイズ除外)
     float max_cloth_size_m{0.65f}; // 最大3D対角サイズ制限 (m)
 
+    // GPU Background Subtraction & Rolling Ring Buffer
+    bool use_bg_subtraction{true};
+    float bg_diff_thresh_m{0.12f};
+    int bg_ring_frames{6};
+    float bg_pre_shot_exclude_sec{0.08f};
+    float shot_window_sec{3.0f};
+
     // 2D Edge Continuity (Configurable via YAML)
     float continuity_thresh_m{0.30f}; // エッジ連続性チェックの許容深度差 (m)
     int continuity_radius_px{2};
@@ -102,6 +109,17 @@ struct CudaTrackerContext {
     ClothTrackingResult* d_result{nullptr};
     int* d_best_root{nullptr};
 
+    // GPU Background Subtraction & Rolling Ring Buffer
+    uint16_t* d_depth_ring{nullptr}; // ring_frames * max_pixels
+    uint16_t* d_bg_temp{nullptr};    // temporary farthest depth
+    uint16_t* d_bg_depth{nullptr};   // 3x3 eroded background depth
+    uint8_t* d_ring_mask{nullptr};    // frame validity mask for CUDA kernel
+    bool bg_ready{false};
+    int ring_frames{6};
+    int ring_head{0};
+    int ring_count{0};
+    std::vector<double> ring_stamps;
+
     cudaStream_t stream{nullptr};
     bool initialized{false};
 };
@@ -109,6 +127,20 @@ struct CudaTrackerContext {
 bool init_cuda_tracker(CudaTrackerContext& ctx, int max_depth_width = 848,
                        int max_depth_height = 480);
 void destroy_cuda_tracker(CudaTrackerContext& ctx);
+
+// Direct GPU Background Subtraction & Cloth Tracking pipeline
+ClothTrackingResult process_depth_frame_cuda(
+    CudaTrackerContext& ctx, const uint16_t* host_depth_ptr,
+    const CameraIntrinsics& intrin, const CameraPoseConfig& pose,
+    const FilterConfig& filter, std::vector<float3>* out_cluster_points,
+    std::vector<float3>* out_filtered_points,
+    float pred_x, float pred_y, float pred_z, bool has_prediction);
+
+void push_depth_ring_cuda(CudaTrackerContext& ctx, const uint16_t* host_depth_ptr,
+                          int width, int height, double stamp_sec);
+void update_rolling_background_cuda(CudaTrackerContext& ctx, int width, int height,
+                                    double exclude_before_stamp = -1.0);
+void reset_background_cuda(CudaTrackerContext& ctx);
 
 // External-map path: export ROI voxels once, then cluster returned voxels without re-voxelizing.
 std::vector<float3> prepare_depth_cloud_cuda(CudaTrackerContext&, const uint16_t*,

@@ -52,9 +52,56 @@ __device__ void union_clusters(int* parent, int a, int b) {
 }
 
 // -------------------------------------------------------------
-// Kernel 1: Back-Projection, Coordinate Transform & PassThrough
+// Kernel 0A: Extract Farthest Depth from Valid Ring Frames
+// -------------------------------------------------------------
+__global__ void kernel_bg_farthest(const uint16_t* __restrict__ ring,
+                                   const uint8_t* __restrict__ use_mask,
+                                   int ring_count, int pixels,
+                                   int max_pixels,
+                                   uint16_t* __restrict__ out_temp) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= pixels) return;
+    uint16_t max_d = 0;
+    for (int k = 0; k < ring_count; ++k) {
+        if (!use_mask[k]) continue;
+        uint16_t d = ring[k * max_pixels + idx];
+        if (d > max_d) {
+            max_d = d;
+        }
+    }
+    out_temp[idx] = max_d;
+}
+
+// -------------------------------------------------------------
+// Kernel 0B: 3x3 Minimum Filter (Erosion) to suppress contour flicker
+// -------------------------------------------------------------
+__global__ void kernel_bg_erode(const uint16_t* __restrict__ in_temp,
+                                int width, int height,
+                                uint16_t* __restrict__ out_bg) {
+    int u = blockIdx.x * blockDim.x + threadIdx.x;
+    int v = blockIdx.y * blockDim.y + threadIdx.y;
+    if (u >= width || v >= height) return;
+
+    uint16_t min_d = 0xFFFF;
+    for (int dv = -1; dv <= 1; ++dv) {
+        for (int du = -1; du <= 1; ++du) {
+            int uu = min(max(u + du, 0), width - 1);
+            int vv = min(max(v + dv, 0), height - 1);
+            uint16_t d = in_temp[vv * width + uu];
+            if (d > 0 && d < min_d) {
+                min_d = d;
+            }
+        }
+    }
+    out_bg[v * width + u] = (min_d == 0xFFFF) ? 0 : min_d;
+}
+
+// -------------------------------------------------------------
+// Kernel 1: Back-Projection, Coordinate Transform & PassThrough with Background Subtraction
 // -------------------------------------------------------------
 __global__ void kernel_backproject_and_passthrough(const uint16_t* __restrict__ depth,
+                                                   const uint16_t* __restrict__ bg_depth,
+                                                   bool use_bg_sub,
                                                    CameraIntrinsics intrin, CameraPoseConfig pose,
                                                    FilterConfig filter,
                                                    float3* __restrict__ valid_points,
@@ -74,6 +121,17 @@ __global__ void kernel_backproject_and_passthrough(const uint16_t* __restrict__ 
     float z_raw = raw_depth * intrin.depth_scale;
     if (z_raw < filter.min_depth_m || z_raw > filter.max_depth_m)
         return;
+
+    // Background Subtraction: If this pixel is at or behind the background, discard!
+    if (use_bg_sub && bg_depth != nullptr) {
+        uint16_t bg = bg_depth[idx];
+        if (bg > 0) {
+            float z_bg = bg * intrin.depth_scale;
+            if (z_raw >= (z_bg - filter.bg_diff_thresh_m)) {
+                return; // Part of background (walls, ceiling, floor, furniture)
+            }
+        }
+    }
 
     // 2D Depth Continuity Check (Parameterizable via FilterConfig / YAML)
     if (filter.continuity_min_neighbors > 0) {
@@ -378,6 +436,20 @@ bool init_cuda_tracker(CudaTrackerContext& ctx, int max_depth_width, int max_dep
     cudaMallocHost(&ctx.h_result_pinned, sizeof(ClothTrackingResult));
     cudaMalloc(&ctx.d_best_root, sizeof(int));
 
+    // Ring buffer and background buffers
+    if (ctx.ring_frames <= 0) {
+        ctx.ring_frames = 6;
+    }
+    ctx.ring_head = 0;
+    ctx.ring_count = 0;
+    ctx.ring_stamps.assign(ctx.ring_frames, 0.0);
+    cudaMalloc(&ctx.d_depth_ring, ctx.ring_frames * ctx.max_pixels * sizeof(uint16_t));
+    cudaMalloc(&ctx.d_bg_temp, ctx.max_pixels * sizeof(uint16_t));
+    cudaMalloc(&ctx.d_bg_depth, ctx.max_pixels * sizeof(uint16_t));
+    cudaMalloc(&ctx.d_ring_mask, std::max(16, ctx.ring_frames) * sizeof(uint8_t));
+    cudaMemset(ctx.d_bg_depth, 0, ctx.max_pixels * sizeof(uint16_t));
+    ctx.bg_ready = false;
+
     ctx.initialized = true;
     return true;
 }
@@ -388,6 +460,14 @@ void destroy_cuda_tracker(CudaTrackerContext& ctx) {
 
     if (ctx.d_depth)
         cudaFree(ctx.d_depth);
+    if (ctx.d_depth_ring)
+        cudaFree(ctx.d_depth_ring);
+    if (ctx.d_bg_temp)
+        cudaFree(ctx.d_bg_temp);
+    if (ctx.d_bg_depth)
+        cudaFree(ctx.d_bg_depth);
+    if (ctx.d_ring_mask)
+        cudaFree(ctx.d_ring_mask);
     if (ctx.d_valid_points)
         cudaFree(ctx.d_valid_points);
     if (ctx.d_valid_count)
@@ -504,7 +584,8 @@ std::vector<float3> prepare_depth_cloud_cuda(CudaTrackerContext& ctx, const uint
     cudaMemsetAsync(ctx.d_valid_count, 0, sizeof(int), ctx.stream);
     dim3 block(32, 16), grid((intrin.width + 31) / 32, (intrin.height + 15) / 16);
     kernel_backproject_and_passthrough<<<grid, block, 0, ctx.stream>>>(
-        ctx.d_depth, intrin, pose, filter, ctx.d_valid_points, ctx.d_valid_count, ctx.max_pixels);
+        ctx.d_depth, ctx.d_bg_depth, filter.use_bg_subtraction && ctx.bg_ready, intrin, pose, filter,
+        ctx.d_valid_points, ctx.d_valid_count, ctx.max_pixels);
     int count = 0;
     cudaMemcpyAsync(&count, ctx.d_valid_count, sizeof(int), cudaMemcpyDeviceToHost, ctx.stream);
     cudaStreamSynchronize(ctx.stream);
@@ -571,6 +652,116 @@ ClothTrackingResult process_point_cloud_cuda(CudaTrackerContext& ctx,
     cudaMemcpyAsync(ctx.d_voxel_points, selected.data(), selected.size() * sizeof(float3),
                     cudaMemcpyHostToDevice, ctx.stream);
     return cluster_voxels(ctx, selected.size(), filter, cluster, filtered, px, py, pz, predicted);
+}
+
+ClothTrackingResult process_depth_frame_cuda(
+    CudaTrackerContext& ctx, const uint16_t* host_depth_ptr,
+    const CameraIntrinsics& intrin, const CameraPoseConfig& pose,
+    const FilterConfig& filter, std::vector<float3>* out_cluster_points,
+    std::vector<float3>* out_filtered_points,
+    float pred_x, float pred_y, float pred_z, bool has_prediction) {
+    const int pixels = intrin.width * intrin.height;
+    if (!ctx.initialized || !host_depth_ptr || pixels > ctx.max_pixels)
+        return {};
+
+    cudaMemcpyAsync(ctx.d_depth, host_depth_ptr, pixels * sizeof(uint16_t),
+                    cudaMemcpyHostToDevice, ctx.stream);
+    cudaMemsetAsync(ctx.d_valid_count, 0, sizeof(int), ctx.stream);
+
+    dim3 block(32, 16), grid((intrin.width + 31) / 32, (intrin.height + 15) / 16);
+    kernel_backproject_and_passthrough<<<grid, block, 0, ctx.stream>>>(
+        ctx.d_depth, ctx.d_bg_depth, filter.use_bg_subtraction && ctx.bg_ready, intrin, pose,
+        filter, ctx.d_valid_points, ctx.d_valid_count, ctx.max_pixels);
+
+    int count = 0;
+    cudaMemcpyAsync(&count, ctx.d_valid_count, sizeof(int), cudaMemcpyDeviceToHost, ctx.stream);
+    cudaStreamSynchronize(ctx.stream);
+    if (count <= 0)
+        return {};
+    if (count > ctx.max_pixels)
+        count = ctx.max_pixels;
+
+    cudaMemsetAsync(ctx.d_voxel_count, 0, sizeof(int), ctx.stream);
+    cudaMemsetAsync(ctx.d_hash_keys, 0xFF, ctx.hash_table_size * sizeof(uint64_t), ctx.stream);
+    kernel_voxel_downsample<<<(count + 255) / 256, 256, 0, ctx.stream>>>(
+        ctx.d_valid_points, count, filter.voxel_size_m, ctx.d_hash_keys, ctx.d_voxel_points,
+        ctx.d_voxel_count, ctx.max_voxel_points, ctx.hash_table_size);
+
+    int voxels = 0;
+    cudaMemcpyAsync(&voxels, ctx.d_voxel_count, sizeof(int), cudaMemcpyDeviceToHost, ctx.stream);
+    cudaStreamSynchronize(ctx.stream);
+    if (voxels <= 0)
+        return {};
+    if (voxels > ctx.max_voxel_points)
+        voxels = ctx.max_voxel_points;
+
+    return cluster_voxels(ctx, voxels, filter, out_cluster_points, out_filtered_points,
+                          pred_x, pred_y, pred_z, has_prediction);
+}
+
+void push_depth_ring_cuda(CudaTrackerContext& ctx, const uint16_t* host_depth_ptr,
+                          int width, int height, double stamp_sec) {
+    if (!ctx.initialized || !host_depth_ptr || !ctx.d_depth_ring)
+        return;
+    const int pixels = width * height;
+    if (pixels > ctx.max_pixels)
+        return;
+
+    uint16_t* slot = ctx.d_depth_ring + ctx.ring_head * ctx.max_pixels;
+    cudaMemcpyAsync(slot, host_depth_ptr, pixels * sizeof(uint16_t),
+                    cudaMemcpyHostToDevice, ctx.stream);
+    ctx.ring_stamps[ctx.ring_head] = stamp_sec;
+    ctx.ring_head = (ctx.ring_head + 1) % ctx.ring_frames;
+    if (ctx.ring_count < ctx.ring_frames)
+        ctx.ring_count++;
+}
+
+void update_rolling_background_cuda(CudaTrackerContext& ctx, int width, int height,
+                                    double exclude_before_stamp) {
+    if (!ctx.initialized || !ctx.d_depth_ring || !ctx.d_bg_temp || !ctx.d_bg_depth || ctx.ring_count <= 0)
+        return;
+    const int pixels = width * height;
+    if (pixels > ctx.max_pixels)
+        return;
+
+    std::vector<uint8_t> h_mask(ctx.ring_count, 1);
+    int valid_frames = 0;
+    for (int k = 0; k < ctx.ring_count; ++k) {
+        if (exclude_before_stamp > 0.0 && ctx.ring_stamps[k] > exclude_before_stamp) {
+            h_mask[k] = 0;
+        } else {
+            valid_frames++;
+        }
+    }
+    if (valid_frames == 0) {
+        // Fall back to the oldest frame if all are within cutoff
+        int oldest_idx = (ctx.ring_head - ctx.ring_count + ctx.ring_frames) % ctx.ring_frames;
+        h_mask[oldest_idx] = 1;
+    }
+
+    cudaMemcpyAsync(ctx.d_ring_mask, h_mask.data(), ctx.ring_count * sizeof(uint8_t),
+                    cudaMemcpyHostToDevice, ctx.stream);
+
+    int block1d = 256;
+    int grid1d = (pixels + block1d - 1) / block1d;
+    kernel_bg_farthest<<<grid1d, block1d, 0, ctx.stream>>>(
+        ctx.d_depth_ring, ctx.d_ring_mask, ctx.ring_count, pixels, ctx.max_pixels, ctx.d_bg_temp);
+
+    dim3 block2d(32, 16);
+    dim3 grid2d((width + 31) / 32, (height + 15) / 16);
+    kernel_bg_erode<<<grid2d, block2d, 0, ctx.stream>>>(
+        ctx.d_bg_temp, width, height, ctx.d_bg_depth);
+
+    ctx.bg_ready = true;
+}
+
+void reset_background_cuda(CudaTrackerContext& ctx) {
+    if (!ctx.initialized || !ctx.d_bg_depth)
+        return;
+    cudaMemsetAsync(ctx.d_bg_depth, 0, ctx.max_pixels * sizeof(uint16_t), ctx.stream);
+    ctx.bg_ready = false;
+    ctx.ring_count = 0;
+    ctx.ring_head = 0;
 }
 
 } // namespace realsense_dust_cloth

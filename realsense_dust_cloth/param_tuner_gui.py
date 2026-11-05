@@ -13,6 +13,7 @@ import rclpy
 from rclpy.node import Node
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
 from rcl_interfaces.srv import GetParameters, SetParameters
+from std_msgs.msg import Empty
 import yaml
 
 ParamScalar = Union[float, int, bool]
@@ -96,7 +97,74 @@ TAB_SPECS: List[Tuple[str, List[ParamSpec]]] = [
             ParamSpec("publish_debug_cloud", "RVizデバッグ点群・マーカー配信", "bool"),
         ],
     ),
+    (
+        "4. GPU背景差分 & 射出連携",
+        [
+            ParamSpec("use_bg_subtraction", "GPU深度背景差分を有効化", "bool"),
+            ParamSpec("bg_diff_thresh_m", "背景判定手前しきい値 [m]", "double", 0.02, 0.50, 0.01, 2),
+            ParamSpec("bg_pre_shot_exclude_sec", "射出前除外時間 [s]", "double", 0.0, 0.30, 0.01, 2),
+            ParamSpec("shot_window_sec", "背景凍結ウィンドウ時間 [s]", "double", 0.5, 10.0, 0.1, 1),
+        ],
+    ),
 ]
+
+CF49CF2_DEFAULTS: Dict[str, ParamScalar] = {
+    "launch_min_x": 0.80,
+    "launch_max_x": 1.35,
+    "launch_min_y": -0.25,
+    "launch_max_y": 0.30,
+    "launch_min_z": 1.45,
+    "launch_max_z": 2.10,
+    "min_launch_vx": 0.30,
+    "min_launch_move_m": 0.05,
+    "pending_reset_sec": 0.25,
+    "pending_max_drop_m": 0.50,
+    "camera_pitch_deg": 20.0,
+    "camera_roll_deg": 90.0,
+    "camera_x_offset_m": 0.50,
+    "camera_height_offset_m": 1.00,
+    "min_cluster_points": 25,
+    "min_tracking_points": 4,
+    "cluster_eps_m": 0.10,
+    "voxel_size_m": 0.02,
+    "min_cloth_size_m": 0.05,
+    "max_cloth_size_m": 0.60,
+    "prediction_distance_weight": 2.0,
+    "cluster_size_weight": 0.05,
+    "launch_forward_weight": 1.0,
+    "external_tracking_keep_radius_m": 0.30,
+    "min_x_m": 0.60,
+    "max_x_m": 5.00,
+    "min_y_m": -0.60,
+    "max_y_m": 0.60,
+    "min_z_m": 0.05,
+    "max_z_m": 4.00,
+    "tube_radius_m": 0.65,
+    "vel_smoothing_beta": 0.50,
+    "drag_coeff": 0.40,
+    "centroid_position_tolerance_m": 0.08,
+    "vertical_jitter_tolerance_m": 0.06,
+    "backward_jitter_tolerance_m": 0.04,
+    "max_total_accel_m_s2": 45.0,
+    "min_vertical_accel_m_s2": -35.0,
+    "max_lateral_accel_m_s2": 30.0,
+    "max_heading_deg": 55.0,
+    "min_flight_vx_m_s": -1.50,
+    "max_vx_m_s": 15.0,
+    "max_abs_vy_m_s": 2.50,
+    "min_vz_m_s": -10.0,
+    "max_vz_m_s": 8.0,
+    "max_lost_frames": 12,
+    "max_anomaly_frames": 2,
+    "landing_min_z": 0.15,
+    "reject_ascent_after_apex": True,
+    "abort_on_anomaly": True,
+    "publish_debug_cloud": True,
+    "use_bg_subtraction": True,
+    "bg_diff_thresh_m": 0.12,
+    "bg_pre_shot_exclude_sec": 0.08,
+    "shot_window_sec": 2.5,
+}
 
 
 def format_yaml_scalar(value: ParamScalar, param_type: str) -> str:
@@ -186,6 +254,10 @@ class RosParamBridge(Node):
         self.set_cli = self.create_client(
             SetParameters, f"{self.target_node}/set_parameters"
         )
+        self.reset_pub = self.create_publisher(Empty, "/cloth/reset", 10)
+
+    def publish_reset(self) -> None:
+        self.reset_pub.publish(Empty())
 
     def is_remote_available(self) -> bool:
         return self.set_cli.service_is_ready()
@@ -304,6 +376,20 @@ def run_gui(target_node: str, initial_profile: str) -> int:
             reload_btn = QPushButton("ノード/YAMLから再読込")
             reload_btn.clicked.connect(self.reload_parameters)
             header_layout.addWidget(reload_btn)
+
+            reset_defaults_btn = QPushButton("↺ デフォルト値に戻す")
+            reset_defaults_btn.setStyleSheet(
+                "background-color: #e0f2fe; color: #0369a1; font-weight: bold; padding: 4px 8px;"
+            )
+            reset_defaults_btn.clicked.connect(self.reset_to_defaults)
+            header_layout.addWidget(reset_defaults_btn)
+
+            reset_tracker_btn = QPushButton("⚡ 追跡&背景リセット")
+            reset_tracker_btn.setStyleSheet(
+                "background-color: #fef08a; color: #854d0e; font-weight: bold; padding: 4px 8px;"
+            )
+            reset_tracker_btn.clicked.connect(self.trigger_tracking_reset)
+            header_layout.addWidget(reset_tracker_btn)
 
             root_layout.addLayout(header_layout)
 
@@ -466,6 +552,51 @@ def run_gui(target_node: str, initial_profile: str) -> int:
                     update_yaml_file_in_place(
                         cfg_dir / fname, {spec.name: (value, spec.param_type)}
                     )
+
+        def trigger_tracking_reset(self) -> None:
+            bridge.publish_reset()
+            self.status_label.setText("⚡ /cloth/reset を送信しました (軌跡クリア & 背景再初期化)")
+            self.status_label.setStyleSheet("color: #b45309; font-weight: bold; padding: 4px;")
+
+        def reset_to_defaults(self) -> None:
+            self._updating_ui = True
+            try:
+                for name, val in CF49CF2_DEFAULTS.items():
+                    if name not in all_specs or name not in self._widgets:
+                        continue
+                    spec = all_specs[name]
+                    slider, widget = self._widgets[name]
+                    if spec.param_type == "bool":
+                        widget.setChecked(bool(val))
+                    elif spec.param_type == "int":
+                        widget.setValue(int(round(float(val))))
+                        if slider is not None:
+                            slider.setValue(int(round(float(val))))
+                    else:
+                        scale = round(1.0 / spec.step)
+                        widget.setValue(float(val))
+                        if slider is not None:
+                            slider.setValue(int(round(float(val) * scale)))
+                    bridge.push_remote_param(name, val, spec.param_type)
+
+                targets = [
+                    "tracker_params.yaml",
+                    "unity_params.yaml",
+                    "rosbag_params.yaml",
+                ]
+                updates = {
+                    name: (val, all_specs[name].param_type)
+                    for name, val in CF49CF2_DEFAULTS.items()
+                    if name in all_specs
+                }
+                for cfg_dir in discover_config_dirs():
+                    for fname in targets:
+                        update_yaml_file_in_place(cfg_dir / fname, updates)
+
+                self.status_label.setText("↺ cf49cf2 デフォルト値を全パラメータに適用しYAMLに保存しました")
+                self.status_label.setStyleSheet("color: #0369a1; font-weight: bold; padding: 4px;")
+            finally:
+                self._updating_ui = False
 
     win = TunerWindow()
     win.show()
