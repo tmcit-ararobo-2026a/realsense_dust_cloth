@@ -47,17 +47,17 @@
     min_depth_m: 0.25  # カメラ最小計測深度 [m]
     max_depth_m: 5.5  # カメラ最大計測深度 [m]
     continuity_radius_px: 2  # 深度連続性を調べる上下左右の距離 [px]
-    continuity_thresh_m: 0.08  # 点群連続性判定距離閾値 [m]
+    continuity_thresh_m: 0.2  # 点群連続性判定距離閾値 [m]
     continuity_min_neighbors: 3  # 連続性認定最小近傍点数
 
     # --- 5. 射出判定 ---
     launch_min_x: 0.8  # 発射判定ボックス X 下限 [m] (発射口の前端位置)
-    launch_max_x: 1.35  # 発射判定ボックス X 上限 [m]
+    launch_max_x: 2.0  # 発射判定ボックス X 上限 [m]
     launch_min_y: -0.25  # 発射判定ボックス Y 下限 [m]
     launch_max_y: 0.18  # 発射判定ボックス Y 上限 [m]
     launch_min_z: 1.45  # 発射判定ボックス Z 下限 [m] (発射口の高さ)
-    launch_max_z: 2.1  # 発射判定ボックス Z 上限 [m]
-    min_launch_vx: 0.5  # 射出認定最小前方初速 [m/s] (光ジッター除外: 0.5m/s 以上を要求)
+    launch_max_z: 2.5  # 発射判定ボックス Z 上限 [m]
+    min_launch_vx: 3.0  # 射出認定最小前方初速 [m/s] (光ジッター除外: 0.5m/s 以上を要求)
     min_launch_move_m: 0.12  # 射出認定最小前方変位 [m] (発射枠内で 12cm 以上前進して初めて発射認定)
     pending_reset_sec: 0.2  # 発射枠内の微小振動・静止物リセットタイムアウト [s]
     pending_max_drop_m: 0.5  # 射出確定前にこの距離以上落下した候補を破棄する [m]
@@ -67,7 +67,7 @@
     drag_coeff: 0.4  # 速度減衰係数 [1/s]。予測の前後・左右速度に適用する
     vel_smoothing_beta: 0.5  # 速度平滑化フィルタ係数 (0.0: 予測重視 〜 1.0: 観測重視)
     tube_radius_m: 0.35  # 予測位置から採用候補までの最大距離 [m]。狭すぎると本物も見失う
-    centroid_position_tolerance_m: 0.04  # 重心位置の計測誤差許容量 [m]。速度・加速度の差分で拡大する誤差を考慮
+    centroid_position_tolerance_m: 0.06  # 重心位置の計測誤差許容量 [m]。速度・加速度の差分で拡大する誤差を考慮
     max_total_accel_m_s2: 25.0  # 許容最大全加速度 [m/s^2] (約2.5G: 異常な急加速・急停止を遮断)
     min_vertical_accel_m_s2: -20.0  # 許容下向き最大加速度 [m/s^2] (約-2G: 異常な垂直急降下ダイブを遮断)
     max_lateral_accel_m_s2: 8.0  # 許容横方向最大加速度 [m/s^2] (横飛びノイズ・急カーブを遮断し直進性を強制)
@@ -76,7 +76,7 @@
     heading_min_step_m: 0.05  # 進行方向の角度判定を行う最小移動量 [m]
     reject_ascent_after_apex: true  # 頂点通過後、鉛直ジッター許容を超える再上昇候補を除外する
     backward_jitter_tolerance_m: 0.02  # 飛翔中の許容最大後退ジッター [m]
-    vertical_jitter_tolerance_m: 0.03  # 頂点通過後の許容鉛直ジッター [m]
+    vertical_jitter_tolerance_m: 0.06  # 頂点通過後の許容鉛直ジッター [m]
     min_flight_vx_m_s: 0.0  # 飛翔中の前方速度の下限 [m/s]。測定ノイズの影響も考慮する
     max_vx_m_s: 15.0  # 許容最大飛翔速度 Vx [m/s]
     max_abs_vy_m_s: 0.8  # 許容最大横方向速度 |Vy| [m/s] (0.80に引き締め、直進軌道を強制)
@@ -84,7 +84,7 @@
     max_vz_m_s: 12.0  # 許容最大鉛直速度 Vz [m/s] (上昇方向)
     abort_on_anomaly: true  # 物理条件に反する候補が続いたらLOSTとして打ち切る
     max_anomaly_frames: 3  # LOSTにするまでの連続異常候補数 [フレーム]
-    max_lost_frames: 4  # このフレーム数を超えて見失うとLOST。LANDEDにはしない
+    max_lost_frames: 6  # このフレーム数を超えて見失うとLOST。LANDEDにはしない
     max_flight_duration_sec: 2.5  # 最大許容飛翔時間 [s] (滞空異常の安全タイムアウト)
     lost_frame_gate_expansion_m: 0.04  # 欠測1フレームあたりの予測ゲート拡張量 [m]
     max_gate_expansion_m: 0.1  # 欠測時のゲート拡張量の上限 [m]
@@ -94,14 +94,14 @@
 
     # --- 7. 間引き・クラスタ選択・GPUメモリ ---
     voxel_size_m: 0.02  # GPU ダウンサンプリングボクセルサイズ [m]
-    cluster_eps_m: 0.1  # DBSCAN クラスタリング近傍探索距離 [m]
+    cluster_eps_m: 0.08  # DBSCAN クラスタリング近傍探索距離 [m] (構造物残骸との結合を防止)
     min_cluster_points: 35  # 射出候補の最小点数 [点]。上流gn10のmin_dynamic_pointsも確認する
     min_tracking_points: 8  # 飛翔中の候補の最小点数 [点]。上流で消えた点は復元できない
     max_cluster_points: 12000  # クラスタ最大点数 (巨大な背景や壁クラスタを除外)
     min_cloth_size_m: 0.05  # 雑巾最小外形径 [m] (5cm以下の微小ノイズを除外)
-    max_cloth_size_m: 0.8  # 雑巾最大外形径 [m] (80cm以上の大型物体を除外)
+    max_cloth_size_m: 0.65  # 雑巾最大外形径 [m] (65cm以上の大型構造物を除外)
     prediction_distance_weight: 1000.0  # 候補選択で予測位置からの距離に与える重み。大きいほど近さを優先
-    cluster_size_weight: 0.1  # 候補選択で点数に与える重み。大きすぎると背景の大きな塊を選びやすい
+    cluster_size_weight: 0.01  # 候補選択で点数に与える重み。大きすぎると背景の大きな塊を選びやすい
     launch_forward_weight: 50.0  # 射出枠内の候補選択で前方位置を優先する重み
     max_voxel_points: 8192  # GPUに保持する間引き後の最大点数 [点]。超過時はエラー表示する
     voxel_hash_table_size: 32768  # Voxelハッシュの要素数。2の累乗かつmax_voxel_points以上にする
@@ -111,7 +111,7 @@
     dynamic_cloud_topic: /realsense/dynamic_cloud  # 自己位置ノードから受信する動的点群トピック
     external_filter_status_topic: /realsense/filter_status  # 自己位置フィルタ状態トピック
     external_prediction_topic: /cloth/filter_prediction  # 自己位置ノードへ送る予測保護球マーカー
-    external_tracking_keep_radius_m: 0.5  # gn10へ送る予測保護球の半径 [m]。大きすぎると静的背景も残る
+    external_tracking_keep_radius_m: 0.0  # gn10へ送る予測保護球の半径 [m] (0.0でESDF静的構造物除去を常時有効化)
     external_result_timeout_sec: 0.25  # 動的抽出結果待機タイムアウト [s]
     external_poll_sec: 0.02  # ポーリング周期 [s]
     image_max_age_sec: 0.25  # 入力の撮影時刻とROS時計の最大許容差 [s]。bagは --clock で再生する
@@ -121,7 +121,7 @@
     bag_rewind_tolerance_sec: 0.5  # 時刻がこの値以上戻ったら追跡履歴をリセットする [s]
 
     # --- 9. 表示・実測出力・ログ ---
-    publish_debug_cloud: false  # デバッグ用点群パブリッシュ (通常運用は false)
+    publish_debug_cloud: true  # デバッグ用点群パブリッシュ (通常運用は false)
     trajectory_history_sec: 15.0  # RViz 軌跡描画履歴保持時間 [s]
     min_trajectory_step_m: 0.005  # 軌跡に点を追加する最小移動量 [m]。実測値自体は加工しない
     max_trajectory_points: 1000  # 保持する軌跡の最大点数 [点]

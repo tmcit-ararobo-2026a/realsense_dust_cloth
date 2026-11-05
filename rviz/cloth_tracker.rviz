@@ -44,6 +44,9 @@ Visualization Manager:
       Topic:
         Value: /cloth/debug/filtered_points
         Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
       Color: 180; 180; 255
       Color Transformer: FlatColor
       Size (Pixels): 3
@@ -55,6 +58,9 @@ Visualization Manager:
       Topic:
         Value: /cloth/debug/cluster_points
         Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
       Color: 0; 255; 180
       Color Transformer: FlatColor
       Size (Pixels): 6

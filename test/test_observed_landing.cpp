@@ -78,5 +78,22 @@ int main() {
     for (int i = 1; i <= 5; ++i)
         assert(!tracker.update(missing, 2.025 + i * .025, result));
     assert(tracker.state == TrackerState::LOST);
+
+    // A fast launch whose 2nd confirmation frame drops below min_cluster_points (35)
+    // but stays above min_track_points_limit (8) must still confirm launch cleanly.
+    tracker = configured();
+    point.cx = 1.0;
+    point.cy = 0.0;
+    point.cz = 1.6;
+    point.cluster_points_count = 40;
+    assert(!tracker.update(point, 3.0, result));
+    assert(tracker.is_pending_launch);
+    point.cx = 1.20;
+    point.cz = 1.68;
+    point.cluster_points_count = 12;
+    assert(tracker.update(point, 3.016, result));
+    assert(tracker.state == TrackerState::TRACKING);
+    assert(!tracker.has_reached_apex);
+
     std::cout << "30/60/120 FPS flights, measured landing, anomaly/loss separation passed\n";
 }

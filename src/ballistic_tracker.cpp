@@ -53,7 +53,10 @@ bool BallisticTracker::update(const ClothTrackingResult& raw, double stamp_sec,
 // 射出枠で最初の候補を取り、前方への変位と速度が確認できてから追跡を開始する。
 bool BallisticTracker::update_launch_candidate(const ClothTrackingResult& raw, double stamp_sec,
                                                ClothTrackingResult& out) {
-    bool valid_candidate = (raw.valid && raw.cluster_points_count >= min_cluster_points);
+    const int required_points = is_pending_launch
+                                    ? std::min(min_cluster_points, min_track_points_limit)
+                                    : min_cluster_points;
+    bool valid_candidate = (raw.valid && raw.cluster_points_count >= required_points);
     if (!valid_candidate) {
         is_pending_launch = false;
         first_detect_stamp = 0.0;
@@ -112,8 +115,8 @@ bool BallisticTracker::update_launch_candidate(const ClothTrackingResult& raw, d
         vx = std::clamp(current_vx, min_flight_vx_m_s, max_vx_m_s);
         vy = std::clamp((raw.cy - anchor_y) / dt_pending, -max_abs_vy_m_s, max_abs_vy_m_s);
         vz = std::clamp((raw.cz - anchor_z) / dt_pending, min_vz_m_s, max_vz_m_s);
-        apex_z = raw.cz;
-        has_reached_apex = (vz <= 0.0);
+        apex_z = std::max(anchor_z, static_cast<double>(raw.cz));
+        has_reached_apex = false;
         last_stamp = stamp_sec;
         tracked_count = 1;
         lost_count = 0;
@@ -276,7 +279,7 @@ bool BallisticTracker::update_flight(const ClothTrackingResult& raw, double stam
             z = raw.cz;
 
             apex_z = std::max(apex_z, z);
-            if (vz <= 0.0 || z < apex_z - vertical_jitter_tolerance_m) {
+            if (vz < -0.5 && z < apex_z - vertical_jitter_tolerance_m) {
                 has_reached_apex = true;
             }
 

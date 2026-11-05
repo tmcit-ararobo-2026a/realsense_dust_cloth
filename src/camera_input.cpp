@@ -209,8 +209,9 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr,
         return;
     }
     try {
+        const auto export_filter = build_active_export_filter(now_sec);
         const auto points = prepare_depth_cloud_cuda(cuda_ctx_, depth_ptr, camera_intrin_,
-                                                     camera_pose_, filter_cfg_);
+                                                     camera_pose_, export_filter);
         publish_filter_input(points, stamp);
     } catch (const std::exception& error) {
         publish_input_status("FILTER_INPUT_ERROR", false);
