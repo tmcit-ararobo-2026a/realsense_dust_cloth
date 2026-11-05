@@ -51,7 +51,7 @@
     continuity_min_neighbors: 3  # 連続性認定最小近傍点数
 
     # --- 5. 射出判定 ---
-    launch_min_x: 0.8  # 発射判定ボックス X 下限 [m] (発射口の前端位置)
+    launch_min_x: 1.35  # 発射判定ボックス X 下限 [m] (発射口の前端位置)
     launch_max_x: 2.0  # 発射判定ボックス X 上限 [m]
     launch_min_y: -0.25  # 発射判定ボックス Y 下限 [m]
     launch_max_y: 0.18  # 発射判定ボックス Y 上限 [m]

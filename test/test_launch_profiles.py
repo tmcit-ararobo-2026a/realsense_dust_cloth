@@ -90,6 +90,30 @@ class Profiles(unittest.TestCase):
         DeclareLaunchArgument('params_file', default_value='/gn10/blue_params.yaml').visit(parent_ctx)
         self.assertEqual(parent_ctx.launch_configurations['params_file'], '/gn10/blue_params.yaml')
 
+    def test_yaml_comment_preserving_update(self):
+        gui_mod = runpy.run_path(str(ROOT / 'realsense_dust_cloth' / 'param_tuner_gui.py'))
+        update_fn = gui_mod['update_yaml_file_in_place']
+        orig_text = (ROOT / 'config' / 'tracker_params.yaml').read_text(encoding='utf-8')
+        with tempfile.TemporaryDirectory() as directory:
+            temp_yaml = Path(directory) / 'tracker_params.yaml'
+            temp_yaml.write_text(orig_text, encoding='utf-8')
+            changed = update_fn(temp_yaml, {
+                'launch_max_x': (2.35, 'double'),
+                'min_cluster_points': (42, 'int'),
+                'publish_debug_cloud': (False, 'bool'),
+            })
+            self.assertTrue(changed)
+            updated_text = temp_yaml.read_text(encoding='utf-8')
+            # Ensure Japanese comments are preserved
+            self.assertIn('# --- 4. 追跡する空間ROI・深度ノイズ除去 ---', updated_text)
+            self.assertIn('launch_max_x: 2.35', updated_text)
+            self.assertIn('min_cluster_points: 42', updated_text)
+            self.assertIn('publish_debug_cloud: false', updated_text)
+            parsed = yaml.safe_load(updated_text)['/**']['ros__parameters']
+            self.assertAlmostEqual(parsed['launch_max_x'], 2.35)
+            self.assertEqual(parsed['min_cluster_points'], 42)
+            self.assertFalse(parsed['publish_debug_cloud'])
+
 
 if __name__ == '__main__':
     unittest.main()

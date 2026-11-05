@@ -1,5 +1,11 @@
-// YAMLの必須設定の読込と起動時検証。
+// YAMLの必須設定の読込・起動時検証・実行時動的変更・YAML自動書き戻し。
 #include "realsense_dust_cloth/cloth_tracker_cuda_node.hpp"
+#include <ament_index_cpp/get_package_share_directory.hpp>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <regex>
+#include <sstream>
 #include <type_traits>
 
 namespace realsense_dust_cloth {
@@ -22,6 +28,71 @@ template <class T> T required_parameter(rclcpp::Node& node, const std::string& n
             throw std::invalid_argument("Non-finite parameter: " + name);
     }
     return value;
+}
+
+std::string format_yaml_value(const rclcpp::Parameter& param) {
+    if (param.get_type() == rclcpp::ParameterType::PARAMETER_BOOL) {
+        return param.as_bool() ? "true" : "false";
+    }
+    if (param.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
+        return std::to_string(param.as_int());
+    }
+    if (param.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
+        std::ostringstream oss;
+        oss << std::setprecision(6) << std::defaultfloat << param.as_double();
+        std::string s = oss.str();
+        if (s.find('.') == std::string::npos && s.find('e') == std::string::npos) {
+            s += ".0";
+        }
+        return s;
+    }
+    return param.as_string();
+}
+
+bool update_yaml_file_in_place(const std::filesystem::path& file_path,
+                               const std::vector<rclcpp::Parameter>& params) {
+    if (!std::filesystem::exists(file_path))
+        return false;
+    std::ifstream in(file_path);
+    if (!in.is_open())
+        return false;
+
+    std::vector<std::string> lines;
+    std::string line;
+    while (std::getline(in, line)) {
+        lines.push_back(line);
+    }
+    in.close();
+
+    bool modified = false;
+    for (const auto& param : params) {
+        if (param.get_name() == "use_sim_time")
+            continue;
+        const std::string val_str = format_yaml_value(param);
+        const std::regex pattern("^(\\s*" + param.get_name() + "\\s*:\\s*)([^#\\r\\n]+?)(\\s*(?:#.*)?)$");
+        for (auto& l : lines) {
+            std::smatch match;
+            if (std::regex_match(l, match, pattern)) {
+                const std::string new_line = match[1].str() + val_str + match[3].str();
+                if (l != new_line) {
+                    l = new_line;
+                    modified = true;
+                }
+                break;
+            }
+        }
+    }
+
+    if (!modified)
+        return false;
+
+    std::ofstream out(file_path, std::ios::trunc);
+    if (!out.is_open())
+        return false;
+    for (const auto& l : lines) {
+        out << l << "\n";
+    }
+    return true;
 }
 } // namespace
 
@@ -217,6 +288,231 @@ void ClothTrackerCudaNode::declare_and_load_parameters() {
         ballistic_tracker_.max_lost_frames < 0 || ballistic_tracker_.vel_smoothing_beta < 0 ||
         ballistic_tracker_.vel_smoothing_beta > 1)
         throw std::invalid_argument("Invalid camera/ROI/GPU/tracking parameters in YAML");
+
+    param_cb_handle_ = this->add_on_set_parameters_callback(
+        std::bind(&ClothTrackerCudaNode::on_parameters_change, this, std::placeholders::_1));
+}
+
+void ClothTrackerCudaNode::persist_parameters_to_yaml(
+    const std::vector<rclcpp::Parameter>& params) {
+    std::string active_name = "tracker_params.yaml";
+    if (!use_direct_realsense_) {
+        active_name = (input_source_ == "dynamic_cloud") ? "rosbag_params.yaml" : "unity_params.yaml";
+    }
+
+    std::vector<std::filesystem::path> target_dirs;
+    try {
+        const std::filesystem::path share_dir =
+            ament_index_cpp::get_package_share_directory("realsense_dust_cloth");
+        target_dirs.push_back(share_dir / "config");
+        // Walk up from install/.../share/realsense_dust_cloth to workspace root and locate src/realsense_dust_cloth/config
+        auto p = share_dir;
+        for (int i = 0; i < 5 && p.has_parent_path(); ++i) {
+            p = p.parent_path();
+            const auto src_cfg = p / "src" / "realsense_dust_cloth" / "config";
+            if (std::filesystem::is_directory(src_cfg)) {
+                target_dirs.push_back(src_cfg);
+                break;
+            }
+        }
+    } catch (const std::exception&) {
+    }
+
+    for (const auto& dir : target_dirs) {
+        update_yaml_file_in_place(dir / active_name, params);
+        // Also keep tracker_params.yaml and unity_params.yaml synchronized for tracking parameters
+        update_yaml_file_in_place(dir / "tracker_params.yaml", params);
+        update_yaml_file_in_place(dir / "unity_params.yaml", params);
+        update_yaml_file_in_place(dir / "rosbag_params.yaml", params);
+    }
+}
+
+rcl_interfaces::msg::SetParametersResult
+ClothTrackerCudaNode::on_parameters_change(const std::vector<rclcpp::Parameter>& params) {
+    rcl_interfaces::msg::SetParametersResult result;
+    result.successful = true;
+
+    std::lock_guard<std::recursive_mutex> lock(processing_mutex_);
+    bool update_tf = false;
+
+    for (const auto& param : params) {
+        const auto& name = param.get_name();
+        if (param.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE &&
+            !std::isfinite(param.as_double())) {
+            result.successful = false;
+            result.reason = "Non-finite double value for " + name;
+            return result;
+        }
+
+        // Camera mounting pose
+        if (name == "camera_pitch_deg") {
+            camera_pose_.pitch_deg = static_cast<float>(param.as_double());
+            update_tf = true;
+        } else if (name == "camera_roll_deg") {
+            camera_pose_.roll_deg = static_cast<float>(param.as_double());
+            update_tf = true;
+        } else if (name == "camera_x_offset_m") {
+            camera_pose_.x_offset_m = static_cast<float>(param.as_double());
+            update_tf = true;
+        } else if (name == "camera_height_offset_m") {
+            camera_pose_.height_offset_m = static_cast<float>(param.as_double());
+            update_tf = true;
+        }
+        // ROI & Depth continuity
+        else if (name == "min_depth_m") {
+            filter_cfg_.min_depth_m = static_cast<float>(param.as_double());
+        } else if (name == "max_depth_m") {
+            filter_cfg_.max_depth_m = static_cast<float>(param.as_double());
+        } else if (name == "min_x_m") {
+            filter_cfg_.min_x_m = static_cast<float>(param.as_double());
+        } else if (name == "max_x_m") {
+            filter_cfg_.max_x_m = static_cast<float>(param.as_double());
+        } else if (name == "min_y_m") {
+            filter_cfg_.min_y_m = static_cast<float>(param.as_double());
+        } else if (name == "max_y_m") {
+            filter_cfg_.max_y_m = static_cast<float>(param.as_double());
+        } else if (name == "min_z_m") {
+            filter_cfg_.min_z_m = static_cast<float>(param.as_double());
+        } else if (name == "max_z_m") {
+            filter_cfg_.max_z_m = static_cast<float>(param.as_double());
+        } else if (name == "continuity_radius_px") {
+            filter_cfg_.continuity_radius_px = static_cast<int>(param.as_int());
+        } else if (name == "continuity_thresh_m") {
+            filter_cfg_.continuity_thresh_m = static_cast<float>(param.as_double());
+        } else if (name == "continuity_min_neighbors") {
+            filter_cfg_.continuity_min_neighbors = static_cast<int>(param.as_int());
+        }
+        // Launch Gate
+        else if (name == "launch_min_x") {
+            ballistic_tracker_.launch_min_x = param.as_double();
+            filter_cfg_.launch_min_x = static_cast<float>(param.as_double());
+        } else if (name == "launch_max_x") {
+            ballistic_tracker_.launch_max_x = param.as_double();
+            filter_cfg_.launch_max_x = static_cast<float>(param.as_double());
+        } else if (name == "launch_min_y") {
+            ballistic_tracker_.launch_min_y = param.as_double();
+            filter_cfg_.launch_min_y = static_cast<float>(param.as_double());
+        } else if (name == "launch_max_y") {
+            ballistic_tracker_.launch_max_y = param.as_double();
+            filter_cfg_.launch_max_y = static_cast<float>(param.as_double());
+        } else if (name == "launch_min_z") {
+            ballistic_tracker_.launch_min_z = param.as_double();
+            filter_cfg_.launch_min_z = static_cast<float>(param.as_double());
+        } else if (name == "launch_max_z") {
+            ballistic_tracker_.launch_max_z = param.as_double();
+            filter_cfg_.launch_max_z = static_cast<float>(param.as_double());
+        } else if (name == "min_launch_vx") {
+            ballistic_tracker_.min_launch_vx = param.as_double();
+        } else if (name == "min_launch_move_m") {
+            ballistic_tracker_.min_launch_move_m = param.as_double();
+        } else if (name == "pending_reset_sec") {
+            ballistic_tracker_.launch_timeout_sec = param.as_double();
+        } else if (name == "pending_max_drop_m") {
+            ballistic_tracker_.pending_max_drop_m = param.as_double();
+        }
+        // Ballistic prediction & physical guards
+        else if (name == "gravity_m_s2") {
+            ballistic_tracker_.gravity_m_s2 = param.as_double();
+        } else if (name == "drag_coeff") {
+            ballistic_tracker_.drag_coeff = param.as_double();
+        } else if (name == "vel_smoothing_beta") {
+            ballistic_tracker_.vel_smoothing_beta = std::clamp(param.as_double(), 0.0, 1.0);
+        } else if (name == "tube_radius_m") {
+            ballistic_tracker_.tube_radius_m = param.as_double();
+            filter_cfg_.gate_radius_m = static_cast<float>(param.as_double());
+        } else if (name == "centroid_position_tolerance_m") {
+            ballistic_tracker_.centroid_position_tolerance_m = param.as_double();
+        } else if (name == "max_total_accel_m_s2") {
+            ballistic_tracker_.max_total_accel_m_s2 = param.as_double();
+        } else if (name == "min_vertical_accel_m_s2") {
+            ballistic_tracker_.min_vertical_accel_m_s2 = param.as_double();
+        } else if (name == "max_lateral_accel_m_s2") {
+            ballistic_tracker_.max_lateral_accel_m_s2 = param.as_double();
+        } else if (name == "max_heading_deg") {
+            ballistic_tracker_.max_heading_deg = param.as_double();
+        } else if (name == "heading_min_speed_m_s") {
+            ballistic_tracker_.heading_min_speed_m_s = param.as_double();
+        } else if (name == "heading_min_step_m") {
+            ballistic_tracker_.heading_min_step_m = param.as_double();
+        } else if (name == "reject_ascent_after_apex") {
+            ballistic_tracker_.reject_ascent_after_apex = param.as_bool();
+        } else if (name == "backward_jitter_tolerance_m") {
+            ballistic_tracker_.backward_jitter_tolerance_m = param.as_double();
+        } else if (name == "vertical_jitter_tolerance_m") {
+            ballistic_tracker_.vertical_jitter_tolerance_m = param.as_double();
+        } else if (name == "min_flight_vx_m_s") {
+            ballistic_tracker_.min_flight_vx_m_s = param.as_double();
+        } else if (name == "max_vx_m_s") {
+            ballistic_tracker_.max_vx_m_s = param.as_double();
+        } else if (name == "max_abs_vy_m_s") {
+            ballistic_tracker_.max_abs_vy_m_s = param.as_double();
+        } else if (name == "min_vz_m_s") {
+            ballistic_tracker_.min_vz_m_s = param.as_double();
+        } else if (name == "max_vz_m_s") {
+            ballistic_tracker_.max_vz_m_s = param.as_double();
+        } else if (name == "abort_on_anomaly") {
+            ballistic_tracker_.abort_on_anomaly = param.as_bool();
+        } else if (name == "max_anomaly_frames") {
+            ballistic_tracker_.max_anomaly_frames = std::max(1, static_cast<int>(param.as_int()));
+        } else if (name == "max_lost_frames") {
+            ballistic_tracker_.max_lost_frames = std::max(0, static_cast<int>(param.as_int()));
+        } else if (name == "max_flight_duration_sec") {
+            ballistic_tracker_.max_flight_duration_sec = param.as_double();
+        } else if (name == "lost_frame_gate_expansion_m") {
+            ballistic_tracker_.lost_frame_gate_expansion_m = param.as_double();
+        } else if (name == "max_gate_expansion_m") {
+            ballistic_tracker_.max_gate_expansion_m = param.as_double();
+        } else if (name == "min_stationary_move_m") {
+            ballistic_tracker_.min_stationary_move_m = param.as_double();
+        } else if (name == "max_stationary_frames") {
+            ballistic_tracker_.max_stationary_frames = static_cast<int>(param.as_int());
+        } else if (name == "landing_min_z") {
+            ballistic_tracker_.landing_min_z = param.as_double();
+        }
+        // Voxel & Clustering
+        else if (name == "voxel_size_m") {
+            filter_cfg_.voxel_size_m = static_cast<float>(param.as_double());
+        } else if (name == "cluster_eps_m") {
+            filter_cfg_.cluster_eps_m = static_cast<float>(param.as_double());
+        } else if (name == "min_cluster_points") {
+            const int v = std::max(1, static_cast<int>(param.as_int()));
+            filter_cfg_.min_cluster_points = v;
+            ballistic_tracker_.min_cluster_points = v;
+        } else if (name == "min_tracking_points") {
+            const int v = std::max(1, static_cast<int>(param.as_int()));
+            filter_cfg_.min_tracking_points = v;
+            ballistic_tracker_.min_track_points_limit = v;
+        } else if (name == "max_cluster_points") {
+            filter_cfg_.max_cluster_points = static_cast<int>(param.as_int());
+        } else if (name == "min_cloth_size_m") {
+            filter_cfg_.min_cloth_size_m = static_cast<float>(param.as_double());
+        } else if (name == "max_cloth_size_m") {
+            filter_cfg_.max_cloth_size_m = static_cast<float>(param.as_double());
+        } else if (name == "prediction_distance_weight") {
+            filter_cfg_.prediction_distance_weight = static_cast<float>(param.as_double());
+        } else if (name == "cluster_size_weight") {
+            filter_cfg_.cluster_size_weight = static_cast<float>(param.as_double());
+        } else if (name == "launch_forward_weight") {
+            filter_cfg_.launch_forward_weight = static_cast<float>(param.as_double());
+        } else if (name == "external_tracking_keep_radius_m") {
+            external_keep_radius_m_ = std::max(0.0, param.as_double());
+        } else if (name == "publish_debug_cloud") {
+            publish_debug_cloud_ = param.as_bool();
+        }
+
+        RCLCPP_INFO(this->get_logger(), "[DynamicParam] %s = %s", name.c_str(),
+                    param.value_to_string().c_str());
+    }
+
+    if (update_tf) {
+        publish_static_transforms();
+    }
+    if (publish_debug_cloud_ && pub_roi_markers_ && pub_roi_markers_->get_subscription_count() > 0) {
+        publish_roi_markers(this->now(), ClothTrackingResult{});
+    }
+
+    persist_parameters_to_yaml(params);
+    return result;
 }
 
 } // namespace realsense_dust_cloth

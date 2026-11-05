@@ -12,6 +12,7 @@
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <opencv2/core.hpp>
+#include <rcl_interfaces/msg/set_parameters_result.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
@@ -40,8 +41,11 @@ class ClothTrackerCudaNode : public rclcpp::Node {
     ~ClothTrackerCudaNode() override;
 
   private:
-    // 起動時設定: tracker_parameters.cpp
+    // 起動時設定・実行時動的変更・YAML自動書き戻し: tracker_parameters.cpp
     void declare_and_load_parameters();
+    rcl_interfaces::msg::SetParametersResult
+    on_parameters_change(const std::vector<rclcpp::Parameter>& params);
+    void persist_parameters_to_yaml(const std::vector<rclcpp::Parameter>& params);
 
     // カメラ入力: camera_input.cpp / realsense_camera.cpp
     void setup_camera_input();
@@ -139,6 +143,7 @@ class ClothTrackerCudaNode : public rclcpp::Node {
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_filter_status_;
     rclcpp::CallbackGroup::SharedPtr depth_cb_group_, color_cb_group_;
     rclcpp::TimerBase::SharedPtr external_watchdog_;
+    OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
 
     // ROS配信
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;

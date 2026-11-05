@@ -15,6 +15,7 @@ find_package(CUDAToolkit REQUIRED)
 # Find ROS 2 dependencies
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
@@ -59,6 +60,7 @@ target_include_directories(cloth_tracker_cuda_node PUBLIC
 target_link_libraries(cloth_tracker_cuda_node CUDA::cudart ${OpenCV_LIBRARIES})
 
 ament_target_dependencies(cloth_tracker_cuda_node
+  ament_index_cpp
   rclcpp
   std_msgs
   sensor_msgs
@@ -85,6 +87,7 @@ install(PROGRAMS
   realsense_dust_cloth/trajectory_probability_analyzer.py
   realsense_dust_cloth/record_trajectories.py
   realsense_dust_cloth/decompress_image.py
+  realsense_dust_cloth/param_tuner_gui.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

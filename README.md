@@ -22,7 +22,7 @@ RealSense深度画像 → 3D化・ROI・Voxel間引き
 | `config/unity_params.yaml` | Unity | `/clock` | false | 画像トピック |
 | `config/rosbag_params.yaml` | rosbag | `/clock` | false | 記録済み差分点群 |
 
-数値・取付位置・ROI・追跡条件は選んだYAMLが正本です。必須設定が欠けていると起動時にエラーになります。launchは指定YAMLを別ファイルへ差し替えたり、時刻・カメラ設定を黙って上書きしたりしません。YAMLの変更後は追跡ノードを再起動してください。
+数値・取付位置・ROI・追跡条件は選んだYAMLが正本です。必須設定が欠けていると起動時にエラーになります。launchは指定YAMLを別ファイルへ差し替えたり、時刻・カメラ設定を黙って上書きしたりしません。直接YAMLを手動編集した場合は追跡ノードを再起動してください（実行中のリアルタイム調整・自動保存は後述のパラメータ調整GUIで行えます）。
 
 ## 起動
 
@@ -49,6 +49,20 @@ rviz2 -d ~/ros2_ws/src/realsense_dust_cloth/rviz/cloth_tracker.rviz
 同じPCでRVizも起動したい場合はYAMLの `start_rviz`、CSV解析は `start_analyzer`、入力記録は `record_inputs` をtrueにします。補助ノードの時計も同じYAMLに従います。
 
 直接接続にはlibrealsense2対応のビルドが必要です。直結指定でSDKがない場合、画像購読へ黙って切り替えずエラーにします。同じカメラを複数ノードから開かないでください。
+
+## リアルタイムパラメータ調整 GUI
+
+実機（Jetson）やUnityのノードを再起動したり再ビルド（`colcon build`）することなく、GUI のスライダーから射出枠・カメラ取付姿勢・空間ROI・クラスタ閾値・弾道予測パラメータをリアルタイムに調整できます。
+
+```bash
+# 手元のノートPCまたはJetsonで起動
+source ~/ros2_ws/install/setup.bash
+ros2 run realsense_dust_cloth param_tuner_gui.py
+```
+
+- **リモートJetsonと手元PCの連携**: 同じ `ROS_DOMAIN_ID` を設定していれば、手元のノートPCでGUIを動かすだけで、Jetsonで動作中の `/cloth_tracker_cuda_node` へWi-Fi（ROS 2 DDS）経由で変更が即座に反映されます。カメラ角度を変更すると静的TFも即座に再配信されます。
+- **日本語コメント保持のYAML自動保存**: スライダーや数値を操作すると、実行中のノードに反映されると同時に、設定ファイル（`config/tracker_params.yaml` / `unity_params.yaml` / `rosbag_params.yaml` の `src/` および `install/`）の日本語コメントやレイアウトを壊さずにインプレース自動更新します。
+- **オフライン編集対応**: ノードが起動していない場合でも「オフライン（YAML直接保存モード）」として動作し、YAML設定の調整ツールとして利用可能です。
 
 ## rosbagの入力段階
 
@@ -99,6 +113,7 @@ YAMLは実行環境、カメラ、ROI、射出、飛翔、GPU、gn10接続、表
 
 | 役割 | ファイル |
 |---|---|
+| パラメータ調整 GUI | `realsense_dust_cloth/param_tuner_gui.py` |
 | 起動・終了の順序 | `src/cloth_tracker_cuda_node.cpp` |
 | YAML読込・設定検証 | `src/tracker_parameters.cpp` |
 | 画像トピック入力・カメラTF | `src/camera_input.cpp` |
