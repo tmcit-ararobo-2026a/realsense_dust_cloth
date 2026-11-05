@@ -139,7 +139,7 @@
     status_log_throttle_ms: 1000  # 状態ログの最小表示間隔 [ms]
 
     # --- 11. launchで起動する補助処理（Jetsonでは通常すべてfalse） ---
-    start_rviz: false  # 同じPCでRVizも起動するか
+    start_rviz: true  # 同じPCでRVizも起動するか (rosbag再生・自宅デバッグ時はtrue推奨)
     start_analyzer: false  # 軌道CSV解析ノードを同時起動するか
     record_inputs: false  # 入力・自己位置・追跡結果をrosbagへ記録するか
     record_topics:  # 記録するトピック（record_inputs=true時だけ使用）
