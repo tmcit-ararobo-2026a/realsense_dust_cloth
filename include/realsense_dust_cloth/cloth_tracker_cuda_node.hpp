@@ -59,7 +59,6 @@ class ClothTrackerCudaNode : public rclcpp::Node {
 
     // gn10への送信・差分点群の受信: external_cloud_tracking.cpp
     void setup_external_cloud();
-    FilterConfig build_active_export_filter(double stamp_sec) const;
     void publish_filter_input(const std::vector<float3>& points, const rclcpp::Time& stamp);
     void cropped_cloud_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
     void dynamic_cloud_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);

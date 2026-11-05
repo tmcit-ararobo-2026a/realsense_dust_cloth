@@ -39,11 +39,11 @@
 
     # --- 4. 追跡する空間ROI・深度ノイズ除去 ---
     min_x_m: 0.6  # 探索空間 X 下限 (前方) [m] (ロボット本体直前の点群を除外)
-    max_x_m: 6.0  # 探索空間 X 上限 (前方) [m] (追跡対象とする最遠到達距離)
+    max_x_m: 7.0  # 探索空間 X 上限 (前方) [m] (追跡対象とする最遠到達距離)
     min_y_m: -0.6  # 探索空間 Y 下限 (右側) [m]
-    max_y_m: 0.6  # 探索空間 Y 上限 (左側) [m]
+    max_y_m: 1.0  # 探索空間 Y 上限 (左側) [m]
     min_z_m: 0.04  # 探索空間 Z 下限 [m]。着地高さまで観測できる余裕を確保し、床除去はgn10と整合させる
-    max_z_m: 4.0  # 探索空間 Z 上限 [m]。実bagでは上昇中の候補を約3.08mまで観測。上限に余裕を確保し、gn10のheight_maxも合わせる
+    max_z_m: 4.9  # 探索空間 Z 上限 [m]。実bagでは上昇中の候補を約3.08mまで観測。上限に余裕を確保し、gn10のheight_maxも合わせる
     min_depth_m: 0.25  # カメラ最小計測深度 [m]
     max_depth_m: 5.5  # カメラ最大計測深度 [m]
     continuity_radius_px: 2  # 深度連続性を調べる上下左右の距離 [px]
@@ -51,12 +51,12 @@
     continuity_min_neighbors: 3  # 連続性認定最小近傍点数
 
     # --- 5. 射出判定 ---
-    launch_min_x: 1.35  # 発射判定ボックス X 下限 [m] (発射口の前端位置)
-    launch_max_x: 2.0  # 発射判定ボックス X 上限 [m]
-    launch_min_y: -0.25  # 発射判定ボックス Y 下限 [m]
-    launch_max_y: 0.18  # 発射判定ボックス Y 上限 [m]
+    launch_min_x: 1.0  # 発射判定ボックス X 下限 [m] (発射口の前端位置)
+    launch_max_x: 6.0  # 発射判定ボックス X 上限 [m]
+    launch_min_y: -0.6  # 発射判定ボックス Y 下限 [m]
+    launch_max_y: 3.0  # 発射判定ボックス Y 上限 [m]
     launch_min_z: 1.45  # 発射判定ボックス Z 下限 [m] (発射口の高さ)
-    launch_max_z: 2.5  # 発射判定ボックス Z 上限 [m]
+    launch_max_z: 5.0  # 発射判定ボックス Z 上限 [m]
     min_launch_vx: 3.0  # 射出認定最小前方初速 [m/s] (光ジッター除外: 0.5m/s 以上を要求)
     min_launch_move_m: 0.12  # 射出認定最小前方変位 [m] (発射枠内で 12cm 以上前進して初めて発射認定)
     pending_reset_sec: 0.2  # 発射枠内の微小振動・静止物リセットタイムアウト [s]
@@ -80,10 +80,10 @@
     min_flight_vx_m_s: 0.0  # 飛翔中の前方速度の下限 [m/s]。測定ノイズの影響も考慮する
     max_vx_m_s: 15.0  # 許容最大飛翔速度 Vx [m/s]
     max_abs_vy_m_s: 0.8  # 許容最大横方向速度 |Vy| [m/s] (0.80に引き締め、直進軌道を強制)
-    min_vz_m_s: -10.0  # 許容最小鉛直速度 Vz [m/s] (落下方向)
+    min_vz_m_s: -23.5  # 許容最小鉛直速度 Vz [m/s] (落下方向)
     max_vz_m_s: 12.0  # 許容最大鉛直速度 Vz [m/s] (上昇方向)
     abort_on_anomaly: true  # 物理条件に反する候補が続いたらLOSTとして打ち切る
-    max_anomaly_frames: 3  # LOSTにするまでの連続異常候補数 [フレーム]
+    max_anomaly_frames: 1  # LOSTにするまでの連続異常候補数 [フレーム]
     max_lost_frames: 6  # このフレーム数を超えて見失うとLOST。LANDEDにはしない
     max_flight_duration_sec: 2.5  # 最大許容飛翔時間 [s] (滞空異常の安全タイムアウト)
     lost_frame_gate_expansion_m: 0.04  # 欠測1フレームあたりの予測ゲート拡張量 [m]

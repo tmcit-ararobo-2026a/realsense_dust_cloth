@@ -75,57 +75,6 @@ void ClothTrackerCudaNode::check_external_timeout() {
     publish_input_status("RESULT_TIMEOUT", false);
 }
 
-FilterConfig ClothTrackerCudaNode::build_active_export_filter(double stamp_sec) const {
-    auto export_filter = filter_cfg_;
-    float px = 0.0f, py = 0.0f, pz = 0.0f;
-    bool has_center = ballistic_tracker_.get_prediction(stamp_sec, px, py, pz);
-    float radius = 0.0f;
-
-    if (has_center) {
-        const double gate_expansion =
-            std::min(ballistic_tracker_.lost_count * ballistic_tracker_.lost_frame_gate_expansion_m,
-                     ballistic_tracker_.max_gate_expansion_m);
-        radius = static_cast<float>(ballistic_tracker_.tube_radius_m + gate_expansion) +
-                 filter_cfg_.max_cloth_size_m;
-    } else if (ballistic_tracker_.is_pending_launch) {
-        const double dt = stamp_sec - ballistic_tracker_.first_detect_stamp;
-        if (dt > 0.0 && dt <= ballistic_tracker_.launch_timeout_sec) {
-            px = static_cast<float>(ballistic_tracker_.anchor_x);
-            py = static_cast<float>(ballistic_tracker_.anchor_y);
-            pz = static_cast<float>(ballistic_tracker_.anchor_z);
-            const double speed_bound =
-                std::sqrt(std::pow(ballistic_tracker_.max_vx_m_s, 2) +
-                          std::pow(ballistic_tracker_.max_abs_vy_m_s, 2) +
-                          std::pow(std::max(std::abs(ballistic_tracker_.min_vz_m_s),
-                                            ballistic_tracker_.max_vz_m_s),
-                                   2));
-            radius = static_cast<float>(speed_bound * dt +
-                                        ballistic_tracker_.centroid_position_tolerance_m) +
-                     filter_cfg_.max_cloth_size_m;
-            has_center = true;
-        }
-    }
-
-    if (has_center) {
-        export_filter.min_x_m = std::max(filter_cfg_.min_x_m, px - radius);
-        export_filter.max_x_m = std::min(filter_cfg_.max_x_m, px + radius);
-        export_filter.min_y_m = std::max(filter_cfg_.min_y_m, py - radius);
-        export_filter.max_y_m = std::min(filter_cfg_.max_y_m, py + radius);
-        export_filter.min_z_m = std::max(filter_cfg_.min_z_m, pz - radius);
-        export_filter.max_z_m = std::min(filter_cfg_.max_z_m, pz + radius);
-    } else {
-        // IDLE (発射待ち) 中は空中の発射ボックス周辺のみを抽出し、床や遠方建造物を送信しない
-        const float pad = filter_cfg_.max_cloth_size_m;
-        export_filter.min_x_m = std::max(filter_cfg_.min_x_m, filter_cfg_.launch_min_x - pad);
-        export_filter.max_x_m = std::min(filter_cfg_.max_x_m, filter_cfg_.launch_max_x + pad);
-        export_filter.min_y_m = std::max(filter_cfg_.min_y_m, filter_cfg_.launch_min_y - pad);
-        export_filter.max_y_m = std::min(filter_cfg_.max_y_m, filter_cfg_.launch_max_y + pad);
-        export_filter.min_z_m = std::max(filter_cfg_.min_z_m, filter_cfg_.launch_min_z - pad);
-        export_filter.max_z_m = std::min(filter_cfg_.max_z_m, filter_cfg_.launch_max_z + pad);
-    }
-    return export_filter;
-}
-
 void ClothTrackerCudaNode::publish_filter_input(const std::vector<float3>& points,
                                                 const rclcpp::Time& stamp) {
     visualization_msgs::msg::Marker region;

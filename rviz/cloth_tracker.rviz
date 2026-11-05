@@ -39,6 +39,20 @@ Visualization Manager:
       Update Interval: 0
 
     - Class: rviz_default_plugins/PointCloud2
+      Name: Dynamic Cloud (gn10 White Points)
+      Enabled: true
+      Topic:
+        Value: /realsense/dynamic_cloud
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+      Color: 255; 255; 255
+      Color Transformer: FlatColor
+      Size (Pixels): 4
+      Style: Points
+
+    - Class: rviz_default_plugins/PointCloud2
       Name: ROI Filtered Points (All Live Points)
       Enabled: true
       Topic:
