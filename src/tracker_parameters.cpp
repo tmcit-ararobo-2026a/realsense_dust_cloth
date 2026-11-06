@@ -1,11 +1,5 @@
-// YAMLの必須設定の読込・起動時検証・実行時動的変更・YAML自動書き戻し。
+// YAMLの必須設定の読込・起動時検証・実行時動的変更。保存先はGUIで選択する。
 #include "realsense_dust_cloth/cloth_tracker_cuda_node.hpp"
-#include <ament_index_cpp/get_package_share_directory.hpp>
-#include <filesystem>
-#include <fstream>
-#include <iomanip>
-#include <regex>
-#include <sstream>
 #include <type_traits>
 
 namespace realsense_dust_cloth {
@@ -30,70 +24,6 @@ template <class T> T required_parameter(rclcpp::Node& node, const std::string& n
     return value;
 }
 
-std::string format_yaml_value(const rclcpp::Parameter& param) {
-    if (param.get_type() == rclcpp::ParameterType::PARAMETER_BOOL) {
-        return param.as_bool() ? "true" : "false";
-    }
-    if (param.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
-        return std::to_string(param.as_int());
-    }
-    if (param.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
-        std::ostringstream oss;
-        oss << std::setprecision(6) << std::defaultfloat << param.as_double();
-        std::string s = oss.str();
-        if (s.find('.') == std::string::npos && s.find('e') == std::string::npos) {
-            s += ".0";
-        }
-        return s;
-    }
-    return param.as_string();
-}
-
-bool update_yaml_file_in_place(const std::filesystem::path& file_path,
-                               const std::vector<rclcpp::Parameter>& params) {
-    if (!std::filesystem::exists(file_path))
-        return false;
-    std::ifstream in(file_path);
-    if (!in.is_open())
-        return false;
-
-    std::vector<std::string> lines;
-    std::string line;
-    while (std::getline(in, line)) {
-        lines.push_back(line);
-    }
-    in.close();
-
-    bool modified = false;
-    for (const auto& param : params) {
-        if (param.get_name() == "use_sim_time")
-            continue;
-        const std::string val_str = format_yaml_value(param);
-        const std::regex pattern("^(\\s*" + param.get_name() + "\\s*:\\s*)([^#\\r\\n]+?)(\\s*(?:#.*)?)$");
-        for (auto& l : lines) {
-            std::smatch match;
-            if (std::regex_match(l, match, pattern)) {
-                const std::string new_line = match[1].str() + val_str + match[3].str();
-                if (l != new_line) {
-                    l = new_line;
-                    modified = true;
-                }
-                break;
-            }
-        }
-    }
-
-    if (!modified)
-        return false;
-
-    std::ofstream out(file_path, std::ios::trunc);
-    if (!out.is_open())
-        return false;
-    for (const auto& l : lines) {
-        out << l << "\n";
-    }
-    return true;
-}
 } // namespace
 
 void ClothTrackerCudaNode::declare_and_load_parameters() {
@@ -109,6 +39,10 @@ void ClothTrackerCudaNode::declare_and_load_parameters() {
     color_optical_frame_ = required_parameter<std::string>(*this, "color_optical_frame");
     depth_optical_frame_ = required_parameter<std::string>(*this, "depth_optical_frame");
     cloth_tf_frame_ = required_parameter<std::string>(*this, "cloth_tf_frame");
+
+    publish_raw_depth_ = required_parameter<bool>(*this, "publish_raw_depth");
+    debug_publish_hz_ = required_parameter<double>(*this, "debug_publish_hz");
+    bg_update_interval_sec_ = required_parameter<double>(*this, "bg_update_interval_sec");
 
     // 1. 入力トピックとカメラの接続方式
     required_parameter<std::string>(*this, "depth_topic");
@@ -280,7 +214,8 @@ void ClothTrackerCudaNode::declare_and_load_parameters() {
 
     image_max_age_sec_ = required_parameter<double>(*this, "image_max_age_sec");
     depth_queue_size_ = required_parameter<int>(*this, "depth_queue_size");
-    if (camera_intrin_.width <= 0 || camera_intrin_.height <= 0 || image_max_age_sec_ <= 0 ||
+    if (debug_publish_hz_ <= 0 || bg_update_interval_sec_ <= 0 ||
+        camera_intrin_.width <= 0 || camera_intrin_.height <= 0 || image_max_age_sec_ <= 0 ||
         depth_queue_size_ <= 0 || publisher_queue_size_ <= 0 || color_queue_size_ <= 0 ||
         max_trajectory_points_ <= 0 || min_trajectory_step_m_ < 0 ||
         static_marker_interval_sec_ <= 0 || realsense_wait_timeout_ms_ <= 0 ||
@@ -306,40 +241,6 @@ void ClothTrackerCudaNode::declare_and_load_parameters() {
         std::bind(&ClothTrackerCudaNode::on_parameters_change, this, std::placeholders::_1));
 }
 
-void ClothTrackerCudaNode::persist_parameters_to_yaml(
-    const std::vector<rclcpp::Parameter>& params) {
-    std::string active_name = "tracker_params.yaml";
-    if (!use_direct_realsense_) {
-        active_name = (input_source_ == "dynamic_cloud") ? "rosbag_params.yaml" : "unity_params.yaml";
-    }
-
-    std::vector<std::filesystem::path> target_dirs;
-    try {
-        const std::filesystem::path share_dir =
-            ament_index_cpp::get_package_share_directory("realsense_dust_cloth");
-        target_dirs.push_back(share_dir / "config");
-        // Walk up from install/.../share/realsense_dust_cloth to workspace root and locate src/realsense_dust_cloth/config
-        auto p = share_dir;
-        for (int i = 0; i < 5 && p.has_parent_path(); ++i) {
-            p = p.parent_path();
-            const auto src_cfg = p / "src" / "realsense_dust_cloth" / "config";
-            if (std::filesystem::is_directory(src_cfg)) {
-                target_dirs.push_back(src_cfg);
-                break;
-            }
-        }
-    } catch (const std::exception&) {
-    }
-
-    for (const auto& dir : target_dirs) {
-        update_yaml_file_in_place(dir / active_name, params);
-        // Also keep tracker_params.yaml and unity_params.yaml synchronized for tracking parameters
-        update_yaml_file_in_place(dir / "tracker_params.yaml", params);
-        update_yaml_file_in_place(dir / "unity_params.yaml", params);
-        update_yaml_file_in_place(dir / "rosbag_params.yaml", params);
-    }
-}
-
 rcl_interfaces::msg::SetParametersResult
 ClothTrackerCudaNode::on_parameters_change(const std::vector<rclcpp::Parameter>& params) {
     rcl_interfaces::msg::SetParametersResult result;
@@ -347,6 +248,17 @@ ClothTrackerCudaNode::on_parameters_change(const std::vector<rclcpp::Parameter>&
 
     std::lock_guard<std::recursive_mutex> lock(processing_mutex_);
     bool update_tf = false;
+    // 変更を一つでも適用する前に、タイミング値を検証する。
+    for (const auto& param : params) {
+        if ((param.get_name() == "debug_publish_hz" ||
+             param.get_name() == "bg_update_interval_sec" ||
+             param.get_name() == "static_marker_interval_sec") &&
+            (!std::isfinite(param.as_double()) || param.as_double() <= 0)) {
+            result.successful = false;
+            result.reason = "Timing parameters must be finite and positive";
+            return result;
+        }
+    }
 
     for (const auto& param : params) {
         const auto& name = param.get_name();
@@ -509,9 +421,22 @@ ClothTrackerCudaNode::on_parameters_change(const std::vector<rclcpp::Parameter>&
             filter_cfg_.launch_forward_weight = static_cast<float>(param.as_double());
         } else if (name == "external_tracking_keep_radius_m") {
             external_keep_radius_m_ = std::max(0.0, param.as_double());
+        } else if (name == "static_marker_interval_sec") {
+            static_marker_interval_sec_ = param.as_double();
+        } else if (name == "debug_publish_hz") {
+            debug_publish_hz_ = param.as_double();
+        } else if (name == "bg_update_interval_sec") {
+            bg_update_interval_sec_ = param.as_double();
+        } else if (name == "publish_raw_depth") {
+            publish_raw_depth_ = param.as_bool();
         } else if (name == "publish_debug_cloud") {
             publish_debug_cloud_ = param.as_bool();
         } else if (name == "use_bg_subtraction") {
+            if (filter_cfg_.use_bg_subtraction != param.as_bool()) {
+                reset_background_cuda(cuda_ctx_);
+                bg_state_ = BackgroundState::ROLLING;
+                last_background_update_sec_ = -1.0;
+            }
             filter_cfg_.use_bg_subtraction = param.as_bool();
         } else if (name == "bg_diff_thresh_m") {
             filter_cfg_.bg_diff_thresh_m = static_cast<float>(param.as_double());
@@ -532,7 +457,6 @@ ClothTrackerCudaNode::on_parameters_change(const std::vector<rclcpp::Parameter>&
         publish_roi_markers(this->now(), ClothTrackingResult{});
     }
 
-    persist_parameters_to_yaml(params);
     return result;
 }
 

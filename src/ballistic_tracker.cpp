@@ -13,6 +13,7 @@ void BallisticTracker::reset() {
     lost_count = 0;
     stationary_count = 0;
     anomaly_count = 0;
+    last_rejection_reason.clear();
     launch_displacement_confirmed = false;
     is_pending_launch = false;
     has_reached_apex = false;
@@ -23,6 +24,10 @@ void BallisticTracker::reset() {
     anchor_x = 0.0;
     anchor_y = 0.0;
     anchor_z = 0.0;
+}
+
+double BallisticTracker::search_radius_m() const {
+    return tube_radius_m + std::min(lost_count * lost_frame_gate_expansion_m, max_gate_expansion_m);
 }
 
 bool BallisticTracker::get_prediction(double stamp_sec, float& px, float& py, float& pz) const {
@@ -119,6 +124,8 @@ bool BallisticTracker::update_launch_candidate(const ClothTrackingResult& raw, d
         has_reached_apex = false;
         last_stamp = stamp_sec;
         tracked_count = 1;
+        anomaly_count = 0;
+        last_rejection_reason.clear();
         lost_count = 0;
         stationary_count = 0;
         is_pending_launch = false;
@@ -176,8 +183,7 @@ bool BallisticTracker::update_flight(const ClothTrackingResult& raw, double stam
         double new_vz = dz_prev / dt;
 
         // A projectile in free forward flight must remain within the 3D ballistic tube
-        double effective_gate = tube_radius_m + std::min(lost_count * lost_frame_gate_expansion_m,
-                                                         max_gate_expansion_m);
+        const double effective_gate = search_radius_m();
         double max_step_dist = effective_gate + max_vx_m_s * dt;
 
         bool physically_plausible = true;

@@ -19,6 +19,7 @@
     color_fps: 30  # カラーフレームレート [fps]
     rs_laser_power: -1.0  # 負値:SDKが返す出力範囲の最大値 / 0:消灯 / 正値:指定出力
     rs_exposure_us: -1  # Depth 露光時間 [us] (-1: 自動露出)
+    publish_raw_depth: false  # USB直結時の生深度配信。Jetson内bag記録時のみtrue推奨（60fpsで約295Mbps）
     enable_color_stream: false  # RViz 可視化用カラー画像の配信有効化 (trueだと非圧縮映像でWi-Fi帯域約220Mbpsを消費するため実機はfalse推奨)
     color_rotation_deg: 90  # カメラ縦置き設置に合わせた画像回転角 [deg]
     jpeg_quality: 65  # RViz/Web 配信向け JPEG 圧縮品質 (1-100)
@@ -100,7 +101,7 @@
     min_cloth_size_m: 0.05  # 雑巾最小外形径 [m]
     max_cloth_size_m: 0.60  # 雑巾最大外形径 [m]
     prediction_distance_weight: 2.0  # 候補選択で予測位置からの距離に与える重み
-    cluster_size_weight: 0.05  # 候補選択で点数に与える重み
+    cluster_size_weight: 0.05  # 候補選択で点数/最大クラスタ点数（0〜1）に与える重み
     launch_forward_weight: 1.0  # 射出枠内の候補選択で前方位置を優先する重み
     max_voxel_points: 8192  # GPUに保持する間引き後の最大点数 [点]
     voxel_hash_table_size: 32768  # Voxelハッシュの要素数
@@ -108,6 +109,7 @@
     # --- 8. GPU深度背景差分 & 射出連携 ---
     use_bg_subtraction: true  # GPU深度リングバッファ背景差分を有効化
     bg_diff_thresh_m: 0.12  # 背景より手前にある動的物体のみ抽出するしきい値 [m]
+    bg_update_interval_sec: 0.08  # 背景更新の最小間隔 [s]。追跡・射出確認中は更新しない
     bg_ring_frames: 6  # 背景作成用深度リングバッファフレーム数 (60fps時: 6フレーム=0.10秒)
     bg_pre_shot_exclude_sec: 0.08  # 射出検知時刻直前の除外ウィンドウ [s] (直近フレームを背景から除外)
     shot_window_sec: 2.5  # 射出後の背景凍結ウィンドウ時間 [s]
@@ -129,11 +131,12 @@
     bag_rewind_tolerance_sec: 0.5  # 時刻がこの値以上戻ったら追跡履歴をリセットする [s]
 
     # --- 10. 表示・実測出力・ログ ---
+    debug_publish_hz: 5.0  # PC向け表示点群・ROIの最大配信頻度 [Hz]。追跡FPSは下げない
     publish_debug_cloud: true  # デバッグ用点群パブリッシュ
     trajectory_history_sec: 15.0  # RViz 軌跡描画履歴保持時間 [s]
     min_trajectory_step_m: 0.005  # 軌跡に点を追加する最小移動量 [m]
     max_trajectory_points: 1000  # 保持する軌跡の最大点数 [点]
-    static_marker_interval_sec: 0.1  # 追跡終了後のマーカー再配信間隔 [s]
+    static_marker_interval_sec: 0.1  # 軌跡・マーカー・Pathの表示間隔 [s]。位置とTFの追跡周期は維持
     landing_position_topic: /cloth/landing_position  # 着地推定位置パブリッシュトピック名
     warning_log_throttle_ms: 5000  # 警告の最小表示間隔 [ms]
     status_log_throttle_ms: 1000  # 状態ログの最小表示間隔 [ms]

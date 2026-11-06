@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <memory>
 #include <mutex>
@@ -36,18 +37,18 @@
 
 namespace realsense_dust_cloth {
 
-// 深度入力 → gn10による地図差分 → 候補選択 → 予測追跡 → 実測結果の配信。
+// 深度の背景差分、または外部差分点群 → 候補選択 → 予測追跡 → 実測結果の配信。
 class ClothTrackerCudaNode : public rclcpp::Node {
   public:
     explicit ClothTrackerCudaNode(const rclcpp::NodeOptions& options = rclcpp::NodeOptions());
     ~ClothTrackerCudaNode() override;
 
   private:
-    // 起動時設定・実行時動的変更・YAML自動書き戻し: tracker_parameters.cpp
+    friend struct ClothTrackerNodeTestAccess;
+    // 起動時設定・実行時動的変更: tracker_parameters.cpp
     void declare_and_load_parameters();
     rcl_interfaces::msg::SetParametersResult
     on_parameters_change(const std::vector<rclcpp::Parameter>& params);
-    void persist_parameters_to_yaml(const std::vector<rclcpp::Parameter>& params);
 
     // カメラ入力: camera_input.cpp / realsense_camera.cpp
     void setup_camera_input();
@@ -70,13 +71,18 @@ class ClothTrackerCudaNode : public rclcpp::Node {
                                              std::vector<float3>* cluster,
                                              std::vector<float3>* filtered);
 
+    FilterConfig candidate_search_filter(double stamp_sec, float& x, float& y, float& z,
+                                         bool& predicted) const;
+    bool debug_frame_due();
+    bool want_cluster_debug() const;
+    bool want_filtered_debug() const;
+
     // 射出検知 & 背景凍結ステートマシン
     enum class BackgroundState { ROLLING, FROZEN };
     BackgroundState bg_state_{BackgroundState::ROLLING};
     double shot_freeze_until_sec_{0.0};
     uint8_t last_shot_count_{0};
     bool has_received_shot_count_{false};
-    int rolling_bg_frame_counter_{0};
     std::string shot_count_topic_{"/robot/feedback/shot_count"};
     std::string reset_topic_{"/cloth/reset"};
     rclcpp::Subscription<std_msgs::msg::UInt8>::SharedPtr sub_shot_count_;
@@ -113,6 +119,7 @@ class ClothTrackerCudaNode : public rclcpp::Node {
     FilterConfig filter_cfg_;
     BallisticTracker ballistic_tracker_;
     TrackerState prev_state_{TrackerState::IDLE};
+    TrackerState last_visualization_state_{TrackerState::IDLE};
     bool intrinsics_ready_{false};
 
     // カメラと座標系の設定。値は起動時にYAMLから取得する。
@@ -123,6 +130,7 @@ class ClothTrackerCudaNode : public rclcpp::Node {
     bool use_direct_realsense_{false};
     bool publish_static_tf_{true};
     bool enable_color_stream_{true};
+    std::atomic<bool> publish_raw_depth_{false};
     int depth_fps_{60}, color_fps_{30};
     int jpeg_quality_{65}, color_rotation_deg_{180};
     double rs_laser_power_{-1.0};
@@ -148,6 +156,13 @@ class ClothTrackerCudaNode : public rclcpp::Node {
     double last_cloth_x_{0.0}, last_cloth_y_{0.0}, last_cloth_z_{0.0};
     bool has_cloth_pose_{false};
     bool publish_debug_cloud_{false};
+    double debug_publish_hz_{};
+    std::chrono::steady_clock::time_point last_debug_publish_{};
+    bool debug_frame_due_{false};
+    double bg_update_interval_sec_{};
+    double last_background_update_sec_{-1.0};
+    std::string last_input_status_, last_tracking_status_;
+    bool ready_published_{false}, last_ready_{false};
     std::string landing_position_topic_{"/cloth/landing_position"};
 
     // ROS購読・タイマー
