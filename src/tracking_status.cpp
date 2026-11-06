@@ -12,10 +12,17 @@ void ClothTrackerCudaNode::setup_tracking_status() {
 void ClothTrackerCudaNode::publish_input_status(const std::string& state, bool ready) {
     std_msgs::msg::String status;
     status.data = state;
-    pub_input_status_->publish(status);
+    if (state != last_input_status_) {
+        pub_input_status_->publish(status);
+        last_input_status_ = state;
+    }
     std_msgs::msg::Bool value;
     value.data = ready;
-    pub_ready_->publish(value);
+    if (!ready_published_ || ready != last_ready_) {
+        pub_ready_->publish(value);
+        last_ready_ = ready;
+        ready_published_ = true;
+    }
     switch (ballistic_tracker_.state) {
     case TrackerState::TRACKING:
         status.data = "TRACKING";
@@ -33,6 +40,9 @@ void ClothTrackerCudaNode::publish_input_status(const std::string& state, bool r
         status.data = "IDLE";
         break;
     }
-    pub_tracking_state_->publish(status);
+    if (status.data != last_tracking_status_) {
+        pub_tracking_state_->publish(status);
+        last_tracking_status_ = status.data;
+    }
 }
 } // namespace realsense_dust_cloth

@@ -251,7 +251,8 @@ ClothTrackerCudaNode::on_parameters_change(const std::vector<rclcpp::Parameter>&
     // 変更を一つでも適用する前に、タイミング値を検証する。
     for (const auto& param : params) {
         if ((param.get_name() == "debug_publish_hz" ||
-             param.get_name() == "bg_update_interval_sec") &&
+             param.get_name() == "bg_update_interval_sec" ||
+             param.get_name() == "static_marker_interval_sec") &&
             (!std::isfinite(param.as_double()) || param.as_double() <= 0)) {
             result.successful = false;
             result.reason = "Timing parameters must be finite and positive";
@@ -420,6 +421,8 @@ ClothTrackerCudaNode::on_parameters_change(const std::vector<rclcpp::Parameter>&
             filter_cfg_.launch_forward_weight = static_cast<float>(param.as_double());
         } else if (name == "external_tracking_keep_radius_m") {
             external_keep_radius_m_ = std::max(0.0, param.as_double());
+        } else if (name == "static_marker_interval_sec") {
+            static_marker_interval_sec_ = param.as_double();
         } else if (name == "debug_publish_hz") {
             debug_publish_hz_ = param.as_double();
         } else if (name == "bg_update_interval_sec") {

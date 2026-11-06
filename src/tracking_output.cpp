@@ -141,7 +141,7 @@ void ClothTrackerCudaNode::publish_tracking_transition(const ClothTrackingResult
 void ClothTrackerCudaNode::remember_observation(const ClothTrackingResult& res,
                                                 const rclcpp::Time& stamp) {
     const double now_sec = stamp.seconds();
-    RCLCPP_INFO(this->get_logger(),
+    RCLCPP_DEBUG(this->get_logger(),
                 "[ClothTracker] >>> TRACKED CLOTH: points=%d, pos=(%.2f, %.2f, %.2f) <<<",
                 res.cluster_points_count, res.cx, res.cy, res.cz);
 
@@ -219,32 +219,32 @@ void ClothTrackerCudaNode::publish_tracking_visualization(const rclcpp::Time& st
         tf_broadcaster_->sendTransform(tf_msg);
     }
 
-    // 最後に採用した位置を赤い球で表示する。
-    if (has_cloth_pose_) {
+    const bool want_markers = pub_marker_ && pub_marker_->get_subscription_count() > 0;
+    const bool want_path = pub_path_ && pub_path_->get_subscription_count() > 0;
+    if (!want_markers && !want_path)
+        return;
+
+    // 位置・TFの追跡周期は維持し、表示だけを間引く。開始・終了時は直ちに表示する。
+    const bool state_changed = last_visualization_state_ != ballistic_tracker_.state;
+    const bool due = std::abs(now_sec - last_static_publish_sec_) >= static_marker_interval_sec_;
+    if ((!state_changed && !due) || !has_cloth_pose_)
+        return;
+    last_static_publish_sec_ = now_sec;
+    last_visualization_state_ = ballistic_tracker_.state;
+
+    if (want_markers) {
         pub_marker_->publish(MarkerVisualizer::create_cloth_tip_marker(
             stamp, last_cloth_x_, last_cloth_y_, last_cloth_z_, camera_parent_frame_));
+        pub_marker_->publish(MarkerVisualizer::create_trajectory_line(
+            stamp, trajectory_points_, camera_parent_frame_));
+        pub_marker_->publish(MarkerVisualizer::create_measured_points(
+            stamp, trajectory_points_, camera_parent_frame_));
     }
-
-    // 追跡中は毎フレーム、終了後はYAMLの周期で実測軌跡を再配信する。
-    bool should_publish_markers =
-        is_actively_tracked ||
-        (std::abs(now_sec - last_static_publish_sec_) >= static_marker_interval_sec_);
-
-    if (should_publish_markers && !trajectory_points_.empty()) {
-        last_static_publish_sec_ = now_sec;
-
-        // 1. Measured Flight Trajectory Line Strip (Bright Gold, strictly connects true camera detections)
-        pub_marker_->publish(MarkerVisualizer::create_trajectory_line(stamp, trajectory_points_,
-                                                                      camera_parent_frame_));
-
-        // 2. True Measured Points Marker (Orange Spheres, exactly where camera detected cloth)
-        pub_marker_->publish(MarkerVisualizer::create_measured_points(stamp, trajectory_points_,
-                                                                      camera_parent_frame_));
-
-        // 3. Measured Path (True measured points only)
+    if (want_path) {
         nav_msgs::msg::Path path_msg;
         path_msg.header.stamp = stamp;
         path_msg.header.frame_id = camera_parent_frame_;
+        path_msg.poses.reserve(trajectory_points_.size());
         for (const auto& item : trajectory_points_) {
             geometry_msgs::msg::PoseStamped pose;
             pose.header.stamp = stamp;

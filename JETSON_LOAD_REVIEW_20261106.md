@@ -59,3 +59,5 @@ Unityで射出直後に現在画像を背景へ取り込んでいた不具合を
 最終6投は6/6捕捉、LANDED出力4/6。旋回後の2投は高さ0.636m（NO_CANDIDATE）・0.403m（HEADING）でLOST。したがってPR #8はマージ保留。LANDED出力数は独立した物体同定による着地成功数を保証しない。表示点群は約4.56Hz、PCでの深度受信から同stampの表示点群受信まで中央値0.74ms・95%点2.15ms（JetsonやWi-Fiの実測ではない）。
 
 詳細ログと真値比較: `/home/akeru/Documents/Codex/2026-10-26/new-chat/outputs/unity_load_verification_20261106/report.md`。
+
+GUIのセッション復元、RVizの実描画確認、表示と状態配信の追加削減は [GUI・RViz確認記録](CHANGES_GUI_RVIZ_20261106.md) を参照。最新のCTestは6/6成功。Jetsonの負荷実測と安定した終盤追跡は未達で、マージ保留を維持する。

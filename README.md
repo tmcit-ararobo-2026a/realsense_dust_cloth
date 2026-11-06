@@ -1,130 +1,226 @@
 # realsense_dust_cloth
 
-RealSenseで飛翔中の雑巾を追跡するROS 2 / CUDAパッケージです。地図と自己位置の管理・地図による背景除去は `gn10-pointcloud-localization` が担当します。追跡側の独立地図読込、深度背景学習、自己位置を使わない背景差分方式は削除しました。
+RealSenseの深度画像から飛翔中の雑巾を追跡するROS 2 Humble / CUDAパッケージです。
+
+**現在の標準経路は、GPUの深度リングバッファによる背景差分と予測追跡です。** 実機・Unity・カメラだけのbagで動かす場合、地図・自己位置・gn10・`shot_count`は必須ではありません。外部点群の再投入経路も残しています。
+
+このREADMEはPR #8の修正ブランチの仕様です。2026-11-06のUnity試験では6投捕捉、`LANDED`出力4投、旋回後2投は終盤に`LOST`でした。毎回の着地追跡成功やJetsonの負荷削減率は保証していません。詳細は [検証・負荷の記録](JETSON_LOAD_REVIEW_20261106.md) を参照してください。
 
 ## 処理の流れ
 
 ```text
-RealSense深度画像 → 3D化・ROI・Voxel間引き
- → /realsense/cropped_cloud
- → gn10：自己位置とESDF地図で静的背景を除去
- → /realsense/dynamic_cloud
- → 候補クラスタ選択・射出確認・予測追跡
+USB直結、または深度画像＋CameraInfo
+  → GPUで背景差分・座標変換・ROI・Voxel間引き
+  → 候補クラスタを抽出
+  → 射出枠での移動を確認
+  → 予測位置・大きさ・速度・加速度で追跡
+  → 実測位置・軌跡・終了状態を配信
 ```
 
-追跡確定後の予測保護球は `/cloth/filter_prediction` に送ります。RealSenseの点群を自己位置推定の計算には使いません。地図差分後にも地図にない静止物は残るため、大きさ・移動量・速度・予測との整合で候補を選びます。
+- 起動後の最初の画像で背景を作ります。その画像に写っている雑巾は背景に含まれるため、カメラ入力が始まってから射出してください。
+- 以後は候補を調べた後、候補がない待機フレームだけで背景を更新します。検出前に現在画像を背景へ取り込みません。
+- 射出候補が発射枠に現れると背景を凍結します。`/robot/feedback/shot_count`が利用可能なら、カウント変化でも凍結できます。未実装でも自動検知で動作します。
+- 飛翔中は背景を更新しません。凍結期限を過ぎ、追跡が終了していれば背景更新へ戻ります。
+- 現方式は`cmd_vel`や車輪速度で停止を直接判定しません。停止後の背景安定時間は実FPS・リング長・更新周期によるため、「必ず停止後0.1秒」とは限りません。
 
-## 設定は3ファイル
+## ビルド
 
-| YAML | 用途 | 時計 | RealSense直結 | 初期入力 |
+JetsonではCUDA・librealsense2開発SDK、PCでの画像トピック入力にはCUDAが必要です。
+
+```bash
+source /opt/ros/humble/setup.bash
+cd ~/ros2_ws
+rosdep install --from-paths src/realsense_dust_cloth --ignore-src -r -y
+colcon build --symlink-install --packages-select realsense_dust_cloth
+source install/setup.bash
+```
+
+直結モードでlibrealsense2がない場合は、黙って画像購読へ切り替えず起動エラーにします。同じUSBカメラを別のRealSenseノードと同時に開かないでください。
+
+## YAMLを1つ選んで起動
+
+| YAML | 用途 | `use_sim_time` | `use_direct_realsense` | 標準入力 |
 |---|---|---|---|---|
-| `config/tracker_params.yaml` | Jetson実機 | 実時間 | true | 深度 |
-| `config/unity_params.yaml` | Unity | `/clock` | false | 画像トピック |
-| `config/rosbag_params.yaml` | rosbag | `/clock` | false | 記録済み差分点群 |
+| `tracker_params.yaml` | Jetson実機 | false | true | USB深度 |
+| `unity_params.yaml` | Unity | true | false | 深度トピック |
+| `rosbag_params.yaml` | カメラbag | true | false | 深度トピック |
 
-数値・取付位置・ROI・追跡条件は選んだYAMLが正本です。必須設定が欠けていると起動時にエラーになります。launchは指定YAMLを別ファイルへ差し替えたり、時刻・カメラ設定を黙って上書きしたりしません。直接YAMLを手動編集した場合は追跡ノードを再起動してください（実行中のリアルタイム調整・自動保存は後述のパラメータ調整GUIで行えます）。
+取付位置・ROI・数値・時計・補助ノードは選択したYAMLが正本です。launchは値を暗黙に上書きしません。
 
-## 起動
+### Jetson実機
 
 ```bash
+source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
-# 実機：通常のMID360・IMU・localizationを別途起動しておく
 ros2 launch realsense_dust_cloth cloth_tracker.launch.py
-# Unity：localizationもシミュレーション時刻で起動しておく
-ros2 launch realsense_dust_cloth cloth_tracker.launch.py cloth_tracker_params_file:=unity_params.yaml
-# rosbag
-ros2 launch realsense_dust_cloth cloth_tracker.launch.py cloth_tracker_params_file:=rosbag_params.yaml
 ```
 
-※ 引数 `cloth_tracker_params_file`（後方互換として `params_file` や `tracker_params_file` も可）で設定YAMLを指定します。
+この深度経路にlocalizationの起動は不要です。ロボットの別の機能でlocalizationを使っていても併用できます。
 
-`use_sim_time:=true`、`use_direct_realsense:=false`、`sim:=true` の追加指定は不要です。設定したい値はYAML内で変更します。他のlaunchファイル（`gn10_pointcloud_localization` 等）と同時にIncludeしても、`GroupAction(scoped=True)` とパラメータ自動判定により互いの `params_file` は分離されます。
+### Unity
 
-Jetsonは追跡とlocalizationを実行し、手元のPCでRVizを開けます。PCとJetsonのROS通信設定を合わせてください。
+UnityとROSノードで同じ`ROS_DOMAIN_ID`を使用します。
 
 ```bash
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+export ROS_DOMAIN_ID=96
+ros2 launch realsense_dust_cloth cloth_tracker.launch.py \
+  cloth_tracker_params_file:=unity_params.yaml
+```
+
+`use_sim_time`や`use_direct_realsense`をlaunch引数で追加する必要はありません。Unity側から深度・CameraInfo・`/clock`を配信してください。検証用の`ROS_LOCALHOST_ONLY=1`は同じPC内だけで使い、JetsonとPCの通信時には設定しません。
+
+### カメラbag
+
+```bash
+# ターミナル1
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+export ROS_DOMAIN_ID=95
+ros2 launch realsense_dust_cloth cloth_tracker.launch.py \
+  cloth_tracker_params_file:=rosbag_params.yaml
+
+# ターミナル2（同じROS環境とROS_DOMAIN_IDを設定）
+ros2 bag play /path/to/bag --clock 100 --topics \
+  /camera/camera/depth/image_rect_raw /camera/camera/depth/camera_info
+```
+
+現在のrosbag用YAMLは`start_rviz: true`です。RVizを別PCで開く場合はfalseにします。
+
+Unityで記録した`/clock`をそのまま再生する場合は、`--clock`を付けず、再生トピックに記録済み`/clock`を加えます。生成時計と記録時計を同時に配信しないでください。画像ヘッダーと`/clock`の時刻が一致している必要があります。
+
+記録済みの`/cloth/position`・状態・マーカーを同時に再生すると、新しい追跡結果と混ざります。入力トピックだけを選択してください。深度bagではYAMLの取付位置・角度を撮影時に合わせます。
+
+## PCのRViz2で追跡を見る
+
+JetsonとPCで同じ`ROS_DOMAIN_ID`を設定し、ROS 2通信が通るようにします。PC側でもパッケージをビルドしておきます。
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
 rviz2 -d ~/ros2_ws/src/realsense_dust_cloth/rviz/cloth_tracker.rviz
 ```
 
-同じPCでRVizも起動したい場合はYAMLの `start_rviz`、CSV解析は `start_analyzer`、入力記録は `record_inputs` をtrueにします。補助ノードの時計も同じYAMLに従います。
-
-直接接続にはlibrealsense2対応のビルドが必要です。直結指定でSDKがない場合、画像購読へ黙って切り替えずエラーにします。同じカメラを複数ノードから開かないでください。
-
-## リアルタイムパラメータ調整 GUI
-
-実機（Jetson）やUnityのノードを再起動したり再ビルド（`colcon build`）することなく、GUI のスライダーから射出枠・カメラ取付姿勢・空間ROI・クラスタ閾値・弾道予測パラメータをリアルタイムに調整できます。
+Unity・bagを見るRVizにはシミュレーション時計を指定します。
 
 ```bash
-# 手元のノートPCまたはJetsonで起動
+rviz2 -d ~/ros2_ws/src/realsense_dust_cloth/rviz/cloth_tracker.rviz \
+  --ros-args -p use_sim_time:=true
+```
+
+Fixed Frameは`base_link`（YAMLの`camera_parent_frame`を変えた場合はそれに合わせます）。赤い点が最後の実測位置、黄色い線と点が実測軌跡です。`LOST`でも最後の位置を残します。表示が残っていること自体は追跡継続を意味しません。
+
+**通常表示では点群・ROI・TF・重複するPath表示を無効にしています。** 位置と黄色い軌跡は点群なしで見られます。PathやTFも必要なときに有効にしてください。原因を調べるときだけ、次の表示を有効にしてください。
+
+| RViz表示 | トピック | 用途 |
+|---|---|---|
+| ROI Filtered Points | `/cloth/debug/filtered_points` | ROI・背景差分・間引き後の点群 |
+| Cloth Candidate Cluster | `/cloth/debug/cluster_points` | 今回採用した候補クラスタ |
+| ROI & Launch Gate Boxes | `/cloth/debug/roi_markers` | 探索空間・射出枠 |
+| Dynamic Cloud (gn10) | `/realsense/dynamic_cloud` | 外部点群経路だけ。標準の深度経路では使わない |
+
+点群・ROIの表示には`publish_debug_cloud: true`が必要です。点群は購読者がいる表示フレームだけ抽出し、`debug_publish_hz`（標準5Hz）で配信します。位置・TFの追跡周期は維持し、軌跡メッセージは`static_marker_interval_sec`（標準0.1秒）で表示します。開始・終了は直ちに表示します。
+
+![RViz表示例](docs/rviz_tracking.png)
+
+表示確認時の追加射出も終盤でLOSTでした。画像は軌跡を表示できることの確認であり、着地成功を示すものではありません。
+
+## パラメータ調整GUI
+
+```bash
+source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
-ros2 run realsense_dust_cloth param_tuner_gui.py
+ros2 run realsense_dust_cloth param_tuner_gui.py --profile tracker_params.yaml
+# Unity用なら --profile unity_params.yaml
 ```
 
-- **リモートJetsonと手元PCの連携**: 同じ `ROS_DOMAIN_ID` を設定していれば、手元のノートPCでGUIを動かすだけで、Jetsonで動作中の `/cloth_tracker_cuda_node` へWi-Fi（ROS 2 DDS）経由で変更が即座に反映されます。カメラ角度を変更すると静的TFも即座に再配信されます。
-- **日本語コメント保持のYAML自動保存**: スライダーや数値を操作すると、実行中のノードに反映されると同時に、設定ファイル（`config/tracker_params.yaml` / `unity_params.yaml` / `rosbag_params.yaml` の `src/` および `install/`）の日本語コメントやレイアウトを壊さずにインプレース自動更新します。
-- **オフライン編集対応**: ノードが起動していない場合でも「オフライン（YAML直接保存モード）」として動作し、YAML設定の調整ツールとして利用可能です。
+PCとJetsonは同じ版をビルドしてください。古いノードにはGUIの新しい項目が未実装の場合があります。
 
-## rosbagの入力段階
+PCからJetsonを調整するときも同じ`ROS_DOMAIN_ID`にします。接続中はノードの実際の値を読み込み、変更が受理されたら選択したローカルYAMLへ保存します。オフラインではローカルYAMLだけを編集します。コメントは維持します。
 
-`rosbag_params.yaml` の `input_source` で、収録データのどの段階から再検証するか指定します。追跡方式はいずれもlocalization連携方式です。
+保存先は初期指定プロファイル1つです。「全プロファイル同期」を明示的に選んだ場合だけ3種類へ保存します。**PCで開いたGUIが保存するのはPC上のYAMLです。Jetson上のファイルを遠隔で書き換える機能ではありません。** Jetson再起動後も残すには、調整した設定をJetsonにも反映してください。
 
-- `dynamic_cloud`：記録済み `/realsense/dynamic_cloud` を再追跡。画像・カメラ情報は不要。上流で除去された点は復元できず、背景フィルタの再評価にはなりません。
-- `cropped_cloud`：記録済みの除去前点群をgn10へ再投入。元のクロップ点群を `/bag/realsense/cropped_cloud` へremapし、入出力ループを避けます。gn10側の自己位置・地図に必要な入力も揃っている必要があります。
-- `depth`：深度画像・camera_infoから全経路を再計算。自己位置推定用センサ、地図、カメラ取付設定も必要です。
+### 2種類のリセット
 
-差分後点群だけを再追跡する例：
+| ボタン | 動作 |
+|---|---|
+| **調整前へ戻す** | このGUIを開いた後に変更した項目を、変更前のノード値・各YAMLの値へ戻す。再読込しても戻し先は保持する |
+| **追跡&背景リセット** | `/cloth/reset`へEmptyを送り、追跡状態・背景リング・内部の軌跡履歴をリセットする。パラメータは元に戻さない |
+
+「調整前へ戻す」は固定の工場値や古いコミット値ではありません。環境ごとに異なる元値を保ち、このGUIが変更した項目だけを戻します。GUIを閉じると戻し先の記録は失われます。接続中に変更したノードを戻すには、そのノードへ接続できる必要があります。
+
+「ノード/YAMLから再読込」は現在値の再取得であり、変更取り消しではありません。手動でYAMLを書き換えた場合はノードを再起動してください。`ros2 param set`だけではYAMLへ保存しません。
+
+![一時YAMLを使ったGUI表示確認](docs/parameter_tuner.png)
+
+## Jetsonの負荷・Wi-Fi帯域を抑える
+
+通常運転の実機YAMLは、カラー・生深度配信・Jetson上のRViz・解析・bag記録を無効にしています。USBから取得する追跡用深度は60fpsのままです。
+
+| 項目 | 設定・実装 |
+|---|---|
+| 生深度の遠隔配信 | `publish_raw_depth: false`。明示許可＋購読者がいる場合だけ配信 |
+| カラー | `enable_color_stream: false`。必要時だけ有効化 |
+| 点群表示 | 購読者がいる点群だけ抽出。標準最大5Hz |
+| 軌跡・Path | 購読者がいる出力だけ組み立て、標準0.1秒間隔で表示 |
+| 状態 | 変化したときだけ配信。Transient Localなので後から接続した購読者も最新値を取得できる |
+| ログ | 毎実測点の詳細ログはDEBUG。射出・終了・拒否理由はINFOで確認可能 |
+
+640×480の生深度16bit・60fpsは画像データだけで約295Mbps、生カラー24bit・30fpsは約221Mbpsです。RealSense→JetsonのUSB取得自体はWi-Fiを使いません。遠隔のRVizやbag記録が大きなトピックを購読するとWi-Fiへ流れます。JPEGを見るときも同時に生画像を購読しないようにします。
+
+Jetson内で生深度bagを記録する場合は`publish_raw_depth: true`にしてください。falseのままでは、記録対象へ指定しても画像は届きません。CameraInfoだけを購読しても生深度画像は配信しません。
+
+**最大限の最適化が済んだとは言えません。** クラスタ結合には全点対比較O(N²)が残り、8192点なら約3355万組/フレームを調べます。点数が多い場面や、同じJetson上の別ノードと競合する場面は実機で測定が必要です。推測で追跡FPSを落としたり、軌跡を偽って補完したりはしていません。
+
+Jetsonで`tegrastats --interval 1000`を実行し、RVizなし／軌跡だけ／点群ありでCPU・GPU・メモリ・クロックを比較してください。別ノードのLiDAR点群・地図配信も通信量へ加わります。このPC上の測定だけでJetsonの負荷削減率を断定しません。
+
+## 外部点群経路を使う場合
+
+`input_source`をYAMLで選びます。標準の`depth`経路では、外部点群の購読・外部結果待ち監視は起動しません。
+
+- `depth`: 深度画像からGPU背景差分・追跡。地図・自己位置は不要。
+- `dynamic_cloud`: 記録済み／外部の`/realsense/dynamic_cloud`を追跡。上流が消した点は復元できない。
+- `cropped_cloud`: `/bag/realsense/cropped_cloud`から除去前点群を受信し、gn10へ再投入して差分後点群を追跡。gn10の地図・自己位置・TFが必要。
+
+外部経路での予測保護球は`/cloth/filter_prediction`、gn10への入力は`/realsense/cropped_cloud`です。RealSense点群をLiDAR自己位置推定そのものへ投入する構成ではありません。
+
+## 状態と切り分け
+
+| 状態・症状 | 確認するもの |
+|---|---|
+| `WAITING_FOR_CAMERA_INFO` | 深度と対応するCameraInfo、トピック名 |
+| `IMAGE_TIME_INVALID` | 時計・画像ヘッダー時刻・入力遅延 |
+| `RESULT_TIMEOUT` / `FILTER_*` | 外部経路の点群・gn10・TF・地図。標準の深度経路には不要 |
+| `IDLE`のまま | 背景への取り込み、ROI、発射枠、最小点数・変位 |
+| `LOST` | ログの拒否理由、床付近の背景除去、候補クラスタ、物理条件 |
+| `Depth voxel capacity exceeded` | 点数超過。ROI・Voxelサイズを確認。黙って点を切り捨てない |
+
+- `TRACKING`: 実測候補を追跡中。
+- `LANDED`: 採用した実測点が`landing_min_z`以下。別物を採用すれば誤判定もあり得るため、正解ラベルではない。
+- `LOST`: 欠測・異常候補・時間切れで終了。着地扱いにはしない。
+- `RESTING`: 着地高さより上で静止。着地成功とは別。
+- `/cloth/position`・`/cloth/measured_path`は採用実測。予測だけの点を混ぜない。
+- `/cloth/landing_position`はLANDED時のみ。`/cloth/tracking_state`で状態を確認する。
+- `/cloth/ready`は準備状態の通知で、射出装置を禁止する機構ではない。
+
+## 実装・検証の入口
+
+| ファイル | 役割 |
+|---|---|
+| `src/camera_input.cpp` | 背景更新・凍結・深度トピック入力 |
+| `src/realsense_camera.cpp` | USB直結と画像配信 |
+| `src/cuda_kernels.cu` | 背景差分・ROI・間引き・クラスタ |
+| `src/ballistic_tracker.cpp` | 射出確認・予測・物理条件 |
+| `src/tracking_output.cpp` | 位置・TF・軌跡表示 |
+| `src/tracking_status.cpp` | 状態変化の配信 |
+| `src/tracker_parameters.cpp` | YAML読込・実行中の変更 |
+| `src/external_cloud_tracking.cpp` | 外部差分点群経路 |
+| `realsense_dust_cloth/param_tuner_gui.py` | GUI・調整取り消し・選択YAMLへの保存 |
 
 ```bash
-ros2 bag play /path/to/bag --clock 100 --topics /realsense/dynamic_cloud
+colcon test --packages-select realsense_dust_cloth
+colcon test-result --verbose
 ```
 
-記録済み `/cloth/position`、着地・状態・マーカーは、新しい出力と混ざるため同じトピックで再生しません。全経路の再計算では、記録済みクロップ点群・差分点群・予測マーカーも入力から除きます。bagで収録したmap TFと、新たなlocalizationのTFを二重配信しないよう、再生する入力を選びます。
-
-カメラの固定TFをbagから再生する場合は `publish_static_tf: false` にします。深度画像を再計算するときは、YAMLの取付位置・角度が記録時と一致していることを確認してください。
-
-## 調整と原因の切り分け
-
-YAMLは実行環境、カメラ、ROI、射出、飛翔、GPU、gn10接続、表示・ログの項目に分けています。
-
-| 状態・症状 | 確認する内容 |
-|---|---|
-| `RESULT_TIMEOUT` | 差分後点群の配信、gn10の状態、時計、入力データの有無 |
-| `IMAGE_TIME_INVALID` | 実機/Unity/bagの時計と入力の遅延 |
-| `FILTER_*` | gn10の `realsense:` 設定、自己位置、TF、地図 |
-| `IDLE` のまま | 入力点が残っているか、ROI、射出枠、最小点数・移動量 |
-| 飛翔中に `LOST` | 欠測、物理条件、上流での除去、点数・予測とのずれ |
-| 雑巾が上流で消える | gn10の高さ上限、床閾値、地図距離、最小動的点数 |
-
-特に、gn10の `realsense.height_max` が射出位置や軌道より低いと、追跡側に届く前に消えます。追跡側の点数しきい値を下げても、上流で消えた点は戻りません。
-
-`publish_debug_cloud: true` でROI枠、探索後の点群、候補クラスタを表示できます。GPUからの転送と通信負荷が増えるので、調査後はfalseに戻して比較します。点群が空でも、デバッグ配信が無効なだけなのか、実際に点がないのかを区別してください。
-
-## 状態と出力の意味
-
-- `TRACKING`：実測候補を追跡中。
-- `LANDED`：採用した実測点が `landing_min_z` 以下になった。
-- `LOST`：異常候補、欠測、時間切れで終了。空中で切れた位置を着地位置として発行しない。
-- `RESTING`：着地高さより上で静止した。着地成功として扱わない。
-- `/cloth/position` と `/cloth/measured_path` は採用した実測値。欠測中の予測点を実測として混ぜない。
-- `/cloth/landing_position` は実測によるLANDED時のみ。最後の位置・軌跡は表示に残る。
-- `/cloth/ready` は準備状態の通知であり、射出装置を自動で禁止する信号ではない。
-
-## コードの入口
-
-| 役割 | ファイル |
-|---|---|
-| パラメータ調整 GUI | `realsense_dust_cloth/param_tuner_gui.py` |
-| 起動・終了の順序 | `src/cloth_tracker_cuda_node.cpp` |
-| YAML読込・設定検証 | `src/tracker_parameters.cpp` |
-| 画像トピック入力・カメラTF | `src/camera_input.cpp` |
-| USB直結のRealSense取得 | `src/realsense_camera.cpp` |
-| 非同期の色画像配信 | `src/color_stream.cpp` |
-| 実測位置・着地・軌跡の配信 | `src/tracking_output.cpp` |
-| 点群の受信・gn10への送信・入力途絶処理 | `src/external_cloud_tracking.cpp` |
-| ROI・間引き・クラスタ選択 | `src/cuda_kernels.cu` |
-| 射出確認・予測・異常と着地の判定 | `src/ballistic_tracker.cpp` |
-| 状態トピック | `src/tracking_status.cpp` |
-
-今回の削除・変更・設定名の移行は `CHANGES_20261102.md` に記載します。Jetsonの負荷と、雑巾を最後まで追える割合は実機で測定する必要があります。
-
-コードを読む順序・今回の整理・削除した処理は `CODE_STRUCTURE.md` にまとめています。
+GPUを使うテストはCUDAデバイスがない環境ではスキップします。テスト用ROSドメインは実機と分けます。古い構成・整理時の記録は`CHANGES_20261102.md`と`CODE_STRUCTURE.md`に残しています。

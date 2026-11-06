@@ -111,6 +111,8 @@ install(DIRECTORY
 if(BUILD_TESTING)
   enable_testing()
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME gui_session COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_gui_session.py $<TARGET_FILE:cloth_tracker_cuda_node>)
+  set_tests_properties(gui_session PROPERTIES SKIP_RETURN_CODE 77 ENVIRONMENT "ROS_DOMAIN_ID=96;ROS_LOCALHOST_ONLY=1;QT_QPA_PLATFORM=offscreen")
   add_test(NAME launch_profiles COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_launch_profiles.py)
   add_executable(point_cloud_io_test test/test_point_cloud_io.cpp)
   target_include_directories(point_cloud_io_test PRIVATE include ${CUDAToolkit_INCLUDE_DIRS})

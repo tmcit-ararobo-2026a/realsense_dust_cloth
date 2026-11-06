@@ -119,6 +119,7 @@ class ClothTrackerCudaNode : public rclcpp::Node {
     FilterConfig filter_cfg_;
     BallisticTracker ballistic_tracker_;
     TrackerState prev_state_{TrackerState::IDLE};
+    TrackerState last_visualization_state_{TrackerState::IDLE};
     bool intrinsics_ready_{false};
 
     // カメラと座標系の設定。値は起動時にYAMLから取得する。
@@ -160,6 +161,8 @@ class ClothTrackerCudaNode : public rclcpp::Node {
     bool debug_frame_due_{false};
     double bg_update_interval_sec_{};
     double last_background_update_sec_{-1.0};
+    std::string last_input_status_, last_tracking_status_;
+    bool ready_published_{false}, last_ready_{false};
     std::string landing_position_topic_{"/cloth/landing_position"};
 
     // ROS購読・タイマー

@@ -136,7 +136,7 @@
     trajectory_history_sec: 15.0  # RViz 軌跡描画履歴保持時間 [s]
     min_trajectory_step_m: 0.005  # 軌跡に点を追加する最小移動量 [m]
     max_trajectory_points: 1000  # 保持する軌跡の最大点数 [点]
-    static_marker_interval_sec: 0.1  # 追跡終了後のマーカー再配信間隔 [s]
+    static_marker_interval_sec: 0.1  # 軌跡・マーカー・Pathの表示間隔 [s]。位置とTFの追跡周期は維持
     landing_position_topic: /cloth/landing_position  # 着地推定位置パブリッシュトピック名
     warning_log_throttle_ms: 5000  # 警告の最小表示間隔 [ms]
     status_log_throttle_ms: 1000  # 状態ログの最小表示間隔 [ms]

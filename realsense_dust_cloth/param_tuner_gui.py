@@ -12,7 +12,7 @@ from ament_index_python.packages import get_package_share_directory
 import rclpy
 from rclpy.node import Node
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
-from rcl_interfaces.srv import GetParameters, SetParameters
+from rcl_interfaces.srv import GetParameters, SetParametersAtomically
 from std_msgs.msg import Empty
 import yaml
 
@@ -45,7 +45,7 @@ TAB_SPECS: List[Tuple[str, List[ParamSpec]]] = [
             ParamSpec("pending_reset_sec", "射出候補リセット時間 [s]", "double", 0.05, 1.0, 0.01, 2),
             ParamSpec("pending_max_drop_m", "射出候補最大落下許容 [m]", "double", 0.01, 1.0, 0.01, 2),
             ParamSpec("camera_pitch_deg", "カメラ仰角 Pitch [deg]", "double", -45.0, 45.0, 0.5, 2),
-            ParamSpec("camera_roll_deg", "カメラ傾き Roll [deg]", "double", -45.0, 45.0, 0.5, 2),
+            ParamSpec("camera_roll_deg", "カメラ傾き Roll [deg]", "double", -180.0, 180.0, 0.5, 2),
             ParamSpec("camera_x_offset_m", "カメラ前後オフセット X [m]", "double", -1.0, 1.0, 0.01, 3),
             ParamSpec("camera_height_offset_m", "カメラ高さオフセット Z [m]", "double", 0.0, 2.0, 0.01, 3),
         ],
@@ -60,7 +60,7 @@ TAB_SPECS: List[Tuple[str, List[ParamSpec]]] = [
             ParamSpec("min_cloth_size_m", "雑巾の最小サイズ [m]", "double", 0.01, 0.50, 0.01, 2),
             ParamSpec("max_cloth_size_m", "雑巾の最大サイズ (構造物除外) [m]", "double", 0.10, 2.00, 0.05, 2),
             ParamSpec("prediction_distance_weight", "予測位置への近さ重み", "double", 0.0, 20.0, 0.5, 2),
-            ParamSpec("cluster_size_weight", "点数ボーナス重み", "double", 0.0, 2.0, 0.01, 3),
+            ParamSpec("cluster_size_weight", "正規化した点数の重み", "double", 0.0, 2.0, 0.01, 3),
             ParamSpec("launch_forward_weight", "射出時の前方優先重み", "double", 0.0, 10.0, 0.1, 2),
             ParamSpec("external_tracking_keep_radius_m", "gn10追従保護半径 [m]", "double", 0.0, 3.0, 0.05, 2),
             ParamSpec("min_x_m", "ROI X最小 (前方) [m]", "double", 0.0, 5.0, 0.1, 2),
@@ -98,8 +98,12 @@ TAB_SPECS: List[Tuple[str, List[ParamSpec]]] = [
         ],
     ),
     (
-        "4. GPU背景差分 & 射出連携",
+        "4. 背景差分・表示・射出連携",
         [
+            ParamSpec("debug_publish_hz", "表示点群の最大配信頻度 [Hz]", "double", 1.0, 30.0, 1.0, 1),
+            ParamSpec("static_marker_interval_sec", "軌跡表示の最小間隔 [s]", "double", 0.02, 1.0, 0.01, 2),
+            ParamSpec("publish_raw_depth", "USB生深度配信（帯域大・bag記録用）", "bool"),
+            ParamSpec("bg_update_interval_sec", "待機中の背景更新間隔 [s]", "double", 0.01, 1.0, 0.01, 2),
             ParamSpec("use_bg_subtraction", "GPU深度背景差分を有効化", "bool"),
             ParamSpec("bg_diff_thresh_m", "背景判定手前しきい値 [m]", "double", 0.02, 0.50, 0.01, 2),
             ParamSpec("bg_pre_shot_exclude_sec", "射出前除外時間 [s]", "double", 0.0, 0.30, 0.01, 2),
@@ -107,64 +111,6 @@ TAB_SPECS: List[Tuple[str, List[ParamSpec]]] = [
         ],
     ),
 ]
-
-CF49CF2_DEFAULTS: Dict[str, ParamScalar] = {
-    "launch_min_x": 0.80,
-    "launch_max_x": 1.35,
-    "launch_min_y": -0.25,
-    "launch_max_y": 0.30,
-    "launch_min_z": 1.45,
-    "launch_max_z": 2.10,
-    "min_launch_vx": 0.30,
-    "min_launch_move_m": 0.05,
-    "pending_reset_sec": 0.25,
-    "pending_max_drop_m": 0.50,
-    "camera_pitch_deg": 20.0,
-    "camera_roll_deg": 90.0,
-    "camera_x_offset_m": 0.50,
-    "camera_height_offset_m": 1.00,
-    "min_cluster_points": 25,
-    "min_tracking_points": 4,
-    "cluster_eps_m": 0.10,
-    "voxel_size_m": 0.02,
-    "min_cloth_size_m": 0.05,
-    "max_cloth_size_m": 0.60,
-    "prediction_distance_weight": 2.0,
-    "cluster_size_weight": 0.05,
-    "launch_forward_weight": 1.0,
-    "external_tracking_keep_radius_m": 0.30,
-    "min_x_m": 0.60,
-    "max_x_m": 5.00,
-    "min_y_m": -0.60,
-    "max_y_m": 0.60,
-    "min_z_m": 0.05,
-    "max_z_m": 4.00,
-    "tube_radius_m": 0.65,
-    "vel_smoothing_beta": 0.50,
-    "drag_coeff": 0.40,
-    "centroid_position_tolerance_m": 0.08,
-    "vertical_jitter_tolerance_m": 0.06,
-    "backward_jitter_tolerance_m": 0.04,
-    "max_total_accel_m_s2": 45.0,
-    "min_vertical_accel_m_s2": -35.0,
-    "max_lateral_accel_m_s2": 30.0,
-    "max_heading_deg": 55.0,
-    "min_flight_vx_m_s": -1.50,
-    "max_vx_m_s": 15.0,
-    "max_abs_vy_m_s": 2.50,
-    "min_vz_m_s": -10.0,
-    "max_vz_m_s": 8.0,
-    "max_lost_frames": 12,
-    "max_anomaly_frames": 2,
-    "landing_min_z": 0.15,
-    "reject_ascent_after_apex": True,
-    "abort_on_anomaly": True,
-    "publish_debug_cloud": True,
-    "use_bg_subtraction": True,
-    "bg_diff_thresh_m": 0.12,
-    "bg_pre_shot_exclude_sec": 0.08,
-    "shot_window_sec": 2.5,
-}
 
 
 def format_yaml_scalar(value: ParamScalar, param_type: str) -> str:
@@ -207,6 +153,17 @@ def update_yaml_file_in_place(
     return modified
 
 
+def restore_yaml_values(path: Path, before: str, names: set) -> None:
+    """Restore only GUI-edited scalar tokens; retain comments and other edits."""
+    text = path.read_text(encoding="utf-8")
+    for name in names:
+        pattern = rf"(?m)^([ \t]*{re.escape(name)}[ \t]*:[ \t]*)([^\s#]+)"
+        original = re.search(pattern, before)
+        if original:
+            text = re.sub(pattern, lambda m: m[1] + original[2], text, count=1)
+    path.write_text(text, encoding="utf-8")
+
+
 def discover_config_dirs() -> List[Path]:
     dirs: List[Path] = []
     script_path = Path(__file__).resolve()
@@ -232,15 +189,20 @@ def discover_config_dirs() -> List[Path]:
     return dirs
 
 
+def read_yaml_parameters(path: Path) -> Dict[str, ParamScalar]:
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    # ROSのワイルドカードと明示ノード名の両方に対応。明示設定を優先する。
+    values = dict(data.get("/**", {}).get("ros__parameters", {}) or {})
+    for key in ("cloth_tracker_cuda_node", "/cloth_tracker_cuda_node"):
+        values.update(data.get(key, {}).get("ros__parameters", {}) or {})
+    return values
+
+
 def load_yaml_defaults(profile_name: str = "tracker_params.yaml") -> Dict[str, ParamScalar]:
     for cfg_dir in discover_config_dirs():
         yaml_file = cfg_dir / profile_name
         if yaml_file.is_file():
-            data = yaml.safe_load(yaml_file.read_text(encoding="utf-8")) or {}
-            return (
-                data.get("cloth_tracker_cuda_node", {}).get("ros__parameters", {})
-                or {}
-            )
+            return read_yaml_parameters(yaml_file)
     return {}
 
 
@@ -252,7 +214,7 @@ class RosParamBridge(Node):
             GetParameters, f"{self.target_node}/get_parameters"
         )
         self.set_cli = self.create_client(
-            SetParameters, f"{self.target_node}/set_parameters"
+            SetParametersAtomically, f"{self.target_node}/set_parameters_atomically"
         )
         self.reset_pub = self.create_publisher(Empty, "/cloth/reset", 10)
 
@@ -284,29 +246,26 @@ class RosParamBridge(Node):
     def push_remote_param(
         self, name: str, value: ParamScalar, param_type: str
     ) -> bool:
+        return self.push_remote_params({name: (value, param_type)})
+
+    def push_remote_params(self, updates: Dict[str, Tuple[ParamScalar, str]]) -> bool:
+        if not updates:
+            return True
         if not self.set_cli.wait_for_service(timeout_sec=0.15):
             return False
-        param = Parameter()
-        param.name = name
-        param.value = ParameterValue()
-        if param_type == "bool":
-            param.value.type = ParameterType.PARAMETER_BOOL
-            param.value.bool_value = bool(value)
-        elif param_type == "int":
-            param.value.type = ParameterType.PARAMETER_INTEGER
-            param.value.integer_value = int(round(float(value)))
-        else:
-            param.value.type = ParameterType.PARAMETER_DOUBLE
-            param.value.double_value = float(value)
-
-        req = SetParameters.Request()
-        req.parameters = [param]
+        req = SetParametersAtomically.Request()
+        for name, (value, param_type) in updates.items():
+            param = Parameter(name=name)
+            if param_type == "bool":
+                param.value = ParameterValue(type=ParameterType.PARAMETER_BOOL, bool_value=bool(value))
+            elif param_type == "int":
+                param.value = ParameterValue(type=ParameterType.PARAMETER_INTEGER, integer_value=int(round(value)))
+            else:
+                param.value = ParameterValue(type=ParameterType.PARAMETER_DOUBLE, double_value=float(value))
+            req.parameters.append(param)
         future = self.set_cli.call_async(req)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=0.5)
-        if not future.done() or future.result() is None:
-            return False
-        results = future.result().results
-        return bool(results and results[0].successful)
+        rclpy.spin_until_future_complete(self, future, timeout_sec=0.8)
+        return bool(future.done() and future.result() and future.result().result.successful)
 
 
 def run_gui(target_node: str, initial_profile: str) -> int:
@@ -331,7 +290,7 @@ def run_gui(target_node: str, initial_profile: str) -> int:
 
     rclpy.init()
     bridge = RosParamBridge(target_node=target_node)
-    app = QApplication(sys.argv)
+    app = QApplication.instance() or QApplication(sys.argv)
 
     all_specs: Dict[str, ParamSpec] = {
         spec.name: spec for _, specs in TAB_SPECS for spec in specs
@@ -346,6 +305,15 @@ def run_gui(target_node: str, initial_profile: str) -> int:
             self.resize(820, 760)
             self._updating_ui = False
             self._widgets: Dict[str, Tuple[Optional[QSlider], QWidget]] = {}
+            self._remote_before: Dict[str, ParamScalar] = {}
+            self._remote_changed = set()
+            self._file_before: Dict[Path, str] = {}
+            self._file_changed: Dict[Path, set] = {}
+            for directory in discover_config_dirs():
+                for name in ("tracker_params.yaml", "unity_params.yaml", "rosbag_params.yaml"):
+                    path = (directory / name).resolve()
+                    if path.is_file():
+                        self._file_before[path] = path.read_text(encoding="utf-8")
 
             central = QWidget()
             self.setCentralWidget(central)
@@ -367,31 +335,33 @@ def run_gui(target_node: str, initial_profile: str) -> int:
                     "rosbag_params.yaml (Rosbag 再生)",
                 ]
             )
-            if initial_profile == "unity_params.yaml":
-                self.profile_combo.setCurrentIndex(2)
-            elif initial_profile == "tracker_params.yaml":
-                self.profile_combo.setCurrentIndex(1)
+            self.profile_combo.setCurrentIndex(
+                {"tracker_params.yaml": 1, "unity_params.yaml": 2, "rosbag_params.yaml": 3}[initial_profile]
+            )
             header_layout.addWidget(self.profile_combo)
 
+            button_layout = QHBoxLayout()
             reload_btn = QPushButton("ノード/YAMLから再読込")
             reload_btn.clicked.connect(self.reload_parameters)
-            header_layout.addWidget(reload_btn)
+            button_layout.addWidget(reload_btn)
 
-            reset_defaults_btn = QPushButton("↺ デフォルト値に戻す")
-            reset_defaults_btn.setStyleSheet(
+            restore_btn = QPushButton("↺ 調整前へ戻す")
+            restore_btn.setStyleSheet(
                 "background-color: #e0f2fe; color: #0369a1; font-weight: bold; padding: 4px 8px;"
             )
-            reset_defaults_btn.clicked.connect(self.reset_to_defaults)
-            header_layout.addWidget(reset_defaults_btn)
+            restore_btn.clicked.connect(self.reset_to_initial)
+            restore_btn.setToolTip("このGUIを開いた後に変更した項目を、変更前のノード値・YAML値へ戻す")
+            button_layout.addWidget(restore_btn)
 
             reset_tracker_btn = QPushButton("⚡ 追跡&背景リセット")
             reset_tracker_btn.setStyleSheet(
                 "background-color: #fef08a; color: #854d0e; font-weight: bold; padding: 4px 8px;"
             )
             reset_tracker_btn.clicked.connect(self.trigger_tracking_reset)
-            header_layout.addWidget(reset_tracker_btn)
+            button_layout.addWidget(reset_tracker_btn)
 
             root_layout.addLayout(header_layout)
+            root_layout.addLayout(button_layout)
 
             # Tabs
             tabs = QTabWidget()
@@ -484,6 +454,13 @@ def run_gui(target_node: str, initial_profile: str) -> int:
             self.timer.timeout.connect(self.check_connection)
             self.timer.start(1000)
             self.reload_parameters()
+            self._remote_before = bridge.fetch_remote_params(list(all_specs)) or {}
+            self.profile_combo.currentIndexChanged.connect(self.reload_parameters)
+
+        def selected_profiles(self) -> List[str]:
+            profiles = ["tracker_params.yaml", "unity_params.yaml", "rosbag_params.yaml"]
+            index = self.profile_combo.currentIndex()
+            return profiles if index == 0 else [profiles[index - 1]]
 
         def check_connection(self) -> None:
             rclpy.spin_once(bridge, timeout_sec=0.01)
@@ -507,7 +484,8 @@ def run_gui(target_node: str, initial_profile: str) -> int:
             try:
                 values = bridge.fetch_remote_params(list(all_specs.keys()))
                 if not values:
-                    values = load_yaml_defaults(initial_profile)
+                    profiles = self.selected_profiles()
+                    values = load_yaml_defaults(profiles[0] if len(profiles) == 1 else initial_profile)
                 for name, val in values.items():
                     if name not in self._widgets:
                         continue
@@ -531,76 +509,55 @@ def run_gui(target_node: str, initial_profile: str) -> int:
         def on_value_changed(self, spec: ParamSpec, value: ParamScalar) -> None:
             if self._updating_ui:
                 return
-            bridge.push_remote_param(spec.name, value, spec.param_type)
+            if bridge.is_remote_available():
+                if spec.name not in self._remote_before:
+                    before = bridge.fetch_remote_params([spec.name]) or {}
+                    if spec.name not in before:
+                        self.status_label.setText("変更前のノード値を取得できません。再読込してから操作してください")
+                        return
+                    self._remote_before[spec.name] = before[spec.name]
+                if not bridge.push_remote_param(spec.name, value, spec.param_type):
+                    self.reload_parameters()
+                    self.status_label.setText(f"ノードが変更を拒否しました: {spec.name}（YAMLには保存していません）")
+                    return
+                self._remote_changed.add(spec.name)
 
-            idx = self.profile_combo.currentIndex()
-            if idx == 0:
-                targets = [
-                    "tracker_params.yaml",
-                    "unity_params.yaml",
-                    "rosbag_params.yaml",
-                ]
-            elif idx == 1:
-                targets = ["tracker_params.yaml"]
-            elif idx == 2:
-                targets = ["unity_params.yaml"]
-            else:
-                targets = ["rosbag_params.yaml"]
-
-            for cfg_dir in discover_config_dirs():
-                for fname in targets:
-                    update_yaml_file_in_place(
-                        cfg_dir / fname, {spec.name: (value, spec.param_type)}
-                    )
+            for directory in discover_config_dirs():
+                for name in self.selected_profiles():
+                    path = (directory / name).resolve()
+                    if not path.is_file():
+                        continue
+                    if path not in self._file_before:
+                        self._file_before[path] = path.read_text(encoding="utf-8")
+                    self._file_changed.setdefault(path, set()).add(spec.name)
+                    update_yaml_file_in_place(path, {spec.name: (value, spec.param_type)})
 
         def trigger_tracking_reset(self) -> None:
             bridge.publish_reset()
             self.status_label.setText("⚡ /cloth/reset を送信しました (軌跡クリア & 背景再初期化)")
             self.status_label.setStyleSheet("color: #b45309; font-weight: bold; padding: 4px;")
 
-        def reset_to_defaults(self) -> None:
-            self._updating_ui = True
-            try:
-                for name, val in CF49CF2_DEFAULTS.items():
-                    if name not in all_specs or name not in self._widgets:
-                        continue
-                    spec = all_specs[name]
-                    slider, widget = self._widgets[name]
-                    if spec.param_type == "bool":
-                        widget.setChecked(bool(val))
-                    elif spec.param_type == "int":
-                        widget.setValue(int(round(float(val))))
-                        if slider is not None:
-                            slider.setValue(int(round(float(val))))
-                    else:
-                        scale = round(1.0 / spec.step)
-                        widget.setValue(float(val))
-                        if slider is not None:
-                            slider.setValue(int(round(float(val) * scale)))
-                    bridge.push_remote_param(name, val, spec.param_type)
-
-                targets = [
-                    "tracker_params.yaml",
-                    "unity_params.yaml",
-                    "rosbag_params.yaml",
-                ]
-                updates = {
-                    name: (val, all_specs[name].param_type)
-                    for name, val in CF49CF2_DEFAULTS.items()
-                    if name in all_specs
-                }
-                for cfg_dir in discover_config_dirs():
-                    for fname in targets:
-                        update_yaml_file_in_place(cfg_dir / fname, updates)
-
-                self.status_label.setText("↺ cf49cf2 デフォルト値を全パラメータに適用しYAMLに保存しました")
-                self.status_label.setStyleSheet("color: #0369a1; font-weight: bold; padding: 4px;")
-            finally:
-                self._updating_ui = False
+        def reset_to_initial(self) -> None:
+            # ファイルごとの元値を保持するので、異なる環境の設定を混ぜない。
+            updates = {
+                name: (self._remote_before[name], all_specs[name].param_type)
+                for name in self._remote_changed
+            }
+            if updates and not bridge.push_remote_params(updates):
+                self.status_label.setText("ノードを調整前へ戻せませんでした。接続を確認して再実行してください")
+                return
+            for path, names in self._file_changed.items():
+                restore_yaml_values(path, self._file_before[path], names)
+            self._remote_changed.clear()
+            self._file_changed.clear()
+            self.reload_parameters()
+            self.status_label.setText("↺ このGUIで変更したノード値・YAML値を調整前へ戻しました")
 
     win = TunerWindow()
     win.show()
     exit_code = app.exec_()
+    win.timer.stop()
+    win.close()
     bridge.destroy_node()
     rclpy.shutdown()
     return exit_code

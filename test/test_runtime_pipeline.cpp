@@ -156,6 +156,46 @@ struct ClothTrackerNodeTestAccess {
         executor.spin_some();
         assert(received >= 2 && received <= 4);
         assert(frames > received * 2);
+
+        int states = 0, paths = 0, markers = 0;
+        auto status_subscription = viewer->create_subscription<std_msgs::msg::String>(
+            "/cloth/tracking_state", rclcpp::QoS(1).transient_local(),
+            [&](std_msgs::msg::String::ConstSharedPtr) { ++states; });
+        auto path_subscription = viewer->create_subscription<nav_msgs::msg::Path>(
+            "/cloth/measured_path", 10, [&](nav_msgs::msg::Path::ConstSharedPtr) { ++paths; });
+        auto marker_subscription = viewer->create_subscription<visualization_msgs::msg::Marker>(
+            "/cloth/trajectory_marker", 10,
+            [&](visualization_msgs::msg::Marker::ConstSharedPtr) { ++markers; });
+        for (int i = 0; i < 200 && (states == 0 || node.pub_path_->get_subscription_count() == 0); ++i) {
+            executor.spin_some();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        assert(states == 1); // 後から接続しても最新の状態を受信できる。
+        for (int i = 0; i < 20; ++i) {
+            node.publish_input_status("READY", true);
+            executor.spin_some();
+        }
+        assert(states == 1); // 状態が同じフレームを毎回配信しない。
+        node.ballistic_tracker_.state = TrackerState::LOST;
+        node.publish_input_status("READY", true);
+        node.has_cloth_pose_ = true;
+        node.trajectory_points_.clear();
+        geometry_msgs::msg::Point first, last;
+        first.x = 1; first.z = 1.6;
+        last.x = 2; last.z = 1;
+        node.trajectory_points_.emplace_back(node.now().seconds(), first);
+        node.trajectory_points_.emplace_back(node.now().seconds(), last);
+        node.last_static_publish_sec_ = 0;
+        const auto display_end = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+        while (std::chrono::steady_clock::now() < display_end) {
+            node.publish_tracking_visualization(node.now(), false);
+            executor.spin_some();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        executor.spin_some();
+        assert(states == 2);
+        assert(paths >= 2 && paths <= 4);
+        assert(markers == paths * 3);
     }
 };
 } // namespace realsense_dust_cloth
