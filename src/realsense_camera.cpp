@@ -169,11 +169,9 @@ void ClothTrackerCudaNode::run_direct_realsense_loop() {
                 const uint16_t* depth_ptr = reinterpret_cast<const uint16_t*>(depth.get_data());
                 process_and_publish(depth_ptr, now);
 
-                // Publish raw depth & camera_info ONLY when subscribed (e.g. ros2 bag record) to ensure ZERO overhead normally
-                bool depth_subscribed =
-                    (pub_raw_depth_ && pub_raw_depth_->get_subscription_count() > 0) ||
-                    (pub_depth_info_ && pub_depth_info_->get_subscription_count() > 0);
-                if (depth_subscribed && pub_raw_depth_) {
+                // 生深度はYAMLで許可され、かつ購読者がいる場合だけ配信。CameraInfoとは独立。
+                if (publish_raw_depth_ && pub_raw_depth_ &&
+                    pub_raw_depth_->get_subscription_count() > 0) {
                     sensor_msgs::msg::Image depth_img;
                     depth_img.header.stamp = now;
                     depth_img.header.frame_id = depth_optical_frame_;
@@ -187,11 +185,10 @@ void ClothTrackerCudaNode::run_direct_realsense_loop() {
                     depth_img.data.resize(depth_size);
                     std::memcpy(depth_img.data.data(), depth.get_data(), depth_size);
                     pub_raw_depth_->publish(depth_img);
-
-                    if (pub_depth_info_) {
-                        depth_info_msg.header.stamp = now;
-                        pub_depth_info_->publish(depth_info_msg);
-                    }
+                }
+                if (pub_depth_info_ && pub_depth_info_->get_subscription_count() > 0) {
+                    depth_info_msg.header.stamp = now;
+                    pub_depth_info_->publish(depth_info_msg);
                 }
             }
 

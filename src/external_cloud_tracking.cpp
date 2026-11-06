@@ -13,6 +13,8 @@ double wall_seconds() {
 } // namespace
 
 void ClothTrackerCudaNode::setup_external_cloud() {
+    if (input_source_ == "depth")
+        return;
     pub_filter_prediction_ = create_publisher<visualization_msgs::msg::Marker>(
         get_parameter("external_prediction_topic").as_string(), publisher_queue_size_);
     pub_cropped_cloud_ = create_publisher<sensor_msgs::msg::PointCloud2>(cropped_cloud_topic_,
@@ -120,9 +122,10 @@ void ClothTrackerCudaNode::dynamic_cloud_callback(
     try {
         const auto points = read_xyz_cloud(*msg, camera_parent_frame_, cuda_ctx_.max_pixels);
         std::vector<float3> cluster, filtered;
+        debug_frame_due_ = debug_frame_due();
         const auto result =
-            find_cloth_candidate(points, stamp.seconds(), publish_debug_cloud_ ? &cluster : nullptr,
-                                 publish_debug_cloud_ ? &filtered : nullptr);
+            find_cloth_candidate(points, stamp.seconds(), want_cluster_debug() ? &cluster : nullptr,
+                                 want_filtered_debug() ? &filtered : nullptr);
         if (cudaGetLastError() != cudaSuccess)
             throw std::runtime_error("CUDA point tracking failed");
         last_external_wall_sec_ = wall_seconds();
@@ -140,8 +143,18 @@ ClothTrackingResult ClothTrackerCudaNode::find_cloth_candidate(const std::vector
                                                                std::vector<float3>* cluster,
                                                                std::vector<float3>* filtered) {
     float px = 0, py = 0, pz = 0;
-    bool predicted = ballistic_tracker_.get_prediction(stamp_sec, px, py, pz);
+    bool predicted = false;
+    const auto search_filter = candidate_search_filter(stamp_sec, px, py, pz, predicted);
+    return process_point_cloud_cuda(cuda_ctx_, points, search_filter, cluster, filtered, px, py, pz,
+                                    predicted);
+}
+
+FilterConfig ClothTrackerCudaNode::candidate_search_filter(
+    double stamp_sec, float& px, float& py, float& pz, bool& predicted) const {
+    predicted = ballistic_tracker_.get_prediction(stamp_sec, px, py, pz);
     auto search_filter = filter_cfg_;
+    if (predicted)
+        search_filter.gate_radius_m = ballistic_tracker_.search_radius_m();
     if (!predicted && ballistic_tracker_.is_pending_launch) {
         // Only the first observation must be in the launch box. A fast cloth may
         // leave that box before the next camera frame confirms its displacement.
@@ -161,8 +174,7 @@ ClothTrackingResult ClothTrackerCudaNode::find_cloth_candidate(const std::vector
             predicted = true;
         }
     }
-    return process_point_cloud_cuda(cuda_ctx_, points, search_filter, cluster, filtered, px, py, pz,
-                                    predicted);
+    return search_filter;
 }
 
 } // namespace realsense_dust_cloth

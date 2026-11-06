@@ -139,6 +139,7 @@ class BallisticTracker {
      * @param pz Output predicted Z (vertical)
      * @return true if actively tracking with valid prediction, false otherwise
      */
+    double search_radius_m() const;
     bool get_prediction(double stamp_sec, float& px, float& py, float& pz) const;
 
     /**

@@ -4,6 +4,25 @@
 
 namespace realsense_dust_cloth {
 
+bool ClothTrackerCudaNode::debug_frame_due() {
+    const auto now = std::chrono::steady_clock::now();
+    if (last_debug_publish_.time_since_epoch().count() != 0 &&
+        std::chrono::duration<double>(now - last_debug_publish_).count() < 1.0 / debug_publish_hz_)
+        return false;
+    last_debug_publish_ = now;
+    return true;
+}
+
+bool ClothTrackerCudaNode::want_cluster_debug() const {
+    return publish_debug_cloud_ && debug_frame_due_ && pub_cluster_cloud_ &&
+           pub_cluster_cloud_->get_subscription_count() > 0;
+}
+
+bool ClothTrackerCudaNode::want_filtered_debug() const {
+    return publish_debug_cloud_ && debug_frame_due_ && pub_filtered_cloud_ &&
+           pub_filtered_cloud_->get_subscription_count() > 0;
+}
+
 void ClothTrackerCudaNode::publish_roi_markers(const rclcpp::Time& stamp,
                                                const ClothTrackingResult& raw_res) {
     if (!pub_roi_markers_)
@@ -35,7 +54,7 @@ void ClothTrackerCudaNode::publish_tracking_result(const ClothTrackingResult& ra
     publish_input_status("READY", ballistic_tracker_.state != TrackerState::TRACKING);
 
     // Publish Debug Point Clouds & ROI Markers after tracker state update
-    if (publish_debug_cloud_) {
+    if (publish_debug_cloud_ && debug_frame_due_) {
         if (pub_filtered_cloud_ && pub_filtered_cloud_->get_subscription_count() > 0) {
             MarkerVisualizer::publish_point_cloud(pub_filtered_cloud_, debug_filtered_pts, stamp,
                                                   camera_parent_frame_);
@@ -46,7 +65,7 @@ void ClothTrackerCudaNode::publish_tracking_result(const ClothTrackingResult& ra
     }
 
     // 今回採用したクラスタだけを表示し、それ以外では表示を消す（購読者がいる時のみ配信）。
-    if (pub_cluster_cloud_ && pub_cluster_cloud_->get_subscription_count() > 0) {
+    if (want_cluster_debug()) {
         if (is_actively_tracked && !debug_cluster_pts.empty()) {
             MarkerVisualizer::publish_point_cloud(pub_cluster_cloud_, debug_cluster_pts, stamp,
                                                   camera_parent_frame_);

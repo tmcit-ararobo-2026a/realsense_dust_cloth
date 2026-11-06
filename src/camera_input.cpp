@@ -217,6 +217,7 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr,
         bg_state_ = BackgroundState::ROLLING;
         shot_freeze_until_sec_ = 0.0;
         reset_background_cuda(cuda_ctx_);
+        last_background_update_sec_ = -1.0;
     }
     last_frame_stamp_sec_ = now_sec;
 
@@ -226,23 +227,30 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr,
     }
 
     // 1. Push depth to GPU ring buffer
-    push_depth_ring_cuda(cuda_ctx_, depth_ptr, camera_intrin_.width, camera_intrin_.height, now_sec);
+    if (filter_cfg_.use_bg_subtraction)
+        push_depth_ring_cuda(cuda_ctx_, depth_ptr, camera_intrin_.width,
+                             camera_intrin_.height, now_sec);
 
     // 2. Manage background freeze expiration
     if (bg_state_ == BackgroundState::FROZEN) {
-        if (now_sec > shot_freeze_until_sec_ && ballistic_tracker_.state == TrackerState::IDLE) {
+        if (now_sec > shot_freeze_until_sec_ &&
+            ballistic_tracker_.state != TrackerState::TRACKING) {
+            // 発射枠に静止物が残っていても、保留候補で背景更新を永久に止めない。
+            ballistic_tracker_.is_pending_launch = false;
+            ballistic_tracker_.first_detect_stamp = 0.0;
             bg_state_ = BackgroundState::ROLLING;
             RCLCPP_INFO(get_logger(), "Shot window expired. Returning to ROLLING background update.");
         }
     }
 
-    // 3. If in ROLLING mode and not currently tracking, update background every 5 frames (~12Hz)
-    if (bg_state_ == BackgroundState::ROLLING && ballistic_tracker_.state == TrackerState::IDLE) {
-        rolling_bg_frame_counter_++;
-        if (rolling_bg_frame_counter_ >= 5) {
-            rolling_bg_frame_counter_ = 0;
-            update_rolling_background_cuda(cuda_ctx_, camera_intrin_.width, camera_intrin_.height, -1.0);
-        }
+    // 背景更新周期もYAMLから取得し、低FPSのbagではフレーム数待ちをしない。
+    if (filter_cfg_.use_bg_subtraction && bg_state_ == BackgroundState::ROLLING &&
+        ballistic_tracker_.state != TrackerState::TRACKING &&
+        !ballistic_tracker_.is_pending_launch &&
+        (last_background_update_sec_ < 0.0 ||
+         now_sec - last_background_update_sec_ >= bg_update_interval_sec_)) {
+        update_rolling_background_cuda(cuda_ctx_, camera_intrin_.width, camera_intrin_.height, -1.0);
+        last_background_update_sec_ = now_sec;
     }
 
     try {
@@ -250,12 +258,15 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr,
         std::vector<float3> debug_filtered_pts;
 
         float pred_x = 0.0f, pred_y = 0.0f, pred_z = 0.0f;
-        bool has_pred = ballistic_tracker_.get_prediction(stamp.seconds(), pred_x, pred_y, pred_z);
+        bool has_pred = false;
+        const auto search_filter =
+            candidate_search_filter(now_sec, pred_x, pred_y, pred_z, has_pred);
+        debug_frame_due_ = debug_frame_due();
 
         ClothTrackingResult raw_res = process_depth_frame_cuda(
-            cuda_ctx_, depth_ptr, camera_intrin_, camera_pose_, filter_cfg_,
-            publish_debug_cloud_ ? &debug_cluster_pts : nullptr,
-            publish_debug_cloud_ ? &debug_filtered_pts : nullptr,
+            cuda_ctx_, depth_ptr, camera_intrin_, camera_pose_, search_filter,
+            want_cluster_debug() ? &debug_cluster_pts : nullptr,
+            want_filtered_debug() ? &debug_filtered_pts : nullptr,
             pred_x, pred_y, pred_z, has_pred);
 
         auto error = cudaGetLastError();
@@ -312,9 +323,12 @@ void ClothTrackerCudaNode::reset_callback(const std_msgs::msg::Empty::SharedPtr)
     bg_state_ = BackgroundState::ROLLING;
     shot_freeze_until_sec_ = 0.0;
     reset_background_cuda(cuda_ctx_);
+    last_background_update_sec_ = -1.0;
 }
 
 void ClothTrackerCudaNode::trigger_freeze(double now_sec) {
+    if (!filter_cfg_.use_bg_subtraction)
+        return;
     if (bg_state_ == BackgroundState::FROZEN) {
         shot_freeze_until_sec_ =
             std::max(shot_freeze_until_sec_, now_sec + filter_cfg_.shot_window_sec);

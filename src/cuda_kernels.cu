@@ -693,7 +693,7 @@ ClothTrackingResult process_depth_frame_cuda(
     if (voxels <= 0)
         return {};
     if (voxels > ctx.max_voxel_points)
-        voxels = ctx.max_voxel_points;
+        throw std::runtime_error("Depth voxel capacity exceeded; increase voxel_size_m or narrow ROI");
 
     return cluster_voxels(ctx, voxels, filter, out_cluster_points, out_filtered_points,
                           pred_x, pred_y, pred_z, has_prediction);

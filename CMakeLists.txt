@@ -36,8 +36,7 @@ else()
 endif()
 
 # Build C++ / CUDA Tracker Node
-add_executable(cloth_tracker_cuda_node
-  src/main.cpp
+set(TRACKER_SOURCES
   src/cloth_tracker_cuda_node.cpp
   src/tracker_parameters.cpp
   src/camera_input.cpp
@@ -50,16 +49,20 @@ add_executable(cloth_tracker_cuda_node
   src/cuda_kernels.cu
 )
 
-target_include_directories(cloth_tracker_cuda_node PUBLIC
+add_library(cloth_tracker_core STATIC ${TRACKER_SOURCES})
+add_executable(cloth_tracker_cuda_node src/main.cpp)
+target_link_libraries(cloth_tracker_cuda_node cloth_tracker_core)
+
+target_include_directories(cloth_tracker_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
   ${CUDAToolkit_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
 )
 
-target_link_libraries(cloth_tracker_cuda_node CUDA::cudart ${OpenCV_LIBRARIES})
+target_link_libraries(cloth_tracker_core CUDA::cudart ${OpenCV_LIBRARIES})
 
-ament_target_dependencies(cloth_tracker_cuda_node
+ament_target_dependencies(cloth_tracker_core
   ament_index_cpp
   rclcpp
   std_msgs
@@ -72,7 +75,7 @@ ament_target_dependencies(cloth_tracker_cuda_node
 )
 
 if(realsense2_FOUND)
-  target_link_libraries(cloth_tracker_cuda_node ${realsense2_LIBRARY} CUDA::cudart)
+  target_link_libraries(cloth_tracker_core ${realsense2_LIBRARY} CUDA::cudart)
 endif()
 
 # Install C++ executable
@@ -119,6 +122,16 @@ if(BUILD_TESTING)
   target_link_libraries(observed_landing_test CUDA::cudart)
   target_compile_options(observed_landing_test PRIVATE -UNDEBUG)
   add_test(NAME observed_landing COMMAND observed_landing_test)
+  add_executable(tracking_recovery_test test/test_tracking_recovery.cpp src/ballistic_tracker.cpp)
+  target_include_directories(tracking_recovery_test PRIVATE include ${CUDAToolkit_INCLUDE_DIRS})
+  target_link_libraries(tracking_recovery_test CUDA::cudart)
+  target_compile_options(tracking_recovery_test PRIVATE -UNDEBUG)
+  add_test(NAME tracking_recovery COMMAND tracking_recovery_test)
+  add_executable(runtime_pipeline_test test/test_runtime_pipeline.cpp)
+  target_link_libraries(runtime_pipeline_test cloth_tracker_core)
+  target_compile_options(runtime_pipeline_test PRIVATE -UNDEBUG)
+  add_test(NAME runtime_pipeline COMMAND runtime_pipeline_test ${CMAKE_CURRENT_SOURCE_DIR}/config/tracker_params.yaml)
+  set_tests_properties(runtime_pipeline PROPERTIES SKIP_RETURN_CODE 77 ENVIRONMENT "ROS_DOMAIN_ID=96;ROS_LOCALHOST_ONLY=1")
 endif()
 
 ament_package()
