@@ -80,6 +80,19 @@ struct ClothTrackerNodeTestAccess {
         assert(!process_point_cloud_cuda(context, points, filter, nullptr, nullptr, 2, 0, 2, true).valid);
         filter.gate_radius_m = .39;
         assert(process_point_cloud_cuda(context, points, filter, nullptr, nullptr, 2, 0, 2, true).valid);
+        // 点数の多い別クラスタより、予測近傍の雑巾を優先する。
+        filter.prediction_distance_weight = 2;
+        filter.cluster_size_weight = .05;
+        filter.max_cluster_points = 8000;
+        points.clear();
+        for (int i = 0; i < 5; ++i)
+            for (int j = 0; j < 4; ++j)
+                points.push_back(make_float3(2.05f, (i - 2) * .012f, 2 + (j - 1.5f) * .012f));
+        for (int i = 0; i < 20; ++i)
+            for (int j = 0; j < 20; ++j)
+                points.push_back(make_float3(2.30f, (i - 9.5f) * .004f, 2 + (j - 9.5f) * .004f));
+        const auto closest = process_point_cloud_cuda(context, points, filter, nullptr, nullptr, 2, 0, 2, true);
+        assert(closest.valid && closest.cx < 2.1f && closest.cluster_points_count == 20);
         destroy_cuda_tracker(context);
 
         // 購読者なしではデバッグ抽出しない。表示周期は追跡とは独立。
@@ -95,7 +108,24 @@ struct ClothTrackerNodeTestAccess {
         assert(node.debug_publish_hz_ > 0);
         assert(node.set_parameters_atomically({rclcpp::Parameter("debug_publish_hz", 10.0)}).successful);
         assert(node.debug_publish_hz_ == 10);
+        // 背景更新予定のフレームで現れた雑巾を、検出前に背景へ吸収しない。
         node.ballistic_tracker_.reset();
+        node.bg_state_ = ClothTrackerCudaNode::BackgroundState::ROLLING;
+        node.camera_intrin_.fx = node.camera_intrin_.fy = 433.0f;
+        node.camera_intrin_.cx = 320.0f;
+        node.camera_intrin_.cy = 240.0f;
+        reset_background_cuda(node.cuda_ctx_);
+        std::fill(depth.begin(), depth.end(), 4000);
+        node.process_and_publish(depth.data(), node.now());
+        for (int v = 200; v <= 280; ++v)
+            for (int u = 28; u <= 108; ++u)
+                depth[v * node.camera_intrin_.width + u] = 675;
+        node.last_background_update_sec_ = -1;
+        node.process_and_publish(depth.data(), node.now());
+        assert(node.ballistic_tracker_.is_pending_launch);
+        assert(node.bg_state_ == ClothTrackerCudaNode::BackgroundState::FROZEN);
+        node.ballistic_tracker_.reset();
+        std::fill(depth.begin(), depth.end(), 0);
         assert(node.set_parameters_atomically({rclcpp::Parameter("use_bg_subtraction", false)}).successful);
         node.process_and_publish(depth.data(), node.now());
         assert(node.cuda_ctx_.ring_count == 0);

@@ -39,7 +39,7 @@
 
     # --- 4. 追跡する空間ROI・深度ノイズ除去 ---
     min_x_m: 0.60  # 探索空間 X 下限 (前方) [m] (ロボット本体直前の点群を除外)
-    max_x_m: 5.00  # 探索空間 X 上限 (前方) [m] (追跡対象とする最遠到達距離)
+    max_x_m: 5.50  # 探索空間 X 上限 [m]。Unityの5m超の着地軌道にも余裕を確保
     min_y_m: -0.60  # 探索空間 Y 下限 (右側) [m]
     max_y_m: 0.60  # 探索空間 Y 上限 (左側) [m]
     min_z_m: 0.05  # 探索空間 Z 下限 [m]。着地高さまで観測できる余裕を確保し、床除去はgn10と整合させる
@@ -101,7 +101,7 @@
     min_cloth_size_m: 0.05  # 雑巾最小外形径 [m]
     max_cloth_size_m: 0.60  # 雑巾最大外形径 [m]
     prediction_distance_weight: 2.0  # 候補選択で予測位置からの距離に与える重み
-    cluster_size_weight: 0.05  # 候補選択で点数に与える重み
+    cluster_size_weight: 0.05  # 候補選択で点数/最大クラスタ点数（0〜1）に与える重み
     launch_forward_weight: 1.0  # 射出枠内の候補選択で前方位置を優先する重み
     max_voxel_points: 8192  # GPUに保持する間引き後の最大点数 [点]
     voxel_hash_table_size: 32768  # Voxelハッシュの要素数

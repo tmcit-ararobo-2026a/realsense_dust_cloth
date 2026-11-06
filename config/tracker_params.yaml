@@ -101,7 +101,7 @@
     min_cloth_size_m: 0.05  # 雑巾最小外形径 [m]
     max_cloth_size_m: 0.60  # 雑巾最大外形径 [m]
     prediction_distance_weight: 2.0  # 候補選択で予測位置からの距離に与える重み
-    cluster_size_weight: 0.05  # 候補選択で点数に与える重み
+    cluster_size_weight: 0.05  # 候補選択で点数/最大クラスタ点数（0〜1）に与える重み
     launch_forward_weight: 1.0  # 射出枠内の候補選択で前方位置を優先する重み
     max_voxel_points: 8192  # GPUに保持する間引き後の最大点数 [点]
     voxel_hash_table_size: 32768  # Voxelハッシュの要素数

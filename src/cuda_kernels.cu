@@ -369,19 +369,19 @@ kernel_select_cloth(const int* __restrict__ cluster_sizes, const float3* __restr
                     continue; // Out of tracking gate
                 }
 
-                // Close to ballistic prediction: highest priority (proximity strictly dominates over cluster size)
+                // 点数を0〜1へ正規化し、大きな別クラスタの点数だけで予測距離を覆さない。
 
                 score = -dist * filter.prediction_distance_weight +
-                        static_cast<float>(sz) * filter.cluster_size_weight;
+                        (static_cast<float>(sz) / filter.max_cluster_points) * filter.cluster_size_weight;
             } else {
                 // When waiting for launch: ONLY accept clusters originating inside the configured launch zone
                 if (c_cx >= filter.launch_min_x && c_cx <= filter.launch_max_x &&
                     c_cy >= filter.launch_min_y && c_cy <= filter.launch_max_y &&
                     c_cz >= filter.launch_min_z && c_cz <= filter.launch_max_z) {
-                    // Favor the most forward cluster (away from hand/launcher); size is only a tiebreaker so a large hand cannot outrank the cloth
+                    // 射出位置の前方を優先。点数の加点は最大cluster_size_weightまで。
 
                     score = c_cx * filter.launch_forward_weight +
-                            static_cast<float>(sz) * filter.cluster_size_weight;
+                            (static_cast<float>(sz) / filter.max_cluster_points) * filter.cluster_size_weight;
                 } else {
                     // Strictly reject any clusters outside the launch gate while waiting for launch
                     continue;

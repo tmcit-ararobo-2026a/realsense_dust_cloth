@@ -243,12 +243,8 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr,
         }
     }
 
-    // 背景更新周期もYAMLから取得し、低FPSのbagではフレーム数待ちをしない。
-    if (filter_cfg_.use_bg_subtraction && bg_state_ == BackgroundState::ROLLING &&
-        ballistic_tracker_.state != TrackerState::TRACKING &&
-        !ballistic_tracker_.is_pending_launch &&
-        (last_background_update_sec_ < 0.0 ||
-         now_sec - last_background_update_sec_ >= bg_update_interval_sec_)) {
+    // 初回だけ現在画像で背景を作る。以後は検出前に現在画像を学習しない。
+    if (filter_cfg_.use_bg_subtraction && !cuda_ctx_.bg_ready) {
         update_rolling_background_cuda(cuda_ctx_, camera_intrin_.width, camera_intrin_.height, -1.0);
         last_background_update_sec_ = now_sec;
     }
@@ -289,6 +285,16 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr,
         }
 
         publish_tracking_result(raw_res, stamp, debug_cluster_pts, debug_filtered_pts);
+        // 候補の有無を確かめた後だけ背景を更新し、射出開始を背景へ取り込まない。
+        if (!raw_res.valid && filter_cfg_.use_bg_subtraction && bg_state_ == BackgroundState::ROLLING &&
+            ballistic_tracker_.state != TrackerState::TRACKING &&
+            !ballistic_tracker_.is_pending_launch &&
+            (last_background_update_sec_ < 0.0 ||
+             now_sec - last_background_update_sec_ >= bg_update_interval_sec_)) {
+            update_rolling_background_cuda(cuda_ctx_, camera_intrin_.width, camera_intrin_.height, -1.0);
+            last_background_update_sec_ = now_sec;
+        }
+
     } catch (const std::exception& error) {
         publish_input_status("FILTER_INPUT_ERROR", false);
         RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), status_log_throttle_ms_,
