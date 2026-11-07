@@ -122,7 +122,7 @@ void ClothTrackerCudaNode::dynamic_cloud_callback(
     try {
         const auto points = read_xyz_cloud(*msg, camera_parent_frame_, cuda_ctx_.max_pixels);
         std::vector<float3> cluster, filtered;
-        debug_frame_due_ = debug_frame_due();
+        debug_frame_due_ = publish_debug_cloud_ && debug_frame_due();
         const auto result =
             find_cloth_candidate(points, stamp.seconds(), want_cluster_debug() ? &cluster : nullptr,
                                  want_filtered_debug() ? &filtered : nullptr);

@@ -437,16 +437,19 @@ bool init_cuda_tracker(CudaTrackerContext& ctx, int max_depth_width, int max_dep
     cudaMalloc(&ctx.d_best_root, sizeof(int));
 
     // Ring buffer and background buffers
+    constexpr int MIN_RING_MASK_CAPACITY = 16;
     if (ctx.ring_frames <= 0) {
         ctx.ring_frames = 6;
     }
     ctx.ring_head = 0;
     ctx.ring_count = 0;
     ctx.ring_stamps.assign(ctx.ring_frames, 0.0);
+    const int mask_capacity = std::max(MIN_RING_MASK_CAPACITY, ctx.ring_frames);
     cudaMalloc(&ctx.d_depth_ring, ctx.ring_frames * ctx.max_pixels * sizeof(uint16_t));
     cudaMalloc(&ctx.d_bg_temp, ctx.max_pixels * sizeof(uint16_t));
     cudaMalloc(&ctx.d_bg_depth, ctx.max_pixels * sizeof(uint16_t));
-    cudaMalloc(&ctx.d_ring_mask, std::max(16, ctx.ring_frames) * sizeof(uint8_t));
+    cudaMalloc(&ctx.d_ring_mask, mask_capacity * sizeof(uint8_t));
+    cudaMallocHost(&ctx.h_ring_mask_pinned, mask_capacity * sizeof(uint8_t));
     cudaMemset(ctx.d_bg_depth, 0, ctx.max_pixels * sizeof(uint16_t));
     ctx.bg_ready = false;
 
@@ -468,6 +471,8 @@ void destroy_cuda_tracker(CudaTrackerContext& ctx) {
         cudaFree(ctx.d_bg_depth);
     if (ctx.d_ring_mask)
         cudaFree(ctx.d_ring_mask);
+    if (ctx.h_ring_mask_pinned)
+        cudaFreeHost(ctx.h_ring_mask_pinned);
     if (ctx.d_valid_points)
         cudaFree(ctx.d_valid_points);
     if (ctx.d_valid_count)
@@ -501,6 +506,26 @@ void destroy_cuda_tracker(CudaTrackerContext& ctx) {
     if (ctx.stream)
         cudaStreamDestroy(ctx.stream);
 
+    ctx.d_depth = nullptr;
+    ctx.d_depth_ring = nullptr;
+    ctx.d_bg_temp = nullptr;
+    ctx.d_bg_depth = nullptr;
+    ctx.d_ring_mask = nullptr;
+    ctx.h_ring_mask_pinned = nullptr;
+    ctx.d_valid_points = nullptr;
+    ctx.d_valid_count = nullptr;
+    ctx.d_voxel_points = nullptr;
+    ctx.d_voxel_count = nullptr;
+    ctx.d_hash_keys = nullptr;
+    ctx.d_parent = nullptr;
+    ctx.d_cluster_sizes = nullptr;
+    ctx.d_cluster_min = nullptr;
+    ctx.d_cluster_max = nullptr;
+    ctx.d_cluster_sum = nullptr;
+    ctx.d_result = nullptr;
+    ctx.h_result_pinned = nullptr;
+    ctx.d_best_root = nullptr;
+    ctx.stream = nullptr;
     ctx.initialized = false;
 }
 
@@ -536,7 +561,10 @@ static ClothTrackingResult cluster_voxels(CudaTrackerContext& ctx, int num_point
     cudaMemcpyAsync(ctx.h_result_pinned, ctx.d_result, sizeof(ClothTrackingResult),
                     cudaMemcpyDeviceToHost, ctx.stream);
     int h_best_root = -1;
-    cudaMemcpyAsync(&h_best_root, ctx.d_best_root, sizeof(int), cudaMemcpyDeviceToHost, ctx.stream);
+    if (out_cluster_points) {
+        cudaMemcpyAsync(&h_best_root, ctx.d_best_root, sizeof(int), cudaMemcpyDeviceToHost,
+                        ctx.stream);
+    }
     cudaStreamSynchronize(ctx.stream);
 
     ClothTrackingResult final_res = *ctx.h_result_pinned;
@@ -661,11 +689,17 @@ ClothTrackingResult process_depth_frame_cuda(
     std::vector<float3>* out_filtered_points,
     float pred_x, float pred_y, float pred_z, bool has_prediction) {
     const int pixels = intrin.width * intrin.height;
-    if (!ctx.initialized || !host_depth_ptr || pixels > ctx.max_pixels)
+    if (!ctx.initialized || !host_depth_ptr || pixels > ctx.max_pixels) {
+        ctx.depth_uploaded = false;
         return {};
+    }
 
-    cudaMemcpyAsync(ctx.d_depth, host_depth_ptr, pixels * sizeof(uint16_t),
-                    cudaMemcpyHostToDevice, ctx.stream);
+    if (ctx.depth_uploaded) {
+        ctx.depth_uploaded = false;
+    } else {
+        cudaMemcpyAsync(ctx.d_depth, host_depth_ptr, pixels * sizeof(uint16_t),
+                        cudaMemcpyHostToDevice, ctx.stream);
+    }
     cudaMemsetAsync(ctx.d_valid_count, 0, sizeof(int), ctx.stream);
 
     dim3 block(32, 16), grid((intrin.width + 31) / 32, (intrin.height + 15) / 16);
@@ -701,15 +735,19 @@ ClothTrackingResult process_depth_frame_cuda(
 
 void push_depth_ring_cuda(CudaTrackerContext& ctx, const uint16_t* host_depth_ptr,
                           int width, int height, double stamp_sec) {
-    if (!ctx.initialized || !host_depth_ptr || !ctx.d_depth_ring)
+    if (!ctx.initialized || !host_depth_ptr || !ctx.d_depth_ring || !ctx.d_depth)
         return;
     const int pixels = width * height;
     if (pixels > ctx.max_pixels)
         return;
 
-    uint16_t* slot = ctx.d_depth_ring + ctx.ring_head * ctx.max_pixels;
-    cudaMemcpyAsync(slot, host_depth_ptr, pixels * sizeof(uint16_t),
+    // 60fps時のページング可能ホストメモリからの重複H2D転送を避けるため、1回だけGPUへ転送してリングへD2D複写する。
+    cudaMemcpyAsync(ctx.d_depth, host_depth_ptr, pixels * sizeof(uint16_t),
                     cudaMemcpyHostToDevice, ctx.stream);
+    ctx.depth_uploaded = true;
+    uint16_t* slot = ctx.d_depth_ring + ctx.ring_head * ctx.max_pixels;
+    cudaMemcpyAsync(slot, ctx.d_depth, pixels * sizeof(uint16_t),
+                    cudaMemcpyDeviceToDevice, ctx.stream);
     ctx.ring_stamps[ctx.ring_head] = stamp_sec;
     ctx.ring_head = (ctx.ring_head + 1) % ctx.ring_frames;
     if (ctx.ring_count < ctx.ring_frames)
@@ -718,28 +756,30 @@ void push_depth_ring_cuda(CudaTrackerContext& ctx, const uint16_t* host_depth_pt
 
 void update_rolling_background_cuda(CudaTrackerContext& ctx, int width, int height,
                                     double exclude_before_stamp) {
-    if (!ctx.initialized || !ctx.d_depth_ring || !ctx.d_bg_temp || !ctx.d_bg_depth || ctx.ring_count <= 0)
+    if (!ctx.initialized || !ctx.d_depth_ring || !ctx.d_bg_temp || !ctx.d_bg_depth ||
+        !ctx.d_ring_mask || !ctx.h_ring_mask_pinned || ctx.ring_count <= 0)
         return;
     const int pixels = width * height;
     if (pixels > ctx.max_pixels)
         return;
 
-    std::vector<uint8_t> h_mask(ctx.ring_count, 1);
+    // 非同期ストリーム転送完了前にローカルバッファが破棄されないようピン留めメモリを使用する。
     int valid_frames = 0;
     for (int k = 0; k < ctx.ring_count; ++k) {
         if (exclude_before_stamp > 0.0 && ctx.ring_stamps[k] > exclude_before_stamp) {
-            h_mask[k] = 0;
+            ctx.h_ring_mask_pinned[k] = 0;
         } else {
+            ctx.h_ring_mask_pinned[k] = 1;
             valid_frames++;
         }
     }
     if (valid_frames == 0) {
-        // Fall back to the oldest frame if all are within cutoff
         int oldest_idx = (ctx.ring_head - ctx.ring_count + ctx.ring_frames) % ctx.ring_frames;
-        h_mask[oldest_idx] = 1;
+        oldest_idx = std::max(0, std::min(oldest_idx, ctx.ring_count - 1));
+        ctx.h_ring_mask_pinned[oldest_idx] = 1;
     }
 
-    cudaMemcpyAsync(ctx.d_ring_mask, h_mask.data(), ctx.ring_count * sizeof(uint8_t),
+    cudaMemcpyAsync(ctx.d_ring_mask, ctx.h_ring_mask_pinned, ctx.ring_count * sizeof(uint8_t),
                     cudaMemcpyHostToDevice, ctx.stream);
 
     int block1d = 256;
@@ -760,6 +800,7 @@ void reset_background_cuda(CudaTrackerContext& ctx) {
         return;
     cudaMemsetAsync(ctx.d_bg_depth, 0, ctx.max_pixels * sizeof(uint16_t), ctx.stream);
     ctx.bg_ready = false;
+    ctx.depth_uploaded = false;
     ctx.ring_count = 0;
     ctx.ring_head = 0;
 }

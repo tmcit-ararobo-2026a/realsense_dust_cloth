@@ -431,6 +431,9 @@ ClothTrackerCudaNode::on_parameters_change(const std::vector<rclcpp::Parameter>&
             publish_raw_depth_ = param.as_bool();
         } else if (name == "publish_debug_cloud") {
             publish_debug_cloud_ = param.as_bool();
+            if (publish_debug_cloud_) {
+                ensure_debug_publishers();
+            }
         } else if (name == "use_bg_subtraction") {
             if (filter_cfg_.use_bg_subtraction != param.as_bool()) {
                 reset_background_cuda(cuda_ctx_);

@@ -1,5 +1,6 @@
 // 画像トピックの受信、カメラTF、深度からgn10へ送る点群の作成。
 #include "realsense_dust_cloth/cloth_tracker_cuda_node.hpp"
+#include <cstring>
 #include <tf2/LinearMath/Quaternion.h>
 
 namespace realsense_dust_cloth {
@@ -8,6 +9,7 @@ namespace {
 constexpr float METERS_TO_MM = 1000.0f;
 constexpr float MAX_UINT16_DEPTH_MM = 65535.0f;
 constexpr double DEG_TO_RAD = M_PI / 180.0;
+constexpr uint8_t SHOT_COUNT_WRAP_MAX = 255;
 } // namespace
 
 void ClothTrackerCudaNode::setup_camera_input() {
@@ -37,17 +39,10 @@ void ClothTrackerCudaNode::setup_camera_subscriptions() {
     const std::string color_topic = get_parameter("color_topic").as_string();
     auto depth_qos = rclcpp::SensorDataQoS().keep_last(depth_queue_size_);
 
-    rclcpp::QoS color_qos(color_queue_size_);
-    color_qos.best_effort();
-
     depth_cb_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
-    color_cb_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
     rclcpp::SubscriptionOptions depth_sub_opts;
     depth_sub_opts.callback_group = depth_cb_group_;
-
-    rclcpp::SubscriptionOptions color_sub_opts;
-    color_sub_opts.callback_group = color_cb_group_;
 
     sub_camera_info_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
         camera_info_topic, rclcpp::SensorDataQoS(),
@@ -59,6 +54,12 @@ void ClothTrackerCudaNode::setup_camera_subscriptions() {
         depth_sub_opts);
 
     if (enable_color_stream_) {
+        rclcpp::QoS color_qos(color_queue_size_);
+        color_qos.best_effort();
+        color_cb_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+        rclcpp::SubscriptionOptions color_sub_opts;
+        color_sub_opts.callback_group = color_cb_group_;
+
         sub_color_image_ = this->create_subscription<sensor_msgs::msg::Image>(
             color_topic, color_qos,
             std::bind(&ClothTrackerCudaNode::color_image_callback, this, std::placeholders::_1),
@@ -150,6 +151,10 @@ void ClothTrackerCudaNode::camera_info_callback(
 
 void ClothTrackerCudaNode::depth_image_callback(const sensor_msgs::msg::Image::ConstSharedPtr msg) {
     std::lock_guard<std::recursive_mutex> lock(processing_mutex_);
+    if (msg->width == 0 || msg->height == 0 || msg->is_bigendian) {
+        publish_input_status("INVALID_DEPTH_IMAGE", false);
+        return;
+    }
     camera_intrin_.width = msg->width;
     camera_intrin_.height = msg->height;
     if (!intrinsics_ready_) {
@@ -157,7 +162,6 @@ void ClothTrackerCudaNode::depth_image_callback(const sensor_msgs::msg::Image::C
         return;
     }
 
-    // Auto-resize CUDA context if incoming image exceeds allocated max_pixels
     int img_pixels = static_cast<int>(msg->width) * msg->height;
     if (img_pixels > cuda_ctx_.max_pixels) {
         destroy_cuda_tracker(cuda_ctx_);
@@ -168,21 +172,45 @@ void ClothTrackerCudaNode::depth_image_callback(const sensor_msgs::msg::Image::C
     const uint16_t* depth_ptr = nullptr;
 
     if (msg->encoding == "16UC1" || msg->encoding == "mono16") {
-        depth_ptr = reinterpret_cast<const uint16_t*>(msg->data.data());
+        const size_t row_bytes = static_cast<size_t>(msg->width) * sizeof(uint16_t);
+        if (msg->step < row_bytes ||
+            msg->data.size() < static_cast<size_t>(msg->step) * msg->height) {
+            publish_input_status("INVALID_DEPTH_IMAGE", false);
+            return;
+        }
+        if (msg->step == row_bytes) {
+            depth_ptr = reinterpret_cast<const uint16_t*>(msg->data.data());
+        } else {
+            depth_u16_buf.resize(static_cast<size_t>(msg->width) * msg->height);
+            for (uint32_t r = 0; r < msg->height; ++r) {
+                std::memcpy(depth_u16_buf.data() + static_cast<size_t>(r) * msg->width,
+                            msg->data.data() + static_cast<size_t>(r) * msg->step, row_bytes);
+            }
+            depth_ptr = depth_u16_buf.data();
+        }
     } else if (msg->encoding == "32FC1") {
-        // Convert Isaac Sim float depth (meters) to uint16 (millimeters)
+        const size_t row_bytes = static_cast<size_t>(msg->width) * sizeof(float);
+        if (msg->step < row_bytes ||
+            msg->data.size() < static_cast<size_t>(msg->step) * msg->height) {
+            publish_input_status("INVALID_DEPTH_IMAGE", false);
+            return;
+        }
         size_t num_pixels = static_cast<size_t>(msg->width) * msg->height;
         depth_u16_buf.resize(num_pixels);
-        const float* fptr = reinterpret_cast<const float*>(msg->data.data());
-        for (size_t i = 0; i < num_pixels; ++i) {
-            float d_m = fptr[i];
-            if (std::isnan(d_m) || std::isinf(d_m) || d_m <= 0.0f) {
-                depth_u16_buf[i] = 0;
-            } else {
-                float d_mm = d_m * METERS_TO_MM;
-                depth_u16_buf[i] = (d_mm > MAX_UINT16_DEPTH_MM)
-                                       ? static_cast<uint16_t>(MAX_UINT16_DEPTH_MM)
-                                       : static_cast<uint16_t>(d_mm);
+        for (uint32_t r = 0; r < msg->height; ++r) {
+            const float* fptr = reinterpret_cast<const float*>(
+                msg->data.data() + static_cast<size_t>(r) * msg->step);
+            uint16_t* dst = depth_u16_buf.data() + static_cast<size_t>(r) * msg->width;
+            for (uint32_t c = 0; c < msg->width; ++c) {
+                float d_m = fptr[c];
+                if (std::isnan(d_m) || std::isinf(d_m) || d_m <= 0.0f) {
+                    dst[c] = 0;
+                } else {
+                    float d_mm = d_m * METERS_TO_MM;
+                    dst[c] = (d_mm > MAX_UINT16_DEPTH_MM)
+                                 ? static_cast<uint16_t>(MAX_UINT16_DEPTH_MM)
+                                 : static_cast<uint16_t>(d_mm);
+                }
             }
         }
         depth_ptr = depth_u16_buf.data();
@@ -193,7 +221,6 @@ void ClothTrackerCudaNode::depth_image_callback(const sensor_msgs::msg::Image::C
         return;
     }
 
-    // Use msg header stamp for robust and exact time delta calculation (works identically on rosbag & real hardware)
     rclcpp::Time stamp(msg->header.stamp);
     if (stamp.nanoseconds() == 0) {
         stamp = this->get_clock()->now();
@@ -207,7 +234,6 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr,
     double now_sec = stamp.seconds();
     if (last_frame_stamp_sec_ > 0.0 &&
         now_sec < last_frame_stamp_sec_ - bag_rewind_tolerance_sec_) {
-        // Rosbag looped back to the beginning: clear all trajectory history and reset tracker
         trajectory_points_.clear();
         ballistic_tracker_.reset();
         has_cloth_pose_ = false;
@@ -226,12 +252,10 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr,
         return;
     }
 
-    // 1. Push depth to GPU ring buffer
     if (filter_cfg_.use_bg_subtraction)
         push_depth_ring_cuda(cuda_ctx_, depth_ptr, camera_intrin_.width,
                              camera_intrin_.height, now_sec);
 
-    // 2. Manage background freeze expiration
     if (bg_state_ == BackgroundState::FROZEN) {
         if (now_sec > shot_freeze_until_sec_ &&
             ballistic_tracker_.state != TrackerState::TRACKING) {
@@ -257,7 +281,7 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr,
         bool has_pred = false;
         const auto search_filter =
             candidate_search_filter(now_sec, pred_x, pred_y, pred_z, has_pred);
-        debug_frame_due_ = debug_frame_due();
+        debug_frame_due_ = publish_debug_cloud_ && debug_frame_due();
 
         ClothTrackingResult raw_res = process_depth_frame_cuda(
             cuda_ctx_, depth_ptr, camera_intrin_, camera_pose_, search_filter,
@@ -272,7 +296,6 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr,
             return;
         }
 
-        // Auto-trigger freeze if candidate appears in launch gate while ROLLING
         if (raw_res.valid && bg_state_ == BackgroundState::ROLLING) {
             if (raw_res.cx >= ballistic_tracker_.launch_min_x &&
                 raw_res.cx <= ballistic_tracker_.launch_max_x &&
@@ -296,6 +319,16 @@ void ClothTrackerCudaNode::process_and_publish(const uint16_t* depth_ptr,
         }
 
     } catch (const std::exception& error) {
+        // 走行・旋回直後に旧背景との差分でボクセル上限を超えた場合、待機中なら新背景を更新してデッドロックを防ぐ。
+        if (filter_cfg_.use_bg_subtraction && bg_state_ == BackgroundState::ROLLING &&
+            ballistic_tracker_.state != TrackerState::TRACKING &&
+            !ballistic_tracker_.is_pending_launch &&
+            (last_background_update_sec_ < 0.0 ||
+             now_sec - last_background_update_sec_ >= bg_update_interval_sec_)) {
+            update_rolling_background_cuda(cuda_ctx_, camera_intrin_.width, camera_intrin_.height,
+                                           -1.0);
+            last_background_update_sec_ = now_sec;
+        }
         publish_input_status("FILTER_INPUT_ERROR", false);
         RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), status_log_throttle_ms_,
                               "Depth processing: %s", error.what());
@@ -309,12 +342,31 @@ void ClothTrackerCudaNode::shot_count_callback(const std_msgs::msg::UInt8::Share
         has_received_shot_count_ = true;
         return;
     }
-    if (msg->data != last_shot_count_) {
-        RCLCPP_INFO(get_logger(), "Shot count incremented: %u -> %u. Triggering background freeze.",
-                    last_shot_count_, msg->data);
-        last_shot_count_ = msg->data;
-        trigger_freeze(this->now().seconds());
+    // マイコンの原点復帰による0リセットでは背景凍結や軌道クリアを行わない。
+    if (msg->data == 0) {
+        last_shot_count_ = 0;
+        return;
     }
+    const bool is_increment =
+        (msg->data > last_shot_count_) ||
+        (last_shot_count_ == SHOT_COUNT_WRAP_MAX && msg->data > 0);
+    if (!is_increment) {
+        last_shot_count_ = msg->data;
+        return;
+    }
+    RCLCPP_INFO(get_logger(), "Shot count incremented: %u -> %u. Triggering background freeze.",
+                last_shot_count_, msg->data);
+    last_shot_count_ = msg->data;
+    // 次射が未検出でも前射のPathが試射ロガーへ再送されないよう、非追跡時は前射履歴を破棄する。
+    if (ballistic_tracker_.state != TrackerState::TRACKING) {
+        trajectory_points_.clear();
+        ballistic_tracker_.reset();
+        has_cloth_pose_ = false;
+        prev_state_ = TrackerState::IDLE;
+    }
+    const double ref_sec =
+        (last_frame_stamp_sec_ > 0.0) ? last_frame_stamp_sec_ : this->now().seconds();
+    trigger_freeze(ref_sec);
 }
 
 void ClothTrackerCudaNode::reset_callback(const std_msgs::msg::Empty::SharedPtr) {

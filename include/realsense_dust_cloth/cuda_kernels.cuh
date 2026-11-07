@@ -114,7 +114,9 @@ struct CudaTrackerContext {
     uint16_t* d_bg_temp{nullptr};    // temporary farthest depth
     uint16_t* d_bg_depth{nullptr};   // 3x3 eroded background depth
     uint8_t* d_ring_mask{nullptr};    // frame validity mask for CUDA kernel
+    uint8_t* h_ring_mask_pinned{nullptr};
     bool bg_ready{false};
+    bool depth_uploaded{false};
     int ring_frames{6};
     int ring_head{0};
     int ring_count{0};

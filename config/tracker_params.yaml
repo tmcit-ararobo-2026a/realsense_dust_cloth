@@ -132,7 +132,7 @@
 
     # --- 10. 表示・実測出力・ログ ---
     debug_publish_hz: 5.0  # PC向け表示点群・ROIの最大配信頻度 [Hz]。追跡FPSは下げない
-    publish_debug_cloud: true  # デバッグ用点群パブリッシュ
+    publish_debug_cloud: false  # デバッグ用点群・ROIマーカー配信（最軽量運用のため無効）
     trajectory_history_sec: 15.0  # RViz 軌跡描画履歴保持時間 [s]
     min_trajectory_step_m: 0.005  # 軌跡に点を追加する最小移動量 [m]
     max_trajectory_points: 1000  # 保持する軌跡の最大点数 [点]

@@ -96,6 +96,9 @@ struct ClothTrackerNodeTestAccess {
         destroy_cuda_tracker(context);
 
         // 購読者なしではデバッグ抽出しない。表示周期は追跡とは独立。
+        assert(!node.publish_debug_cloud_);
+        assert(!node.pub_filtered_cloud_ && !node.pub_cluster_cloud_ && !node.pub_roi_markers_ &&
+               !node.pub_rotated_color_);
         node.debug_frame_due_ = true;
         assert(!node.want_cluster_debug() && !node.want_filtered_debug());
         node.last_debug_publish_ = {};
@@ -126,7 +129,9 @@ struct ClothTrackerNodeTestAccess {
         assert(node.bg_state_ == ClothTrackerCudaNode::BackgroundState::FROZEN);
         node.ballistic_tracker_.reset();
         std::fill(depth.begin(), depth.end(), 0);
-        assert(node.set_parameters_atomically({rclcpp::Parameter("use_bg_subtraction", false)}).successful);
+        assert(node.set_parameters_atomically({rclcpp::Parameter("use_bg_subtraction", false),
+                                               rclcpp::Parameter("publish_debug_cloud", true)})
+                   .successful);
         node.process_and_publish(depth.data(), node.now());
         assert(node.cuda_ctx_.ring_count == 0);
         assert(!node.cuda_ctx_.bg_ready);
@@ -196,6 +201,53 @@ struct ClothTrackerNodeTestAccess {
         assert(states == 2);
         assert(paths >= 2 && paths <= 4);
         assert(markers == paths * 3);
+
+        // 原点復帰(0)では凍結・クリアせず、次射カウント増加時に前射履歴をクリアする。
+        assert(node.set_parameters_atomically({rclcpp::Parameter("use_bg_subtraction", true)}).successful);
+        node.bg_state_ = ClothTrackerCudaNode::BackgroundState::ROLLING;
+        node.has_received_shot_count_ = false;
+        auto make_u8 = [](uint8_t v) {
+            auto m = std::make_shared<std_msgs::msg::UInt8>();
+            m->data = v;
+            return m;
+        };
+        node.shot_count_callback(make_u8(3));
+        assert(node.bg_state_ == ClothTrackerCudaNode::BackgroundState::ROLLING);
+        assert(node.has_cloth_pose_ && !node.trajectory_points_.empty());
+        node.shot_count_callback(make_u8(0));
+        assert(node.bg_state_ == ClothTrackerCudaNode::BackgroundState::ROLLING);
+        assert(node.has_cloth_pose_ && !node.trajectory_points_.empty());
+        node.shot_count_callback(make_u8(1));
+        assert(node.bg_state_ == ClothTrackerCudaNode::BackgroundState::FROZEN);
+        assert(!node.has_cloth_pose_ && node.trajectory_points_.empty());
+
+        // 走行後のボクセル上限超過でもROLLING待機中なら新シーンを学習してREADYへ復帰する。
+        node.bg_state_ = ClothTrackerCudaNode::BackgroundState::ROLLING;
+        node.ballistic_tracker_.reset();
+        reset_background_cuda(node.cuda_ctx_);
+        const int saved_max_voxels = node.cuda_ctx_.max_voxel_points;
+        node.cuda_ctx_.max_voxel_points = 16;
+        std::fill(depth.begin(), depth.end(), 4500);
+        node.process_and_publish(depth.data(), node.now());
+        assert(node.last_input_status_ == "READY");
+        std::fill(depth.begin(), depth.end(), 2200);
+        for (int f = 0; f <= node.cuda_ctx_.ring_frames; ++f) {
+            node.last_background_update_sec_ = -1.0;
+            node.process_and_publish(depth.data(), node.now());
+        }
+        assert(node.last_input_status_ == "READY");
+        node.cuda_ctx_.max_voxel_points = saved_max_voxels;
+
+        // 破損・サイズ不足の深度画像で範囲外参照せずINVALID_DEPTH_IMAGEにする。
+        node.intrinsics_ready_ = true;
+        auto broken_img = std::make_shared<sensor_msgs::msg::Image>();
+        broken_img->width = 640;
+        broken_img->height = 480;
+        broken_img->encoding = "16UC1";
+        broken_img->step = 1280;
+        broken_img->data.resize(64);
+        node.depth_image_callback(broken_img);
+        assert(node.last_input_status_ == "INVALID_DEPTH_IMAGE");
     }
 };
 } // namespace realsense_dust_cloth

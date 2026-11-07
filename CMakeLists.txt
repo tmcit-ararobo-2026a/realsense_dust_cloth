@@ -75,7 +75,12 @@ ament_target_dependencies(cloth_tracker_core
 )
 
 if(realsense2_FOUND)
-  target_link_libraries(cloth_tracker_core ${realsense2_LIBRARY} CUDA::cudart)
+  if(TARGET realsense2::realsense2)
+    target_link_libraries(cloth_tracker_core realsense2::realsense2 CUDA::cudart)
+  else()
+    target_include_directories(cloth_tracker_core PUBLIC ${realsense2_INCLUDE_DIR})
+    target_link_libraries(cloth_tracker_core ${realsense2_LIBRARY} CUDA::cudart)
+  endif()
 endif()
 
 # Install C++ executable

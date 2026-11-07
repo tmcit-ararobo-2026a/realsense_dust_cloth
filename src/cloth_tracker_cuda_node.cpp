@@ -20,16 +20,13 @@ ClothTrackerCudaNode::ClothTrackerCudaNode(const rclcpp::NodeOptions& options)
     pub_path_ =
         this->create_publisher<nav_msgs::msg::Path>("/cloth/measured_path", publisher_queue_size_);
     const auto sensor_qos = rclcpp::SensorDataQoS();
-    pub_rotated_color_ =
-        this->create_publisher<sensor_msgs::msg::Image>("/cloth/camera_view", sensor_qos);
-
-    // Debug publishers (always available for RViz visualization & verification)
-    pub_roi_markers_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
-        "/cloth/debug/roi_markers", publisher_queue_size_);
-    pub_cluster_cloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-        "/cloth/debug/cluster_points", sensor_qos);
-    pub_filtered_cloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-        "/cloth/debug/filtered_points", sensor_qos);
+    if (enable_color_stream_) {
+        pub_rotated_color_ =
+            this->create_publisher<sensor_msgs::msg::Image>("/cloth/camera_view", sensor_qos);
+    }
+    if (publish_debug_cloud_) {
+        ensure_debug_publishers();
+    }
 
     setup_external_cloud();
 

@@ -43,6 +43,12 @@ class Profiles(unittest.TestCase):
                 for helper in nodes[1:3]:
                     self.assertEqual(helper['parameters'], [{'use_sim_time': values['use_sim_time']}])
                 self.assertEqual('--use-sim-time' in nodes[3]['cmd'], values['use_sim_time'])
+        legacy_unity_ctx = LaunchContext()
+        legacy_unity_ctx.launch_configurations['params_file'] = 'unity_map_params.yaml'
+        self.assertEqual(
+            create(legacy_unity_ctx)[0]['parameters'],
+            [str(ROOT / 'config' / 'unity_params.yaml')],
+        )
 
     def test_coexistence_with_localization_params_file(self):
         module = runpy.run_path(str(ROOT / 'launch' / 'cloth_tracker.launch.py'))

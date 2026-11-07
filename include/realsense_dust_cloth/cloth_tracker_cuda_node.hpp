@@ -76,6 +76,7 @@ class ClothTrackerCudaNode : public rclcpp::Node {
     bool debug_frame_due();
     bool want_cluster_debug() const;
     bool want_filtered_debug() const;
+    void ensure_debug_publishers();
 
     // 射出検知 & 背景凍結ステートマシン
     enum class BackgroundState { ROLLING, FROZEN };

@@ -18,6 +18,9 @@ TRACKER_ONLY_KEYS = TRACKER_BOOL_KEYS[1:]
 
 
 def _resolve_params_path(requested: str, package_dir: str) -> str:
+    # unity_sim.launch.py 側の旧指定名をパッケージリネーム後の正本へ透過解決する。
+    if requested.strip() == 'unity_map_params.yaml':
+        requested = 'unity_params.yaml'
     path = os.path.expanduser(requested)
     if not os.path.isabs(path) and not os.path.isfile(path):
         path = os.path.join(package_dir, 'config', path)

@@ -23,6 +23,23 @@ bool ClothTrackerCudaNode::want_filtered_debug() const {
            pub_filtered_cloud_->get_subscription_count() > 0;
 }
 
+void ClothTrackerCudaNode::ensure_debug_publishers() {
+    // 実機最軽量運用（publish_debug_cloud=false）時に不要なDDSエンドポイント広告を行わないよう遅延生成する。
+    const auto sensor_qos = rclcpp::SensorDataQoS();
+    if (!pub_roi_markers_) {
+        pub_roi_markers_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
+            "/cloth/debug/roi_markers", publisher_queue_size_);
+    }
+    if (!pub_cluster_cloud_) {
+        pub_cluster_cloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+            "/cloth/debug/cluster_points", sensor_qos);
+    }
+    if (!pub_filtered_cloud_) {
+        pub_filtered_cloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+            "/cloth/debug/filtered_points", sensor_qos);
+    }
+}
+
 void ClothTrackerCudaNode::publish_roi_markers(const rclcpp::Time& stamp,
                                                const ClothTrackingResult& raw_res) {
     if (!pub_roi_markers_)
@@ -76,13 +93,16 @@ void ClothTrackerCudaNode::publish_tracking_result(const ClothTrackingResult& ra
         }
     }
 
-    // ログ周期はYAMLのstatus_log_throttle_msに従う。
-    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), status_log_throttle_ms_,
-                         "[ClothTracker] Debug search points: %zu | Candidate cluster: %d pts at "
-                         "(%.2f, %.2f, %.2f) | State: %s",
-                         debug_filtered_pts.size(), raw_res.cluster_points_count, raw_res.cx,
-                         raw_res.cy, raw_res.cz,
-                         ballistic_tracker_.state == TrackerState::TRACKING ? "TRACKING" : "IDLE");
+    // デバッグ無効時は定常IDLE時のrosoutシリアライズ・ディスク書き込みも行わない。
+    if (publish_debug_cloud_) {
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), status_log_throttle_ms_,
+                             "[ClothTracker] Debug search points: %zu | Candidate cluster: %d pts "
+                             "at (%.2f, %.2f, %.2f) | State: %s",
+                             debug_filtered_pts.size(), raw_res.cluster_points_count, raw_res.cx,
+                             raw_res.cy, raw_res.cz,
+                             ballistic_tracker_.state == TrackerState::TRACKING ? "TRACKING"
+                                                                                : "IDLE");
+    }
 
     publish_tracking_transition(raw_res, res, stamp, is_actively_tracked);
     if (is_actively_tracked) {
